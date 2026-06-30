@@ -101,7 +101,35 @@ with st.spinner("Carregando dados do BigQuery..."):
         st.plotly_chart(fig_tend, use_container_width=True)
 
         st.subheader("Conversões por tipo")
-        st.dataframe(dados["conversoes_tipo"])
+        df_conv = dados["conversoes_tipo"].sort_values("qt_conversoes_total", ascending=False)
+        col_conv1, col_conv2 = st.columns([1, 1])
+        with col_conv1:
+            fig_conv = px.pie(
+                df_conv, names="nm_acao_conversao", values="qt_conversoes_total",
+                hole=0.4,
+                color_discrete_sequence=px.colors.sequential.Purples_r,
+            )
+            fig_conv.update_traces(
+                hovertemplate="<b>%{label}</b><br>Conversões: %{value:.1f}<br>%{percent}<extra></extra>",
+                textinfo="percent+label"
+            )
+            fig_conv.update_layout(showlegend=False)
+            st.plotly_chart(fig_conv, use_container_width=True)
+        with col_conv2:
+            st.dataframe(
+                df_conv[["nm_acao_conversao", "ds_categoria_conversao", "qt_conversoes_total", "vl_conversoes_total"]]
+                .assign(
+                    qt_conversoes_total=df_conv["qt_conversoes_total"].apply(lambda v: f"{v:.1f}"),
+                    vl_conversoes_total=df_conv["vl_conversoes_total"].apply(lambda v: f"R$ {v:,.2f}"),
+                )
+                .rename(columns={
+                    "nm_acao_conversao":    "Ação",
+                    "ds_categoria_conversao": "Categoria",
+                    "qt_conversoes_total":  "Conversões",
+                    "vl_conversoes_total":  "Valor",
+                }),
+                hide_index=True, use_container_width=True
+            )
 
         st.subheader("Orçamento — budget vs gasto médio diário")
         df_orc = dados["orcamento"].sort_values("vl_gasto_total", ascending=False)
