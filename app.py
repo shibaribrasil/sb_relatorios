@@ -105,20 +105,20 @@ def card(label, value, sub="", ref="", variant="neutral"):
 
 
 def render_cards(cards_html):
-    st.markdown(f'<div class="cards">{"".join(cards_html)}</div>', unsafe_allow_html=True)
+    st.html(f'<div class="cards">{"".join(cards_html)}</div>')
 
 
 def section_title(text):
-    st.markdown(f'<div class="section-title">{text}</div>', unsafe_allow_html=True)
+    st.html(f'<div class="section-title">{text}</div>')
 
 
 def bench_row(items):
     spans = "".join(f'<div class="bench">{label}: <strong>{value}</strong></div>' for label, value in items)
-    st.markdown(f'<div class="bench-row">{spans}</div>', unsafe_allow_html=True)
+    st.html(f'<div class="bench-row">{spans}</div>')
 
 
 def note(html):
-    st.markdown(f'<div class="note">{html}</div>', unsafe_allow_html=True)
+    st.html(f'<div class="note">{html}</div>')
 
 
 def tag(text, variant):
@@ -184,7 +184,7 @@ def carregar_dados():
     }
 
 
-st.markdown(CSS, unsafe_allow_html=True)
+st.html(CSS)
 
 with st.spinner("Carregando dados do BigQuery..."):
     try:
@@ -196,7 +196,7 @@ with st.spinner("Carregando dados do BigQuery..."):
         custo = r["vl_custo_total"]
         roi = (receita - custo) / custo if custo else 0
 
-        st.markdown(f"""
+        st.html(f"""
         <div class="report-header">
           <div>
             <div class="report-brand">shibari brasil · tráfego pago</div>
@@ -208,7 +208,7 @@ with st.spinner("Carregando dados do BigQuery..."):
             Atualizado de hora em hora
           </div>
         </div>
-        """, unsafe_allow_html=True)
+        """)
 
         # ═══ 1 — SAÚDE FINANCEIRA ═══
         section_title("1 — Saúde Financeira")
@@ -234,7 +234,7 @@ with st.spinner("Carregando dados do BigQuery..."):
 
         with col1:
             with st.container(border=True):
-                st.markdown('<div class="c-label" style="margin-bottom:10px">ROAS por Campanha</div>', unsafe_allow_html=True)
+                st.html('<div class="c-label" style="margin-bottom:10px">ROAS por Campanha</div>')
                 bench_row([("Meta", "3–5×"), ("Mínimo", "2×"), ("Crítico", "< 2×")])
                 fig = go.Figure()
                 cores = [{"ok": OK_BG, "warn": WARN_BG, "bad": BAD}[roas_variant(v)] for v in df_camp["vl_roas"]]
@@ -247,7 +247,7 @@ with st.spinner("Carregando dados do BigQuery..."):
 
         with col2:
             with st.container(border=True):
-                st.markdown('<div class="c-label" style="margin-bottom:10px">Investido vs. Receita por Campanha</div>', unsafe_allow_html=True)
+                st.html('<div class="c-label" style="margin-bottom:10px">Investido vs. Receita por Campanha</div>')
                 bench_row([("Barras iguais", "= ROAS 1× (empate)")])
                 fig = go.Figure()
                 fig.add_bar(name="Investido", x=df_camp["nm_campanha"], y=df_camp["vl_custo_total"], marker_color=PLUM)
@@ -289,7 +289,7 @@ with st.spinner("Carregando dados do BigQuery..."):
         col3, col4 = st.columns([3, 2])
         with col3:
             with st.container(border=True):
-                st.markdown('<div class="c-label" style="margin-bottom:10px">Gasto diário e Cliques — últimos 30 dias</div>', unsafe_allow_html=True)
+                st.html('<div class="c-label" style="margin-bottom:10px">Gasto diário e Cliques — últimos 30 dias</div>')
                 df_tend = dados["tendencia_diaria"].sort_values("dt_data")
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=df_tend["dt_data"], y=df_tend["vl_custo"], name="Gasto (R$)",
@@ -305,7 +305,7 @@ with st.spinner("Carregando dados do BigQuery..."):
 
         with col4:
             with st.container(border=True):
-                st.markdown('<div class="c-label" style="margin-bottom:10px">Conversões por Tipo</div>', unsafe_allow_html=True)
+                st.html('<div class="c-label" style="margin-bottom:10px">Conversões por Tipo</div>')
                 df_conv = dados["conversoes_tipo"].sort_values("qt_conversoes_total", ascending=False)
                 fig = go.Figure(go.Pie(labels=df_conv["nm_acao_conversao"], values=df_conv["qt_conversoes_total"],
                                         hole=0.5, marker_colors=[PLUM, SCARLET, WARN_BG, TAUPE, SKIN],
