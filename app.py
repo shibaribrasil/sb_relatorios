@@ -16,7 +16,7 @@ DATASET = "dbt_dw_us_rpt"
 @st.cache_data(ttl=3600)
 def carregar_dados():
     credentials = Credentials.from_service_account_info(
-        st.secrets["gcp"],
+        dict(st.secrets["gcp"]),
         scopes=["https://www.googleapis.com/auth/bigquery"]
     )
     client = bigquery.Client(credentials=credentials, project=PROJECT)
