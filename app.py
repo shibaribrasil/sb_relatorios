@@ -149,6 +149,14 @@ def qs_variant(qs):
     return "bad"
 
 
+def style_color(styler, func, subset):
+    # pandas >=2.1 renamed Styler.applymap to .map and later removed applymap entirely —
+    # try both so this works regardless of which pandas version Streamlit Cloud installs.
+    if hasattr(styler, "map"):
+        return styler.map(func, subset=subset)
+    return styler.applymap(func, subset=subset)
+
+
 def plotly_layout(fig, **kwargs):
     layout = dict(
         plot_bgcolor="white", paper_bgcolor="white",
@@ -277,7 +285,8 @@ with st.spinner("Carregando dados do BigQuery..."):
                 "Receita": df_tab["vl_conversoes_total"].apply(lambda v: f"R$ {v:,.2f}"),
                 "ROAS": df_tab["vl_roas"],
             })
-            styled = tabela.style.applymap(
+            styled = style_color(
+                tabela.style,
                 lambda v: f"color: {OK}; font-weight:700" if v >= 3 else (f"color: {WARN}; font-weight:700" if v >= 2 else f"color: {BAD}; font-weight:700"),
                 subset=["ROAS"]
             ).format({"ROAS": "{:.2f}×"})
@@ -343,7 +352,8 @@ with st.spinner("Carregando dados do BigQuery..."):
                 "Utilização": df_orc["pct_utilizacao_media"],
                 "Gasto total": df_orc["vl_gasto_total"].apply(lambda v: f"R$ {v:,.2f}"),
             })
-            styled_orc = tabela_orc.style.applymap(
+            styled_orc = style_color(
+                tabela_orc.style,
                 lambda v: f"color: {BAD}; font-weight:700" if v >= 1.0 else (f"color: {WARN}; font-weight:700" if v >= 0.7 else f"color: {TAUPE}"),
                 subset=["Utilização"]
             ).format({"Utilização": "{:.0%}"})
@@ -372,7 +382,8 @@ with st.spinner("Carregando dados do BigQuery..."):
                 "Relevância": df_kw["ds_relevancia_anuncio"],
                 "Exp. LP": df_kw["ds_experiencia_lp"],
             })
-            styled_kw = tabela_kw.style.applymap(
+            styled_kw = style_color(
+                tabela_kw.style,
                 lambda v: f"color: {OK}; font-weight:700" if v >= 9 else (f"color: {WARN}; font-weight:700" if v >= 7 else f"color: {BAD}; font-weight:700"),
                 subset=["QS"]
             )
