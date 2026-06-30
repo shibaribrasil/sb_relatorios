@@ -2,6 +2,7 @@ import streamlit as st
 from google.oauth2.service_account import Credentials
 from google.cloud import bigquery
 import pandas as pd
+import plotly.express as px
 
 st.set_page_config(
     page_title="Relatório Google Ads — Shibari Brasil",
@@ -60,8 +61,15 @@ with st.spinner("Carregando dados do BigQuery..."):
         st.subheader("Performance por campanha")
         st.dataframe(dados["performance_campanhas"])
 
-        st.subheader("Tendência diária")
-        st.dataframe(dados["tendencia_diaria"])
+        st.subheader("Tendência diária — últimos 30 dias")
+        df_tend = dados["tendencia_diaria"].sort_values("dt_data")
+        fig_tend = px.line(
+            df_tend, x="dt_data", y="vl_custo",
+            labels={"dt_data": "Data", "vl_custo": "Custo (R$)"},
+            markers=True
+        )
+        fig_tend.update_layout(hovermode="x unified")
+        st.plotly_chart(fig_tend, use_container_width=True)
 
         st.subheader("Conversões por tipo")
         st.dataframe(dados["conversoes_tipo"])
