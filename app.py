@@ -59,7 +59,25 @@ with st.spinner("Carregando dados do BigQuery..."):
         c8.metric("CPC médio",        f"R$ {r['vl_cpc']:,.2f}")
 
         st.subheader("Performance por campanha")
-        st.dataframe(dados["performance_campanhas"])
+        df_camp = dados["performance_campanhas"].sort_values("vl_custo_total", ascending=True)
+        fig_camp = px.bar(
+            df_camp, x="vl_custo_total", y="nm_campanha",
+            orientation="h",
+            labels={"vl_custo_total": "Custo (R$)", "nm_campanha": ""},
+            text=df_camp["vl_custo_total"].apply(lambda v: f"R$ {v:,.2f}"),
+            color="vl_roas",
+            color_continuous_scale="Purples",
+            color_continuous_midpoint=df_camp["vl_roas"].median(),
+        )
+        fig_camp.update_traces(textposition="outside")
+        fig_camp.update_layout(plot_bgcolor="white", coloraxis_colorbar_title="ROAS")
+        st.plotly_chart(fig_camp, use_container_width=True)
+
+        col_camp1, col_camp2, col_camp3, col_camp4 = st.columns(4)
+        col_camp1.dataframe(df_camp[["nm_campanha", "vl_custo_total"]].rename(columns={"nm_campanha": "Campanha", "vl_custo_total": "Custo"}), hide_index=True)
+        col_camp2.dataframe(df_camp[["nm_campanha", "pct_ctr"]].assign(pct_ctr=df_camp["pct_ctr"].apply(lambda v: f"{v*100:.2f}%")).rename(columns={"nm_campanha": "Campanha", "pct_ctr": "CTR"}), hide_index=True)
+        col_camp3.dataframe(df_camp[["nm_campanha", "vl_roas"]].assign(vl_roas=df_camp["vl_roas"].apply(lambda v: f"{v:.2f}x")).rename(columns={"nm_campanha": "Campanha", "vl_roas": "ROAS"}), hide_index=True)
+        col_camp4.dataframe(df_camp[["nm_campanha", "vl_cpa"]].assign(vl_cpa=df_camp["vl_cpa"].apply(lambda v: f"R$ {v:,.2f}")).rename(columns={"nm_campanha": "Campanha", "vl_cpa": "CPA"}), hide_index=True)
 
         st.subheader("Tendência diária — últimos 30 dias")
         df_tend = dados["tendencia_diaria"].sort_values("dt_data")
