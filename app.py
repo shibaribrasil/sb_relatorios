@@ -2,7 +2,7 @@ import streamlit as st
 from google.oauth2.service_account import Credentials
 from google.cloud import bigquery
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 
 st.set_page_config(
     page_title="Relatório Google Ads — Shibari Brasil",
@@ -12,6 +12,153 @@ st.set_page_config(
 
 PROJECT = "igneous-sandbox-381622"
 DATASET = "dbt_dw_us_rpt"
+
+# ── Design System — mesmo tema do relatório HTML (sb_marketing_team/relatorios) ──
+PLUM    = "#5b1e4b"
+PLUM_DK = "#1c0c18"
+SCARLET = "#d10f2f"
+TAUPE   = "#8c6f68"
+SKIN    = "#e6cfc3"
+BG      = "#f4ece7"
+OK      = "#1e7a4f"
+OK_BG   = "#4caf82"
+WARN    = "#8a6010"
+WARN_BG = "#c9963a"
+BAD     = "#d10f2f"
+BORDER  = "rgba(91,30,75,0.18)"
+GRID    = "rgba(91,30,75,0.10)"
+
+CSS = f"""
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  .stApp {{ background: {BG}; font-family: 'Montserrat', sans-serif; }}
+  .block-container {{ padding-top: 1.5rem; max-width: 1280px; }}
+  h1, h2, h3 {{ font-family: 'Playfair Display', serif !important; }}
+
+  .report-header {{
+    background: {PLUM_DK}; border-bottom: 3px solid {SCARLET};
+    padding: 22px 32px; border-radius: 10px; margin-bottom: 18px;
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;
+  }}
+  .report-brand {{ font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: {TAUPE}; margin-bottom: 4px; }}
+  .report-title {{ font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 700; color: {BG}; }}
+  .report-title span {{ color: {SCARLET}; }}
+  .report-meta {{ color: {TAUPE}; font-size: 12px; margin-top: 3px; }}
+  .report-badge {{
+    background: rgba(244,236,231,0.08); border: 1px solid rgba(244,236,231,0.15); border-radius: 6px;
+    padding: 8px 16px; font-size: 12px; color: {SKIN}; text-align: right; line-height: 1.8;
+  }}
+  .report-badge strong {{ color: {BG}; }}
+
+  .section-title {{
+    display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: {TAUPE};
+    margin: 30px 0 14px 0; padding-bottom: 8px; border-bottom: 1px solid {BORDER};
+  }}
+  .section-title::before {{ content: ''; display: block; width: 3px; height: 14px; background: {SCARLET}; border-radius: 2px; }}
+
+  .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 6px; }}
+  .card {{ background: #fff; border: 1px solid {BORDER}; border-radius: 10px; padding: 16px 18px; position: relative; box-shadow: 0 1px 4px rgba(91,30,75,0.06); }}
+  .card::before {{ content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; border-radius: 10px 10px 0 0; }}
+  .card.c-neutral::before {{ background: {TAUPE}; }}
+  .card.c-ok::before {{ background: {OK_BG}; }}
+  .card.c-warn::before {{ background: {WARN_BG}; }}
+  .card.c-bad::before {{ background: {BAD}; }}
+  .c-label {{ font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: {TAUPE}; margin-bottom: 8px; }}
+  .c-value {{ font-size: 26px; font-weight: 700; font-family: 'Playfair Display', serif; line-height: 1; }}
+  .card.c-neutral .c-value {{ color: #141419; }}
+  .card.c-ok .c-value {{ color: {OK}; }}
+  .card.c-warn .c-value {{ color: {WARN}; }}
+  .card.c-bad .c-value {{ color: {BAD}; }}
+  .c-sub {{ font-size: 11px; color: {TAUPE}; margin-top: 6px; }}
+  .c-ref {{ font-size: 10px; color: {TAUPE}; margin-top: 2px; opacity: 0.7; }}
+
+  .bench-row {{ display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }}
+  .bench {{ background: rgba(91,30,75,0.06); border: 1px solid {BORDER}; border-radius: 5px; padding: 3px 10px; font-size: 10px; color: {TAUPE}; font-weight: 500; }}
+  .bench strong {{ color: #141419; }}
+
+  .note {{
+    font-size: 12px; color: {TAUPE}; line-height: 1.6; margin-top: 6px;
+    background: rgba(91,30,75,0.04); border: 1px solid {BORDER}; border-radius: 8px; padding: 10px 14px;
+  }}
+  .note strong {{ color: #141419; }}
+
+  .tag {{ display: inline-block; padding: 2px 9px; border-radius: 4px; font-size: 10px; font-weight: 700; }}
+  .t-ok    {{ background: rgba(76,175,130,0.14);  color: #1a6b40; }}
+  .t-warn  {{ background: rgba(201,150,58,0.18);  color: #7a5208; }}
+  .t-bad   {{ background: rgba(209,15,47,0.12);   color: {BAD}; }}
+  .t-muted {{ background: rgba(140,111,104,0.14); color: #5e3e3a; }}
+</style>
+"""
+
+
+def card(label, value, sub="", ref="", variant="neutral"):
+    ref_html = f'<div class="c-ref">{ref}</div>' if ref else ""
+    return f"""<div class="card c-{variant}">
+        <div class="c-label">{label}</div>
+        <div class="c-value">{value}</div>
+        <div class="c-sub">{sub}</div>
+        {ref_html}
+    </div>"""
+
+
+def render_cards(cards_html):
+    st.markdown(f'<div class="cards">{"".join(cards_html)}</div>', unsafe_allow_html=True)
+
+
+def section_title(text):
+    st.markdown(f'<div class="section-title">{text}</div>', unsafe_allow_html=True)
+
+
+def bench_row(items):
+    spans = "".join(f'<div class="bench">{label}: <strong>{value}</strong></div>' for label, value in items)
+    st.markdown(f'<div class="bench-row">{spans}</div>', unsafe_allow_html=True)
+
+
+def note(html):
+    st.markdown(f'<div class="note">{html}</div>', unsafe_allow_html=True)
+
+
+def tag(text, variant):
+    return f'<span class="tag t-{variant}">{text}</span>'
+
+
+def roas_variant(v):
+    if v >= 3:
+        return "ok"
+    if v >= 2:
+        return "warn"
+    return "bad"
+
+
+def util_variant(pct):
+    if pct >= 1.0:
+        return "bad"
+    if pct < 0.7:
+        return "muted"
+    return "warn"
+
+
+def qs_variant(qs):
+    if qs >= 9:
+        return "ok"
+    if qs >= 7:
+        return "warn"
+    return "bad"
+
+
+def plotly_layout(fig, **kwargs):
+    fig.update_layout(
+        plot_bgcolor="white", paper_bgcolor="white",
+        font=dict(family="Montserrat, sans-serif", color=TAUPE, size=12),
+        margin=dict(l=10, r=10, t=10, b=10),
+        xaxis=dict(gridcolor=GRID), yaxis=dict(gridcolor=GRID),
+        legend=dict(orientation="h", y=1.12, font=dict(size=11)),
+        **kwargs
+    )
+    return fig
 
 
 @st.cache_data(ttl=3600)
@@ -37,211 +184,227 @@ def carregar_dados():
     }
 
 
-st.title("📊 Relatório Google Ads — Shibari Brasil")
-st.caption("Dados dos últimos 30 dias · Atualizado de hora em hora")
+st.markdown(CSS, unsafe_allow_html=True)
 
 with st.spinner("Carregando dados do BigQuery..."):
     try:
         dados = carregar_dados()
         r = dados["resumo_conta"].iloc[0]
+        periodo_ini = pd.to_datetime(r["dt_inicio_periodo"]).strftime("%d/%m/%Y")
+        periodo_fim = pd.to_datetime(r["dt_fim_periodo"]).strftime("%d/%m/%Y")
+        receita = r["vl_conversoes_total"]
+        custo = r["vl_custo_total"]
+        roi = (receita - custo) / custo if custo else 0
 
-        st.subheader("Visão geral — últimos 30 dias")
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Custo total",      f"R$ {r['vl_custo_total']:,.2f}")
-        c2.metric("Cliques",          f"{int(r['qt_cliques_total']):,}")
-        c3.metric("Conversões",       f"{r['qt_conversoes_total']:,.1f}")
-        c4.metric("ROAS",             f"{r['vl_roas']:.2f}x")
-        c5.metric("CPA",              f"R$ {r['vl_cpa']:,.2f}")
+        st.markdown(f"""
+        <div class="report-header">
+          <div>
+            <div class="report-brand">shibari brasil · tráfego pago</div>
+            <div class="report-title">Google Ads <span>—</span> Relatório</div>
+            <div class="report-meta">Dados via BigQuery · {PROJECT}</div>
+          </div>
+          <div class="report-badge">
+            Período: <strong>{periodo_ini} → {periodo_fim}</strong><br>
+            Atualizado de hora em hora
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-        c6, c7, c8 = st.columns(3)
-        c6.metric("Impressões",       f"{int(r['qt_impressoes_total']):,}")
-        c7.metric("CTR",              f"{r['pct_ctr']*100:.2f}%")
-        c8.metric("CPC médio",        f"R$ {r['vl_cpc']:,.2f}")
+        # ═══ 1 — SAÚDE FINANCEIRA ═══
+        section_title("1 — Saúde Financeira")
+        render_cards([
+            card("Custo Total", f"R$ {custo:,.2f}", "últimos 30 dias", variant="neutral"),
+            card("Receita Gerada", f"R$ {receita:,.2f}", "valor de conversão total", variant="neutral"),
+            card("ROI", f"{roi*100:.0f}%", "(receita − gasto) ÷ gasto", "meta: > 100%", variant="ok" if roi >= 1 else ("warn" if roi >= 0 else "bad")),
+            card("ROAS Médio", f"{r['vl_roas']:.2f}×", "receita ÷ custo", "meta: 3–5× · mínimo: 2×", variant=roas_variant(r["vl_roas"])),
+            card("CPA Médio", f"R$ {r['vl_cpa']:,.2f}", f"{r['qt_conversoes_total']:,.1f} conversões", variant="neutral"),
+        ])
+        render_cards([
+            card("Impressões", f"{int(r['qt_impressoes_total']):,}", variant="neutral"),
+            card("Cliques", f"{int(r['qt_cliques_total']):,}", variant="neutral"),
+            card("CTR", f"{r['pct_ctr']*100:.2f}%", "benchmark: 2–6%+", variant="neutral"),
+            card("CPC Médio", f"R$ {r['vl_cpc']:,.2f}", variant="neutral"),
+        ])
+        note("<strong>Como ler:</strong> ROI considera só o gasto de mídia — não inclui custo do produto. "
+             "ROAS abaixo de 2× indica campanha no prejuízo considerando margem; entre 2× e 3× está na zona de atenção; acima de 3× está saudável.")
 
-        st.subheader("Performance por campanha")
-        df_camp = dados["performance_campanhas"].sort_values("vl_custo_total", ascending=True)
-        fig_camp = px.bar(
-            df_camp, x="vl_custo_total", y="nm_campanha",
-            orientation="h",
-            labels={"vl_custo_total": "Custo (R$)", "nm_campanha": ""},
-            color="vl_custo_total",
-            color_continuous_scale="Purples",
-            custom_data=["vl_roas", "vl_cpa", "pct_ctr", "qt_conversoes_total"],
-        )
-        fig_camp.update_traces(
-            hovertemplate="<b>%{y}</b><br>Custo: R$ %{x:,.2f}<br>ROAS: %{customdata[0]:.2f}x<br>CPA: R$ %{customdata[1]:,.2f}<br>CTR: %{customdata[2]:.2%}<br>Conversões: %{customdata[3]:.1f}<extra></extra>",
-            texttemplate="R$ %{x:,.2f}", textposition="outside"
-        )
-        fig_camp.update_layout(plot_bgcolor="white", coloraxis_showscale=False)
-        st.plotly_chart(fig_camp, use_container_width=True)
+        st.subheader("")
+        col1, col2 = st.columns(2)
+        df_camp = dados["performance_campanhas"].sort_values("vl_custo_total", ascending=False)
 
-        st.dataframe(
-            df_camp[["nm_campanha", "vl_custo_total", "pct_ctr", "vl_roas", "vl_cpa", "qt_conversoes_total"]]
-            .sort_values("vl_custo_total", ascending=False)
-            .assign(
-                vl_custo_total=df_camp["vl_custo_total"].apply(lambda v: f"R$ {v:,.2f}"),
-                pct_ctr=df_camp["pct_ctr"].apply(lambda v: f"{v*100:.2f}%"),
-                vl_roas=df_camp["vl_roas"].apply(lambda v: f"{v:.2f}x"),
-                vl_cpa=df_camp["vl_cpa"].apply(lambda v: f"R$ {v:,.2f}"),
-                qt_conversoes_total=df_camp["qt_conversoes_total"].apply(lambda v: f"{v:.1f}"),
-            )
-            .rename(columns={"nm_campanha": "Campanha", "vl_custo_total": "Custo", "pct_ctr": "CTR", "vl_roas": "ROAS", "vl_cpa": "CPA", "qt_conversoes_total": "Conversões"}),
-            hide_index=True, use_container_width=True
-        )
+        with col1:
+            with st.container(border=True):
+                st.markdown('<div class="c-label" style="margin-bottom:10px">ROAS por Campanha</div>', unsafe_allow_html=True)
+                bench_row([("Meta", "3–5×"), ("Mínimo", "2×"), ("Crítico", "< 2×")])
+                fig = go.Figure()
+                cores = [{"ok": OK_BG, "warn": WARN_BG, "bad": BAD}[roas_variant(v)] for v in df_camp["vl_roas"]]
+                fig.add_bar(x=df_camp["nm_campanha"], y=df_camp["vl_roas"], marker_color=cores,
+                            text=[f"{v:.2f}×" for v in df_camp["vl_roas"]], textposition="outside")
+                fig.add_hline(y=2, line_dash="dash", line_color=WARN_BG, annotation_text="mínimo 2×", annotation_font_size=10)
+                plotly_layout(fig, showlegend=False, height=300, yaxis=dict(gridcolor=GRID, ticksuffix="×"))
+                st.plotly_chart(fig, use_container_width=True)
+                note("Barras abaixo da linha tracejada estão perdendo dinheiro considerando margem mínima de 2×.")
 
-        st.subheader("Tendência diária — últimos 30 dias")
-        df_tend = dados["tendencia_diaria"].sort_values("dt_data")
-        fig_tend = px.line(
-            df_tend, x="dt_data", y="vl_custo",
-            labels={"dt_data": "Data", "vl_custo": "Custo (R$)"},
-            markers=True
-        )
-        fig_tend.update_traces(line_shape="spline", line_color="#7B2FBE", line_width=2.5)
-        fig_tend.update_layout(hovermode="x unified", plot_bgcolor="white", yaxis=dict(gridcolor="#f0f0f0"))
-        st.plotly_chart(fig_tend, use_container_width=True)
+        with col2:
+            with st.container(border=True):
+                st.markdown('<div class="c-label" style="margin-bottom:10px">Investido vs. Receita por Campanha</div>', unsafe_allow_html=True)
+                bench_row([("Barras iguais", "= ROAS 1× (empate)")])
+                fig = go.Figure()
+                fig.add_bar(name="Investido", x=df_camp["nm_campanha"], y=df_camp["vl_custo_total"], marker_color=PLUM)
+                fig.add_bar(name="Receita", x=df_camp["nm_campanha"], y=df_camp["vl_conversoes_total"], marker_color=SCARLET)
+                plotly_layout(fig, barmode="group", height=300, yaxis=dict(gridcolor=GRID, tickprefix="R$"))
+                st.plotly_chart(fig, use_container_width=True)
+                note("Quando a barra de receita (vermelha) é menor que a de investido (roxa), a campanha está no prejuízo no período.")
 
-        st.subheader("Conversões por tipo")
-        df_conv = dados["conversoes_tipo"].sort_values("qt_conversoes_total", ascending=False)
-        col_conv1, col_conv2 = st.columns([1, 1])
-        with col_conv1:
-            fig_conv = px.pie(
-                df_conv, names="nm_acao_conversao", values="qt_conversoes_total",
-                hole=0.4,
-                color_discrete_sequence=px.colors.sequential.Purples_r,
-            )
-            fig_conv.update_traces(
-                hovertemplate="<b>%{label}</b><br>Conversões: %{value:.1f}<br>%{percent}<extra></extra>",
-                textinfo="percent+label"
-            )
-            fig_conv.update_layout(showlegend=False)
-            st.plotly_chart(fig_conv, use_container_width=True)
-        with col_conv2:
-            st.dataframe(
-                df_conv[["nm_acao_conversao", "ds_categoria_conversao", "qt_conversoes_total", "vl_conversoes_total"]]
-                .assign(
-                    qt_conversoes_total=df_conv["qt_conversoes_total"].apply(lambda v: f"{v:.1f}"),
-                    vl_conversoes_total=df_conv["vl_conversoes_total"].apply(lambda v: f"R$ {v:,.2f}"),
+        # ═══ 2 — PERFORMANCE POR CAMPANHA ═══
+        section_title("2 — Performance por Campanha")
+        with st.container(border=True):
+            df_tab = df_camp.copy()
+            df_tab["pct_conv_rate"] = df_tab["qt_conversoes_total"] / df_tab["qt_cliques_total"]
+            tabela = pd.DataFrame({
+                "Campanha": df_tab["nm_campanha"],
+                "Tipo": df_tab["ds_tipo_canal"],
+                "Status": df_tab["ds_status_campanha"],
+                "Investido": df_tab["vl_custo_total"].apply(lambda v: f"R$ {v:,.2f}"),
+                "Impr.": df_tab["qt_impressoes_total"].apply(lambda v: f"{int(v):,}"),
+                "Cliques": df_tab["qt_cliques_total"].apply(lambda v: f"{int(v):,}"),
+                "CTR": df_tab["pct_ctr"].apply(lambda v: f"{v*100:.2f}%"),
+                "CPC": df_tab["vl_cpc"].apply(lambda v: f"R$ {v:,.2f}"),
+                "Conv. Rate": df_tab["pct_conv_rate"].apply(lambda v: f"{v*100:.2f}%" if v == v else "—"),
+                "Conversões": df_tab["qt_conversoes_total"].apply(lambda v: f"{v:.1f}"),
+                "CPA": df_tab["vl_cpa"].apply(lambda v: f"R$ {v:,.2f}" if v == v else "—"),
+                "Receita": df_tab["vl_conversoes_total"].apply(lambda v: f"R$ {v:,.2f}"),
+                "ROAS": df_tab["vl_roas"],
+            })
+            styled = tabela.style.applymap(
+                lambda v: f"color: {OK}; font-weight:700" if v >= 3 else (f"color: {WARN}; font-weight:700" if v >= 2 else f"color: {BAD}; font-weight:700"),
+                subset=["ROAS"]
+            ).format({"ROAS": "{:.2f}×"})
+            st.dataframe(styled, hide_index=True, use_container_width=True)
+            note("<strong>Benchmarks:</strong> CTR Search &gt;2% aceitável / &gt;6% bom · Conv. Rate e-commerce &gt;1% mínimo / &gt;3% bom · "
+                 "ROAS mínimo 2× / meta 3–5×.")
+
+        # ═══ 3 — TENDÊNCIA + CONVERSÕES ═══
+        section_title("3 — Tendência Temporal e Conversões")
+        col3, col4 = st.columns([3, 2])
+        with col3:
+            with st.container(border=True):
+                st.markdown('<div class="c-label" style="margin-bottom:10px">Gasto diário e Cliques — últimos 30 dias</div>', unsafe_allow_html=True)
+                df_tend = dados["tendencia_diaria"].sort_values("dt_data")
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=df_tend["dt_data"], y=df_tend["vl_custo"], name="Gasto (R$)",
+                                          line=dict(color=SCARLET, width=2.5, shape="spline"), fill="tozeroy",
+                                          fillcolor="rgba(209,15,47,0.06)", yaxis="y"))
+                fig.add_trace(go.Scatter(x=df_tend["dt_data"], y=df_tend["qt_cliques"], name="Cliques",
+                                          line=dict(color=PLUM, width=2, dash="dash"), yaxis="y2"))
+                plotly_layout(fig, height=300, hovermode="x unified",
+                              yaxis=dict(gridcolor=GRID, tickprefix="R$", title=None),
+                              yaxis2=dict(overlaying="y", side="right", showgrid=False, title=None))
+                st.plotly_chart(fig, use_container_width=True)
+                note("Gasto subindo com cliques estáveis = CPC subindo (leilão mais competitivo). Cliques caindo com gasto constante geralmente indica perda de impression share.")
+
+        with col4:
+            with st.container(border=True):
+                st.markdown('<div class="c-label" style="margin-bottom:10px">Conversões por Tipo</div>', unsafe_allow_html=True)
+                df_conv = dados["conversoes_tipo"].sort_values("qt_conversoes_total", ascending=False)
+                fig = go.Figure(go.Pie(labels=df_conv["nm_acao_conversao"], values=df_conv["qt_conversoes_total"],
+                                        hole=0.5, marker_colors=[PLUM, SCARLET, WARN_BG, TAUPE, SKIN],
+                                        textinfo="percent"))
+                plotly_layout(fig, height=220, showlegend=True, legend=dict(orientation="v", y=0.5, font=dict(size=10)))
+                st.plotly_chart(fig, use_container_width=True)
+                st.dataframe(
+                    df_conv[["nm_acao_conversao", "ds_categoria_conversao", "qt_conversoes_total", "vl_conversoes_total"]]
+                    .assign(
+                        qt_conversoes_total=df_conv["qt_conversoes_total"].apply(lambda v: f"{v:.1f}"),
+                        vl_conversoes_total=df_conv["vl_conversoes_total"].apply(lambda v: f"R$ {v:,.2f}"),
+                    )
+                    .rename(columns={"nm_acao_conversao": "Ação", "ds_categoria_conversao": "Categoria",
+                                      "qt_conversoes_total": "Qtd", "vl_conversoes_total": "Valor"}),
+                    hide_index=True, use_container_width=True
                 )
+                note("Conversões de categoria diferente de \"compra\" (ex.: visualização de página) não são receita real — não devem entrar no cálculo de ROAS.")
+
+        # ═══ 4 — ORÇAMENTO ═══
+        section_title("4 — Orçamento: Budget vs. Gasto Médio Diário")
+        with st.container(border=True):
+            df_orc = dados["orcamento"].sort_values("vl_gasto_total", ascending=False)
+            fig = go.Figure()
+            fig.add_bar(name="Budget diário", x=df_orc["nm_campanha"], y=df_orc["vl_orcamento_diario"], marker_color=SKIN)
+            fig.add_bar(name="Gasto médio diário", x=df_orc["nm_campanha"], y=df_orc["vl_gasto_medio_diario"], marker_color=PLUM)
+            plotly_layout(fig, barmode="group", height=300, yaxis=dict(gridcolor=GRID, tickprefix="R$"))
+            st.plotly_chart(fig, use_container_width=True)
+
+            tabela_orc = pd.DataFrame({
+                "Campanha": df_orc["nm_campanha"],
+                "Status": df_orc["ds_status_campanha"],
+                "Budget diário": df_orc["vl_orcamento_diario"].apply(lambda v: f"R$ {v:,.2f}"),
+                "Gasto médio": df_orc["vl_gasto_medio_diario"].apply(lambda v: f"R$ {v:,.2f}"),
+                "Utilização": df_orc["pct_utilizacao_media"],
+                "Gasto total": df_orc["vl_gasto_total"].apply(lambda v: f"R$ {v:,.2f}"),
+            })
+            styled_orc = tabela_orc.style.applymap(
+                lambda v: f"color: {BAD}; font-weight:700" if v >= 1.0 else (f"color: {WARN}; font-weight:700" if v >= 0.7 else f"color: {TAUPE}"),
+                subset=["Utilização"]
+            ).format({"Utilização": "{:.0%}"})
+            st.dataframe(styled_orc, hide_index=True, use_container_width=True)
+            note("<strong>Como ler:</strong> Utilização ≥ 100% = campanha <strong>limitada por orçamento</strong> — está perdendo impressões/cliques que poderiam converter; "
+                 "70–99% é normal; abaixo de 70% = orçamento subutilizado (pode ter espaço para aumentar lance ou indicar audiência pequena).")
+
+        # ═══ 5 — KEYWORDS ═══
+        section_title("5 — Top Keywords por Gasto")
+        with st.container(border=True):
+            bench_row([("QS meta", "≥ 7"), ("Aceitável", "5–6"), ("Crítico", "< 5"), ("Perfeito", "QS 10")])
+            df_kw = dados["keywords_top"].sort_values("vl_custo_total", ascending=False)
+            tabela_kw = pd.DataFrame({
+                "Keyword": df_kw["ds_keyword"],
+                "Correspondência": df_kw["ds_correspondencia"],
+                "Campanha": df_kw["nm_campanha"],
+                "Grupo": df_kw["nm_grupo_anuncio"],
+                "Custo": df_kw["vl_custo_total"].apply(lambda v: f"R$ {v:,.2f}"),
+                "Cliques": df_kw["qt_cliques_total"].apply(lambda v: f"{int(v):,}"),
+                "CTR": df_kw["pct_ctr"].apply(lambda v: f"{v*100:.2f}%"),
+                "CPC": df_kw["vl_cpc"].apply(lambda v: f"R$ {v:,.2f}"),
+                "Conversões": df_kw["qt_conversoes_total"].apply(lambda v: f"{v:.1f}"),
+                "CPA": df_kw["vl_cpa"].apply(lambda v: f"R$ {v:,.2f}" if v == v else "—"),
+                "QS": df_kw["nr_quality_score"],
+                "CTR Previsto": df_kw["ds_ctr_previsto"],
+                "Relevância": df_kw["ds_relevancia_anuncio"],
+                "Exp. LP": df_kw["ds_experiencia_lp"],
+            })
+            styled_kw = tabela_kw.style.applymap(
+                lambda v: f"color: {OK}; font-weight:700" if v >= 9 else (f"color: {WARN}; font-weight:700" if v >= 7 else f"color: {BAD}; font-weight:700"),
+                subset=["QS"]
+            )
+            st.dataframe(styled_kw, hide_index=True, use_container_width=True)
+            note("QS abaixo de 5 normalmente eleva o CPC e reduz a posição no leilão — priorize melhorar anúncio/landing page dessas keywords antes de aumentar lance.")
+
+        # ═══ 6 — IMPRESSION SHARE ═══
+        section_title("6 — Impression Share por Campanha")
+        with st.container(border=True):
+            df_is = dados["impression_share"].sort_values("pct_impression_share", ascending=False)
+            fig = go.Figure()
+            fig.add_bar(name="IS conquistado", y=df_is["nm_campanha"], x=df_is["pct_impression_share"], orientation="h", marker_color=PLUM)
+            fig.add_bar(name="Perda por budget", y=df_is["nm_campanha"], x=df_is["pct_perda_budget"], orientation="h", marker_color="#e0b0ff")
+            fig.add_bar(name="Perda por ranking", y=df_is["nm_campanha"], x=df_is["pct_perda_ranking"], orientation="h", marker_color="#f5e6ff")
+            plotly_layout(fig, barmode="stack", height=300, xaxis=dict(gridcolor=GRID, tickformat=".0%"))
+            st.plotly_chart(fig, use_container_width=True)
+            note("<strong>Perda por budget</strong> se resolve aumentando orçamento. <strong>Perda por ranking</strong> se resolve melhorando Quality Score ou lance — são diagnósticos opostos, não confundir.")
+
+        # ═══ 7 — ANÚNCIOS ATIVOS ═══
+        section_title("7 — Anúncios Ativos")
+        with st.container(border=True):
+            df_ads = dados["anuncios"]
+            st.dataframe(
+                df_ads[["nm_campanha", "nm_grupo_anuncio", "ds_tipo_anuncio", "nm_anuncio",
+                        "ds_forca_anuncio", "ds_status_aprovacao", "ds_url_final"]]
                 .rename(columns={
-                    "nm_acao_conversao":    "Ação",
-                    "ds_categoria_conversao": "Categoria",
-                    "qt_conversoes_total":  "Conversões",
-                    "vl_conversoes_total":  "Valor",
+                    "nm_campanha": "Campanha", "nm_grupo_anuncio": "Grupo", "ds_tipo_anuncio": "Tipo",
+                    "nm_anuncio": "Nome", "ds_forca_anuncio": "Força", "ds_status_aprovacao": "Aprovação",
+                    "ds_url_final": "URL",
                 }),
                 hide_index=True, use_container_width=True
             )
-
-        st.subheader("Orçamento — budget vs gasto médio diário")
-        df_orc = dados["orcamento"].sort_values("vl_gasto_total", ascending=False)
-        df_orc_melt = df_orc.melt(
-            id_vars="nm_campanha",
-            value_vars=["vl_orcamento_diario", "vl_gasto_medio_diario"],
-            var_name="tipo", value_name="valor"
-        ).replace({"vl_orcamento_diario": "Budget diário", "vl_gasto_medio_diario": "Gasto médio diário"})
-        fig_orc = px.bar(
-            df_orc_melt, x="nm_campanha", y="valor", color="tipo",
-            barmode="group",
-            labels={"nm_campanha": "", "valor": "R$", "tipo": ""},
-            color_discrete_map={"Budget diário": "#c4b0e0", "Gasto médio diário": "#7B2FBE"},
-            custom_data=["tipo"],
-        )
-        fig_orc.update_traces(hovertemplate="<b>%{x}</b><br>%{customdata[0]}: R$ %{y:,.2f}<extra></extra>")
-        fig_orc.update_layout(plot_bgcolor="white", legend=dict(orientation="h", y=1.1))
-        st.plotly_chart(fig_orc, use_container_width=True)
-
-        st.dataframe(
-            df_orc[["nm_campanha", "vl_orcamento_diario", "vl_gasto_medio_diario", "pct_utilizacao_media", "vl_gasto_total"]]
-            .assign(
-                vl_orcamento_diario=df_orc["vl_orcamento_diario"].apply(lambda v: f"R$ {v:,.2f}"),
-                vl_gasto_medio_diario=df_orc["vl_gasto_medio_diario"].apply(lambda v: f"R$ {v:,.2f}"),
-                pct_utilizacao_media=df_orc["pct_utilizacao_media"].apply(lambda v: f"{v*100:.1f}%"),
-                vl_gasto_total=df_orc["vl_gasto_total"].apply(lambda v: f"R$ {v:,.2f}"),
-            )
-            .rename(columns={"nm_campanha": "Campanha", "vl_orcamento_diario": "Budget diário", "vl_gasto_medio_diario": "Gasto médio", "pct_utilizacao_media": "Utilização", "vl_gasto_total": "Gasto total"}),
-            hide_index=True, use_container_width=True
-        )
-
-        st.subheader("Top 20 keywords por gasto")
-        df_kw = dados["keywords_top"].sort_values("vl_custo_total", ascending=False)
-        st.dataframe(
-            df_kw[[
-                "ds_keyword", "ds_correspondencia", "nm_campanha", "nm_grupo_anuncio",
-                "vl_custo_total", "qt_cliques_total", "pct_ctr", "vl_cpc",
-                "qt_conversoes_total", "vl_cpa", "nr_quality_score",
-                "ds_ctr_previsto", "ds_relevancia_anuncio", "ds_experiencia_lp"
-            ]]
-            .assign(
-                vl_custo_total=df_kw["vl_custo_total"].apply(lambda v: f"R$ {v:,.2f}"),
-                qt_cliques_total=df_kw["qt_cliques_total"].apply(lambda v: f"{int(v):,}"),
-                pct_ctr=df_kw["pct_ctr"].apply(lambda v: f"{v*100:.2f}%"),
-                vl_cpc=df_kw["vl_cpc"].apply(lambda v: f"R$ {v:,.2f}"),
-                qt_conversoes_total=df_kw["qt_conversoes_total"].apply(lambda v: f"{v:.1f}"),
-                vl_cpa=df_kw["vl_cpa"].apply(lambda v: f"R$ {v:,.2f}" if v == v else "—"),
-            )
-            .rename(columns={
-                "ds_keyword":          "Keyword",
-                "ds_correspondencia":  "Correspondência",
-                "nm_campanha":         "Campanha",
-                "nm_grupo_anuncio":    "Grupo",
-                "vl_custo_total":      "Custo",
-                "qt_cliques_total":    "Cliques",
-                "pct_ctr":             "CTR",
-                "vl_cpc":              "CPC",
-                "qt_conversoes_total": "Conversões",
-                "vl_cpa":              "CPA",
-                "nr_quality_score":    "QS",
-                "ds_ctr_previsto":     "CTR previsto",
-                "ds_relevancia_anuncio": "Relevância",
-                "ds_experiencia_lp":   "Exp. LP",
-            }),
-            hide_index=True, use_container_width=True
-        )
-
-        st.subheader("Impression Share por campanha")
-        df_is = dados["impression_share"].sort_values("pct_impression_share", ascending=False)
-        df_is_melt = df_is.melt(
-            id_vars="nm_campanha",
-            value_vars=["pct_impression_share", "pct_perda_budget", "pct_perda_ranking"],
-            var_name="tipo", value_name="valor"
-        ).replace({
-            "pct_impression_share": "IS conquistado",
-            "pct_perda_budget":     "Perda por budget",
-            "pct_perda_ranking":    "Perda por ranking",
-        })
-        fig_is = px.bar(
-            df_is_melt, x="valor", y="nm_campanha",
-            color="tipo", orientation="h", barmode="stack",
-            labels={"nm_campanha": "", "valor": "", "tipo": ""},
-            color_discrete_map={
-                "IS conquistado":    "#7B2FBE",
-                "Perda por budget":  "#e0b0ff",
-                "Perda por ranking": "#f5e6ff",
-            },
-            custom_data=["tipo"],
-        )
-        fig_is.update_traces(hovertemplate="<b>%{y}</b><br>%{customdata[0]}: %{x:.1%}<extra></extra>")
-        fig_is.update_layout(plot_bgcolor="white", xaxis_tickformat=".0%", legend=dict(orientation="h", y=1.1))
-        st.plotly_chart(fig_is, use_container_width=True)
-
-        st.subheader("Anúncios ativos")
-        df_ads = dados["anuncios"]
-        st.dataframe(
-            df_ads[[
-                "nm_campanha", "nm_grupo_anuncio", "ds_tipo_anuncio",
-                "nm_anuncio", "ds_forca_anuncio", "ds_status_aprovacao",
-                "ds_url_final"
-            ]]
-            .rename(columns={
-                "nm_campanha":        "Campanha",
-                "nm_grupo_anuncio":   "Grupo",
-                "ds_tipo_anuncio":    "Tipo",
-                "nm_anuncio":         "Nome",
-                "ds_forca_anuncio":   "Força",
-                "ds_status_aprovacao": "Aprovação",
-                "ds_url_final":       "URL",
-            }),
-            hide_index=True, use_container_width=True
-        )
+            note("Anúncios com força \"Ruim\" ou \"Regular\" perdem posição no leilão — adicionar mais variações de título/descrição costuma elevar para \"Boa\"/\"Excelente\".")
 
     except Exception as e:
         st.error(f"Erro ao carregar dados: {e}")
