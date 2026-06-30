@@ -103,8 +103,35 @@ with st.spinner("Carregando dados do BigQuery..."):
         st.subheader("Conversões por tipo")
         st.dataframe(dados["conversoes_tipo"])
 
-        st.subheader("Orçamento")
-        st.dataframe(dados["orcamento"])
+        st.subheader("Orçamento — budget vs gasto médio diário")
+        df_orc = dados["orcamento"].sort_values("vl_gasto_total", ascending=False)
+        df_orc_melt = df_orc.melt(
+            id_vars="nm_campanha",
+            value_vars=["vl_orcamento_diario", "vl_gasto_medio_diario"],
+            var_name="tipo", value_name="valor"
+        ).replace({"vl_orcamento_diario": "Budget diário", "vl_gasto_medio_diario": "Gasto médio diário"})
+        fig_orc = px.bar(
+            df_orc_melt, x="nm_campanha", y="valor", color="tipo",
+            barmode="group",
+            labels={"nm_campanha": "", "valor": "R$", "tipo": ""},
+            color_discrete_map={"Budget diário": "#c4b0e0", "Gasto médio diário": "#7B2FBE"},
+            custom_data=["tipo"],
+        )
+        fig_orc.update_traces(hovertemplate="<b>%{x}</b><br>%{customdata[0]}: R$ %{y:,.2f}<extra></extra>")
+        fig_orc.update_layout(plot_bgcolor="white", legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig_orc, use_container_width=True)
+
+        st.dataframe(
+            df_orc[["nm_campanha", "vl_orcamento_diario", "vl_gasto_medio_diario", "pct_utilizacao_media", "vl_gasto_total"]]
+            .assign(
+                vl_orcamento_diario=df_orc["vl_orcamento_diario"].apply(lambda v: f"R$ {v:,.2f}"),
+                vl_gasto_medio_diario=df_orc["vl_gasto_medio_diario"].apply(lambda v: f"R$ {v:,.2f}"),
+                pct_utilizacao_media=df_orc["pct_utilizacao_media"].apply(lambda v: f"{v*100:.1f}%"),
+                vl_gasto_total=df_orc["vl_gasto_total"].apply(lambda v: f"R$ {v:,.2f}"),
+            )
+            .rename(columns={"nm_campanha": "Campanha", "vl_orcamento_diario": "Budget diário", "vl_gasto_medio_diario": "Gasto médio", "pct_utilizacao_media": "Utilização", "vl_gasto_total": "Gasto total"}),
+            hide_index=True, use_container_width=True
+        )
 
         st.subheader("Top keywords")
         st.dataframe(dados["keywords_top"])
