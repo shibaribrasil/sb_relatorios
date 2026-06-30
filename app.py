@@ -133,8 +133,41 @@ with st.spinner("Carregando dados do BigQuery..."):
             hide_index=True, use_container_width=True
         )
 
-        st.subheader("Top keywords")
-        st.dataframe(dados["keywords_top"])
+        st.subheader("Top 20 keywords por gasto")
+        df_kw = dados["keywords_top"].sort_values("vl_custo_total", ascending=False)
+        st.dataframe(
+            df_kw[[
+                "ds_keyword", "ds_correspondencia", "nm_campanha", "nm_grupo_anuncio",
+                "vl_custo_total", "qt_cliques_total", "pct_ctr", "vl_cpc",
+                "qt_conversoes_total", "vl_cpa", "nr_quality_score",
+                "ds_ctr_previsto", "ds_relevancia_anuncio", "ds_experiencia_lp"
+            ]]
+            .assign(
+                vl_custo_total=df_kw["vl_custo_total"].apply(lambda v: f"R$ {v:,.2f}"),
+                qt_cliques_total=df_kw["qt_cliques_total"].apply(lambda v: f"{int(v):,}"),
+                pct_ctr=df_kw["pct_ctr"].apply(lambda v: f"{v*100:.2f}%"),
+                vl_cpc=df_kw["vl_cpc"].apply(lambda v: f"R$ {v:,.2f}"),
+                qt_conversoes_total=df_kw["qt_conversoes_total"].apply(lambda v: f"{v:.1f}"),
+                vl_cpa=df_kw["vl_cpa"].apply(lambda v: f"R$ {v:,.2f}" if v == v else "—"),
+            )
+            .rename(columns={
+                "ds_keyword":          "Keyword",
+                "ds_correspondencia":  "Correspondência",
+                "nm_campanha":         "Campanha",
+                "nm_grupo_anuncio":    "Grupo",
+                "vl_custo_total":      "Custo",
+                "qt_cliques_total":    "Cliques",
+                "pct_ctr":             "CTR",
+                "vl_cpc":              "CPC",
+                "qt_conversoes_total": "Conversões",
+                "vl_cpa":              "CPA",
+                "nr_quality_score":    "QS",
+                "ds_ctr_previsto":     "CTR previsto",
+                "ds_relevancia_anuncio": "Relevância",
+                "ds_experiencia_lp":   "Exp. LP",
+            }),
+            hide_index=True, use_container_width=True
+        )
 
         st.subheader("Impression Share por campanha")
         df_is = dados["impression_share"].sort_values("pct_impression_share", ascending=False)
