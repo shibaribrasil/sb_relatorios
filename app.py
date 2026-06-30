@@ -150,14 +150,15 @@ def qs_variant(qs):
 
 
 def plotly_layout(fig, **kwargs):
-    fig.update_layout(
+    layout = dict(
         plot_bgcolor="white", paper_bgcolor="white",
         font=dict(family="Montserrat, sans-serif", color=TAUPE, size=12),
         margin=dict(l=10, r=10, t=10, b=10),
         xaxis=dict(gridcolor=GRID), yaxis=dict(gridcolor=GRID),
         legend=dict(orientation="h", y=1.12, font=dict(size=11)),
-        **kwargs
     )
+    layout.update(kwargs)
+    fig.update_layout(**layout)
     return fig
 
 
