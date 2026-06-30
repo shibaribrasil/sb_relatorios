@@ -68,7 +68,8 @@ with st.spinner("Carregando dados do BigQuery..."):
             labels={"dt_data": "Data", "vl_custo": "Custo (R$)"},
             markers=True
         )
-        fig_tend.update_layout(hovermode="x unified")
+        fig_tend.update_traces(line_shape="spline", line_color="#7B2FBE", line_width=2.5)
+        fig_tend.update_layout(hovermode="x unified", plot_bgcolor="white", yaxis=dict(gridcolor="#f0f0f0"))
         st.plotly_chart(fig_tend, use_container_width=True)
 
         st.subheader("Conversões por tipo")
