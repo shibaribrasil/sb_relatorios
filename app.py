@@ -136,8 +136,31 @@ with st.spinner("Carregando dados do BigQuery..."):
         st.subheader("Top keywords")
         st.dataframe(dados["keywords_top"])
 
-        st.subheader("Impression Share")
-        st.dataframe(dados["impression_share"])
+        st.subheader("Impression Share por campanha")
+        df_is = dados["impression_share"].sort_values("pct_impression_share", ascending=False)
+        df_is_melt = df_is.melt(
+            id_vars="nm_campanha",
+            value_vars=["pct_impression_share", "pct_perda_budget", "pct_perda_ranking"],
+            var_name="tipo", value_name="valor"
+        ).replace({
+            "pct_impression_share": "IS conquistado",
+            "pct_perda_budget":     "Perda por budget",
+            "pct_perda_ranking":    "Perda por ranking",
+        })
+        fig_is = px.bar(
+            df_is_melt, x="valor", y="nm_campanha",
+            color="tipo", orientation="h", barmode="stack",
+            labels={"nm_campanha": "", "valor": "", "tipo": ""},
+            color_discrete_map={
+                "IS conquistado":    "#7B2FBE",
+                "Perda por budget":  "#e0b0ff",
+                "Perda por ranking": "#f5e6ff",
+            },
+            custom_data=["tipo"],
+        )
+        fig_is.update_traces(hovertemplate="<b>%{y}</b><br>%{customdata[0]}: %{x:.1%}<extra></extra>")
+        fig_is.update_layout(plot_bgcolor="white", xaxis_tickformat=".0%", legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig_is, use_container_width=True)
 
         st.subheader("Anúncios ativos")
         st.dataframe(dados["anuncios"])
