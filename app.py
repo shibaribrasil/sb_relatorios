@@ -224,7 +224,24 @@ with st.spinner("Carregando dados do BigQuery..."):
         st.plotly_chart(fig_is, use_container_width=True)
 
         st.subheader("Anúncios ativos")
-        st.dataframe(dados["anuncios"])
+        df_ads = dados["anuncios"]
+        st.dataframe(
+            df_ads[[
+                "nm_campanha", "nm_grupo_anuncio", "ds_tipo_anuncio",
+                "nm_anuncio", "ds_forca_anuncio", "ds_status_aprovacao",
+                "ds_url_final"
+            ]]
+            .rename(columns={
+                "nm_campanha":        "Campanha",
+                "nm_grupo_anuncio":   "Grupo",
+                "ds_tipo_anuncio":    "Tipo",
+                "nm_anuncio":         "Nome",
+                "ds_forca_anuncio":   "Força",
+                "ds_status_aprovacao": "Aprovação",
+                "ds_url_final":       "URL",
+            }),
+            hide_index=True, use_container_width=True
+        )
 
     except Exception as e:
         st.error(f"Erro ao carregar dados: {e}")
