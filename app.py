@@ -42,10 +42,20 @@ st.caption("Dados dos últimos 30 dias · Atualizado de hora em hora")
 with st.spinner("Carregando dados do BigQuery..."):
     try:
         dados = carregar_dados()
-        st.success("Dados carregados com sucesso!")
+        r = dados["resumo_conta"].iloc[0]
 
-        st.subheader("Resumo da conta")
-        st.dataframe(dados["resumo_conta"])
+        st.subheader("Visão geral — últimos 30 dias")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Custo total",      f"R$ {r['vl_custo_total']:,.2f}")
+        c2.metric("Cliques",          f"{int(r['qt_cliques_total']):,}")
+        c3.metric("Conversões",       f"{r['qt_conversoes_total']:,.1f}")
+        c4.metric("ROAS",             f"{r['vl_roas']:.2f}x")
+        c5.metric("CPA",              f"R$ {r['vl_cpa']:,.2f}")
+
+        c6, c7, c8 = st.columns(3)
+        c6.metric("Impressões",       f"{int(r['qt_impressoes_total']):,}")
+        c7.metric("CTR",              f"{r['pct_ctr']*100:.2f}%")
+        c8.metric("CPC médio",        f"R$ {r['vl_cpc']:,.2f}")
 
         st.subheader("Performance por campanha")
         st.dataframe(dados["performance_campanhas"])
