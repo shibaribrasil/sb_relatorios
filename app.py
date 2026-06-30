@@ -64,20 +64,30 @@ with st.spinner("Carregando dados do BigQuery..."):
             df_camp, x="vl_custo_total", y="nm_campanha",
             orientation="h",
             labels={"vl_custo_total": "Custo (R$)", "nm_campanha": ""},
-            text=df_camp["vl_custo_total"].apply(lambda v: f"R$ {v:,.2f}"),
-            color="vl_roas",
+            color="vl_custo_total",
             color_continuous_scale="Purples",
-            color_continuous_midpoint=df_camp["vl_roas"].median(),
+            custom_data=["vl_roas", "vl_cpa", "pct_ctr", "qt_conversoes_total"],
         )
-        fig_camp.update_traces(textposition="outside")
-        fig_camp.update_layout(plot_bgcolor="white", coloraxis_colorbar_title="ROAS")
+        fig_camp.update_traces(
+            hovertemplate="<b>%{y}</b><br>Custo: R$ %{x:,.2f}<br>ROAS: %{customdata[0]:.2f}x<br>CPA: R$ %{customdata[1]:,.2f}<br>CTR: %{customdata[2]:.2%}<br>Conversões: %{customdata[3]:.1f}<extra></extra>",
+            texttemplate="R$ %{x:,.2f}", textposition="outside"
+        )
+        fig_camp.update_layout(plot_bgcolor="white", coloraxis_showscale=False)
         st.plotly_chart(fig_camp, use_container_width=True)
 
-        col_camp1, col_camp2, col_camp3, col_camp4 = st.columns(4)
-        col_camp1.dataframe(df_camp[["nm_campanha", "vl_custo_total"]].rename(columns={"nm_campanha": "Campanha", "vl_custo_total": "Custo"}), hide_index=True)
-        col_camp2.dataframe(df_camp[["nm_campanha", "pct_ctr"]].assign(pct_ctr=df_camp["pct_ctr"].apply(lambda v: f"{v*100:.2f}%")).rename(columns={"nm_campanha": "Campanha", "pct_ctr": "CTR"}), hide_index=True)
-        col_camp3.dataframe(df_camp[["nm_campanha", "vl_roas"]].assign(vl_roas=df_camp["vl_roas"].apply(lambda v: f"{v:.2f}x")).rename(columns={"nm_campanha": "Campanha", "vl_roas": "ROAS"}), hide_index=True)
-        col_camp4.dataframe(df_camp[["nm_campanha", "vl_cpa"]].assign(vl_cpa=df_camp["vl_cpa"].apply(lambda v: f"R$ {v:,.2f}")).rename(columns={"nm_campanha": "Campanha", "vl_cpa": "CPA"}), hide_index=True)
+        st.dataframe(
+            df_camp[["nm_campanha", "vl_custo_total", "pct_ctr", "vl_roas", "vl_cpa", "qt_conversoes_total"]]
+            .sort_values("vl_custo_total", ascending=False)
+            .assign(
+                vl_custo_total=df_camp["vl_custo_total"].apply(lambda v: f"R$ {v:,.2f}"),
+                pct_ctr=df_camp["pct_ctr"].apply(lambda v: f"{v*100:.2f}%"),
+                vl_roas=df_camp["vl_roas"].apply(lambda v: f"{v:.2f}x"),
+                vl_cpa=df_camp["vl_cpa"].apply(lambda v: f"R$ {v:,.2f}"),
+                qt_conversoes_total=df_camp["qt_conversoes_total"].apply(lambda v: f"{v:.1f}"),
+            )
+            .rename(columns={"nm_campanha": "Campanha", "vl_custo_total": "Custo", "pct_ctr": "CTR", "vl_roas": "ROAS", "vl_cpa": "CPA", "qt_conversoes_total": "Conversões"}),
+            hide_index=True, use_container_width=True
+        )
 
         st.subheader("Tendência diária — últimos 30 dias")
         df_tend = dados["tendencia_diaria"].sort_values("dt_data")
