@@ -141,7 +141,7 @@ Mesma separação de responsabilidades do Diagnóstico: **`detectar_oportunidade
 
 Duas seções no final do relatório, alimentadas por `content/acoes-google-ads.md` — log manual de ações tomadas na conta (editado pelo usuário; ver formato e fluxo de edição no topo do próprio arquivo, e em `CLAUDE.md`).
 
-**Últimas Ações Tomadas** (leitura humana): `carregar_acoes()` em `reports/google_ads.py` faz parsing simples do markdown (divide por cabeçalho `### `, sem estruturar o corpo — o conteúdo já é markdown rico com tabelas/subseções, renderizado direto via `st.markdown()`). Mostra as `LIMITE_ACOES_RECENTES = 3` entradas mais recentes (mesma ordem do arquivo — mais recente primeiro).
+**Últimas Ações Tomadas** (leitura humana): `carregar_acoes()` em `reports/google_ads.py` faz parsing simples do markdown (divide por cabeçalho `### DD/MM/AAAA — Título`, sem estruturar o corpo — o conteúdo já é markdown rico com tabelas/subseções, renderizado direto via `st.markdown()`). A ordem **é pela data do cabeçalho** (parseada e ordenada decrescente dentro de `carregar_acoes()`), não pela ordem em que os blocos aparecem no arquivo — a convenção de sempre inserir a entrada nova no topo (documentada no próprio `content/acoes-google-ads.md`) continua valendo pra facilitar leitura humana do arquivo, mas o relatório não depende dela pra mostrar a mais recente primeiro. Mostra as `LIMITE_ACOES_RECENTES = 3` entradas mais recentes por data.
 
 **Resultado das Últimas Ações** (com IA): mesma disciplina das outras duas seções de IA — Python decide os fatos, a IA só escreve.
 

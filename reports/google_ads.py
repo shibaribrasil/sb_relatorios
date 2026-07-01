@@ -61,8 +61,11 @@ def carregar_acoes():
     """Lê e faz parsing simples de content/acoes-google-ads.md — cada
     entrada começa num cabeçalho '### DD/MM/AAAA — Título'. Não estrutura o
     corpo (já é markdown rico, com tabelas e subseções) — cada entrada guarda
-    o corpo bruto pra renderizar direto com st.markdown(). Entradas mais
-    recentes primeiro (mesma ordem do arquivo — ver content/acoes-google-ads.md).
+    o corpo bruto pra renderizar direto com st.markdown(). Entradas ordenadas
+    pela DATA do cabeçalho, mais recente primeiro — não pela ordem em que
+    aparecem no arquivo, pra não depender de quem edita sempre inserir a
+    entrada nova no topo (a convenção documentada no arquivo continua
+    valendo, isso aqui é só uma rede de segurança).
     """
     texto = ACOES_PATH.read_text(encoding="utf-8")
     _, _, registro = texto.partition("## Registro de Ações")
@@ -77,6 +80,7 @@ def carregar_acoes():
             "corpo": corpo.strip().rstrip("-").strip(),
             "status": status_match.group(1).strip() if status_match else None,
         })
+    entradas.sort(key=lambda e: datetime.strptime(e["data"], "%d/%m/%Y"), reverse=True)
     return entradas
 
 
