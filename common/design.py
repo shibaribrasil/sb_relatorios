@@ -130,16 +130,6 @@ CSS = f"""
   .opp-how {{ margin: 0; padding-left: 18px; font-size: 11px; color: #141419; }}
   .opp-how li {{ margin-bottom: 4px; }}
   .opp-how li:last-child {{ margin-bottom: 0; }}
-
-  /* Container "clarinho" das entradas de Últimas Ações Tomadas — mesmo tom
-     de fundo das caixas de nota ("Como ler") usadas no resto do relatório.
-     Streamlit dá a cada st.container(key=...) uma classe "st-key-<key>";
-     o seletor por substring pega todas as entradas (acao-tomada-0, -1, ...)
-     sem precisar de uma regra por índice. */
-  div[class*="st-key-acao-tomada-"] {{
-    background: rgba(91,30,75,0.04) !important;
-    border-color: {BORDER} !important;
-  }}
 </style>
 """
 

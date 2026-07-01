@@ -988,8 +988,8 @@ def render():
             # ═══ ÚLTIMAS AÇÕES TOMADAS ═══
             if acoes:
                 section_title("Últimas Ações Tomadas")
-                for i, a in enumerate(acoes[:LIMITE_ACOES_RECENTES]):
-                    with st.container(key=f"acao-tomada-{i}", border=True):
+                for a in acoes[:LIMITE_ACOES_RECENTES]:
+                    with st.container(border=True):
                         status_html = f' <span class="tag t-muted">{a["status"]}</span>' if a["status"] else ""
                         st.html(f'<div class="c-label" style="margin-bottom:10px">{a["data"]} — {a["titulo"]}{status_html}</div>')
                         st.markdown(a["corpo"])
