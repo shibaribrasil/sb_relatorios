@@ -82,8 +82,8 @@ def render():
             </div>
             """)
 
-            # ═══ 1 — SAÚDE FINANCEIRA ═══
-            section_title("1 — Saúde Financeira")
+            # ═══ 1 — VISÃO GERAL DA CONTA ═══
+            section_title("1 — Visão Geral da Conta")
             render_cards([
                 card("Custo Total", f"R$ {custo:,.2f}", f"{n_campanhas} campanhas · {n_dias} dias", variant="neutral"),
                 card("Receita Gerada", f"R$ {receita:,.2f}", f"{r['qt_conversoes_total']:,.0f} compras confirmadas", variant="neutral"),
@@ -104,7 +104,42 @@ def render():
             note("<strong>Como ler:</strong> ROI considera só o gasto de mídia — não inclui custo do produto. "
                  "ROAS abaixo de 2× indica campanha no prejuízo considerando margem; entre 2× e 3× está na zona de atenção; acima de 3× está saudável.")
 
-            st.subheader("")
+            # ═══ 2 — ORÇAMENTO ═══
+            section_title("2 — Orçamento: Budget vs. Gasto Médio Diário")
+            with st.container(border=True):
+                df_orc = dados["orcamento"].sort_values("vl_gasto_total", ascending=False)
+                nomes_orc = [nome_curto(n) for n in df_orc["nm_campanha"]]
+                fig = go.Figure()
+                # ordenado do maior pro menor de cima pra baixo: dado já vem
+                # decrescente, e o eixo precisa ser invertido (ver nota em
+                # ROAS/Investido sobre a ordem de desenho do Plotly).
+                fig.add_bar(name="Budget diário", y=nomes_orc, x=df_orc["vl_orcamento_diario"], orientation="h", marker_color=SKIN,
+                            customdata=df_orc["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Budget diário: R$ %{x:,.2f}<extra></extra>")
+                fig.add_bar(name="Gasto médio diário", y=nomes_orc, x=df_orc["vl_gasto_medio_diario"], orientation="h", marker_color=PLUM,
+                            customdata=df_orc["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Gasto médio: R$ %{x:,.2f}<extra></extra>")
+                plotly_layout(fig, barmode="group", height=300, xaxis=dict(gridcolor=GRID, tickprefix="R$"),
+                              yaxis=dict(gridcolor=GRID, autorange="reversed"))
+                st.plotly_chart(fig, use_container_width=True)
+
+                tabela_orc = pd.DataFrame({
+                    "Campanha": df_orc["nm_campanha"],
+                    "Status": df_orc["ds_status_campanha"],
+                    "Budget diário": df_orc["vl_orcamento_diario"].apply(lambda v: f"R$ {v:,.2f}"),
+                    "Gasto médio": df_orc["vl_gasto_medio_diario"].apply(lambda v: f"R$ {v:,.2f}"),
+                    "Utilização": df_orc["pct_utilizacao_media"],
+                    "Gasto total": df_orc["vl_gasto_total"].apply(lambda v: f"R$ {v:,.2f}"),
+                })
+                styled_orc = style_color(
+                    tabela_orc.style,
+                    lambda v: f"color: {BAD}; font-weight:700" if v >= 1.0 else (f"color: {WARN}; font-weight:700" if v >= 0.7 else f"color: {TAUPE}"),
+                    subset=["Utilização"]
+                ).format({"Utilização": "{:.0%}"})
+                st.dataframe(styled_orc, hide_index=True, use_container_width=True)
+                note("<strong>Como ler:</strong> Utilização ≥ 100% = campanha <strong>limitada por orçamento</strong> — está perdendo impressões/cliques que poderiam converter; "
+                     "70–99% é normal; abaixo de 70% = orçamento subutilizado (pode ter espaço para aumentar lance ou indicar audiência pequena).")
+
+            # ═══ 3 — PERFORMANCE POR CAMPANHA ═══
+            section_title("3 — Performance por Campanha")
             col1, col2 = st.columns(2)
 
             with col1:
@@ -139,8 +174,6 @@ def render():
                     st.plotly_chart(fig, use_container_width=True)
                     note("Quando a barra de receita (vermelha) é menor que a de investido (roxa), a campanha está no prejuízo no período.")
 
-            # ═══ 2 — PERFORMANCE POR CAMPANHA ═══
-            section_title("2 — Performance por Campanha")
             with st.container(border=True):
                 df_tab = df_camp.copy()
                 df_tab["pct_conv_rate"] = df_tab["qt_conversoes_total"] / df_tab["qt_cliques_total"]
@@ -168,34 +201,35 @@ def render():
                 note("<strong>Benchmarks:</strong> CTR Search &gt;2% aceitável / &gt;6% bom · Conv. Rate e-commerce &gt;1% mínimo / &gt;3% bom · "
                      "ROAS mínimo 2× / meta 3–5×.")
 
-            # ═══ 3 — TENDÊNCIA + CONVERSÕES ═══
-            section_title("3 — Tendência Temporal e Conversões")
-            col3, col4 = st.columns([3, 2])
-            with col3:
-                with st.container(border=True):
-                    st.html('<div class="c-label" style="margin-bottom:10px">Gasto diário e Cliques — últimos 30 dias</div>')
-                    df_tend = dados["tendencia_diaria"].sort_values("dt_data")
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=df_tend["dt_data"], y=df_tend["vl_custo"], name="Gasto (R$)",
-                                              line=dict(color=SCARLET, width=2.5, shape="spline"), fill="tozeroy",
-                                              fillcolor="rgba(209,15,47,0.06)", yaxis="y"))
-                    fig.add_trace(go.Scatter(x=df_tend["dt_data"], y=df_tend["qt_cliques"], name="Cliques",
-                                              line=dict(color=PLUM, width=2, dash="dash"), yaxis="y2"))
-                    plotly_layout(fig, height=300, hovermode="x unified",
-                                  yaxis=dict(gridcolor=GRID, tickprefix="R$", title=None),
-                                  yaxis2=dict(overlaying="y", side="right", showgrid=False, title=None))
-                    st.plotly_chart(fig, use_container_width=True)
-                    note("Gasto subindo com cliques estáveis = CPC subindo (leilão mais competitivo). Cliques caindo com gasto constante geralmente indica perda de impression share.")
+            # ═══ 4 — TENDÊNCIA DIÁRIA ═══
+            section_title("4 — Tendência Diária")
+            with st.container(border=True):
+                st.html('<div class="c-label" style="margin-bottom:10px">Gasto diário e Cliques — últimos 30 dias</div>')
+                df_tend = dados["tendencia_diaria"].sort_values("dt_data")
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=df_tend["dt_data"], y=df_tend["vl_custo"], name="Gasto (R$)",
+                                          line=dict(color=SCARLET, width=2.5, shape="spline"), fill="tozeroy",
+                                          fillcolor="rgba(209,15,47,0.06)", yaxis="y"))
+                fig.add_trace(go.Scatter(x=df_tend["dt_data"], y=df_tend["qt_cliques"], name="Cliques",
+                                          line=dict(color=PLUM, width=2, dash="dash"), yaxis="y2"))
+                plotly_layout(fig, height=300, hovermode="x unified",
+                              yaxis=dict(gridcolor=GRID, tickprefix="R$", title=None),
+                              yaxis2=dict(overlaying="y", side="right", showgrid=False, title=None))
+                st.plotly_chart(fig, use_container_width=True)
+                note("Gasto subindo com cliques estáveis = CPC subindo (leilão mais competitivo). Cliques caindo com gasto constante geralmente indica perda de impression share.")
 
-            with col4:
-                with st.container(border=True):
-                    st.html('<div class="c-label" style="margin-bottom:10px">Conversões por Tipo</div>')
-                    df_conv = dados["conversoes_tipo"].sort_values("qt_conversoes_total", ascending=False)
+            # ═══ 5 — CONVERSÕES POR TIPO ═══
+            section_title("5 — Conversões por Tipo")
+            with st.container(border=True):
+                col3, col4 = st.columns([2, 3])
+                df_conv = dados["conversoes_tipo"].sort_values("qt_conversoes_total", ascending=False)
+                with col3:
                     fig = go.Figure(go.Pie(labels=df_conv["nm_acao_conversao"], values=df_conv["qt_conversoes_total"],
                                             hole=0.5, marker_colors=[PLUM, SCARLET, WARN_BG, TAUPE, SKIN],
                                             textinfo="percent"))
                     plotly_layout(fig, height=220, showlegend=True, legend=dict(orientation="v", y=0.5, font=dict(size=10)))
                     st.plotly_chart(fig, use_container_width=True)
+                with col4:
                     variante_cor = {"ok": OK, "warn": WARN, "muted": TAUPE}
                     variante_por_tipo = {"Primária": "ok", "Secundária": "warn", "Micro": "muted"}
                     tabela_conv = pd.DataFrame({
@@ -210,46 +244,13 @@ def render():
                         subset=["Tipo"]
                     )
                     st.dataframe(styled_conv, hide_index=True, use_container_width=True)
-                    note("<strong>Primária</strong> = compra real. <strong>Secundária</strong> = etapa do funil (carrinho/checkout). "
-                         "<strong>Micro</strong> = ex. visualização de página — não é receita real e não entra no cálculo de ROAS.")
+                note("<strong>Primária</strong> = compra real. <strong>Secundária</strong> = etapa do funil (carrinho/checkout). "
+                     "<strong>Micro</strong> = ex. visualização de página — não é receita real e não entra no cálculo de ROAS.")
 
-            # ═══ 4 — ORÇAMENTO ═══
-            section_title("4 — Orçamento: Budget vs. Gasto Médio Diário")
+            # ═══ 6 — DIAGNÓSTICO DE LEILÃO E CRIATIVOS ═══
+            section_title("6 — Diagnóstico de Leilão e Criativos")
             with st.container(border=True):
-                df_orc = dados["orcamento"].sort_values("vl_gasto_total", ascending=False)
-                nomes_orc = [nome_curto(n) for n in df_orc["nm_campanha"]]
-                fig = go.Figure()
-                # ordenado do maior pro menor de cima pra baixo: dado já vem
-                # decrescente, e o eixo precisa ser invertido (ver nota em
-                # ROAS/Investido sobre a ordem de desenho do Plotly).
-                fig.add_bar(name="Budget diário", y=nomes_orc, x=df_orc["vl_orcamento_diario"], orientation="h", marker_color=SKIN,
-                            customdata=df_orc["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Budget diário: R$ %{x:,.2f}<extra></extra>")
-                fig.add_bar(name="Gasto médio diário", y=nomes_orc, x=df_orc["vl_gasto_medio_diario"], orientation="h", marker_color=PLUM,
-                            customdata=df_orc["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Gasto médio: R$ %{x:,.2f}<extra></extra>")
-                plotly_layout(fig, barmode="group", height=300, xaxis=dict(gridcolor=GRID, tickprefix="R$"),
-                              yaxis=dict(gridcolor=GRID, autorange="reversed"))
-                st.plotly_chart(fig, use_container_width=True)
-
-                tabela_orc = pd.DataFrame({
-                    "Campanha": df_orc["nm_campanha"],
-                    "Status": df_orc["ds_status_campanha"],
-                    "Budget diário": df_orc["vl_orcamento_diario"].apply(lambda v: f"R$ {v:,.2f}"),
-                    "Gasto médio": df_orc["vl_gasto_medio_diario"].apply(lambda v: f"R$ {v:,.2f}"),
-                    "Utilização": df_orc["pct_utilizacao_media"],
-                    "Gasto total": df_orc["vl_gasto_total"].apply(lambda v: f"R$ {v:,.2f}"),
-                })
-                styled_orc = style_color(
-                    tabela_orc.style,
-                    lambda v: f"color: {BAD}; font-weight:700" if v >= 1.0 else (f"color: {WARN}; font-weight:700" if v >= 0.7 else f"color: {TAUPE}"),
-                    subset=["Utilização"]
-                ).format({"Utilização": "{:.0%}"})
-                st.dataframe(styled_orc, hide_index=True, use_container_width=True)
-                note("<strong>Como ler:</strong> Utilização ≥ 100% = campanha <strong>limitada por orçamento</strong> — está perdendo impressões/cliques que poderiam converter; "
-                     "70–99% é normal; abaixo de 70% = orçamento subutilizado (pode ter espaço para aumentar lance ou indicar audiência pequena).")
-
-            # ═══ 5 — KEYWORDS ═══
-            section_title("5 — Top Keywords por Gasto")
-            with st.container(border=True):
+                st.html('<div class="c-label" style="margin-bottom:10px">Top Keywords por Gasto</div>')
                 bench_row([("QS meta", "≥ 7"), ("Aceitável", "5–6"), ("Crítico", "< 5"), ("Perfeito", "QS 10")])
                 df_kw = dados["keywords_top"].sort_values("vl_custo_total", ascending=False)
                 tabela_kw = pd.DataFrame({
@@ -279,9 +280,8 @@ def render():
                 st.dataframe(styled_kw, hide_index=True, use_container_width=True)
                 note("★ = Quality Score perfeito (10). QS abaixo de 5 normalmente eleva o CPC e reduz a posição no leilão — priorize melhorar anúncio/landing page dessas keywords antes de aumentar lance.")
 
-            # ═══ 6 — IMPRESSION SHARE ═══
-            section_title("6 — Impression Share por Campanha")
             with st.container(border=True):
+                st.html('<div class="c-label" style="margin-bottom:10px">Impression Share por Campanha</div>')
                 df_is = dados["impression_share"].sort_values("pct_impression_share", ascending=False)
                 fig = go.Figure()
                 fig.add_bar(name="IS conquistado", y=df_is["nm_campanha"], x=df_is["pct_impression_share"], orientation="h", marker_color=PLUM)
@@ -291,9 +291,8 @@ def render():
                 st.plotly_chart(fig, use_container_width=True)
                 note("<strong>Perda por budget</strong> se resolve aumentando orçamento. <strong>Perda por ranking</strong> se resolve melhorando Quality Score ou lance — são diagnósticos opostos, não confundir.")
 
-            # ═══ 7 — ANÚNCIOS ATIVOS ═══
-            section_title("7 — Anúncios Ativos")
             with st.container(border=True):
+                st.html('<div class="c-label" style="margin-bottom:10px">Anúncios Ativos</div>')
                 df_ads = dados["anuncios"]
                 st.dataframe(
                     df_ads[["nm_campanha", "nm_grupo_anuncio", "ds_tipo_anuncio", "nm_anuncio",
