@@ -949,25 +949,19 @@ def render():
                 )
                 note("Anúncios com força \"Ruim\" ou \"Regular\" perdem posição no leilão — adicionar mais variações de título/descrição costuma elevar para \"Boa\"/\"Excelente\".")
 
-            # ═══ ÚLTIMAS AÇÕES TOMADAS ═══
-            # Try/except isolado — lê um arquivo local (content/acoes-google-ads.md),
-            # não depende de BigQuery nem da Claude API; se faltar ou vier
-            # malformado, o resto do relatório não é afetado.
+            # Carrega o log de ações uma vez — alimenta as duas seções abaixo
+            # (Resultado primeiro, depois o registro em si). Try/except
+            # isolado — lê um arquivo local, não depende de BigQuery nem da
+            # Claude API; se faltar ou vier malformado, o resto do
+            # relatório não é afetado.
             try:
                 acoes = carregar_acoes()
             except Exception:
                 acoes = None
-            if acoes:
-                section_title("Últimas Ações Tomadas")
-                for a in acoes[:LIMITE_ACOES_RECENTES]:
-                    with st.container(border=True):
-                        status_html = f' <span class="tag t-muted">{a["status"]}</span>' if a["status"] else ""
-                        st.html(f'<div class="c-label" style="margin-bottom:10px">{a["data"]} — {a["titulo"]}{status_html}</div>')
-                        st.markdown(a["corpo"])
 
             # ═══ RESULTADO DAS ÚLTIMAS AÇÕES ═══
-            # Try/except isolado, mesmo padrão do Diagnóstico Executivo e
-            # Oportunidades. Depende de `acoes` ter carregado com sucesso.
+            # Mesmo padrão de try/except isolado do Diagnóstico Executivo e
+            # Oportunidades.
             try:
                 if acoes:
                     acoes_avaliaveis = detectar_acoes_avaliaveis(acoes, dados)
@@ -982,14 +976,23 @@ def render():
                     render_insights([
                         insight_card(
                             VEREDITO_SEVERIDADE.get(r["veredito"], "warn"), VEREDITO_LABEL.get(r["veredito"], r["veredito"]),
-                            r["titulo"], r["avaliacao"], ["Ver detalhes completos em \"Últimas Ações Tomadas\", acima"],
+                            r["titulo"], r["avaliacao"], ["Ver detalhes completos em \"Últimas Ações Tomadas\", abaixo"],
                         )
                         for r in resultados_acoes
                     ])
                 else:
-                    note("Nenhuma ação recente com dado suficiente pra avaliar resultado (ver \"Últimas Ações Tomadas\" acima).")
+                    note("Nenhuma ação recente com dado suficiente pra avaliar resultado (ver \"Últimas Ações Tomadas\" abaixo).")
             else:
                 note("Resultado das Últimas Ações indisponível no momento — o restante do relatório não é afetado.")
+
+            # ═══ ÚLTIMAS AÇÕES TOMADAS ═══
+            if acoes:
+                section_title("Últimas Ações Tomadas")
+                for i, a in enumerate(acoes[:LIMITE_ACOES_RECENTES]):
+                    with st.container(key=f"acao-tomada-{i}", border=True):
+                        status_html = f' <span class="tag t-muted">{a["status"]}</span>' if a["status"] else ""
+                        st.html(f'<div class="c-label" style="margin-bottom:10px">{a["data"]} — {a["titulo"]}{status_html}</div>')
+                        st.markdown(a["corpo"])
 
         except Exception as e:
             st.error(f"Erro ao carregar dados: {e}")
