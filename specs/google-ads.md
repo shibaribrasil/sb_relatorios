@@ -97,7 +97,7 @@ Três blocos na mesma seção — juntos porque todos respondem "por que a perfo
 
 A seção "Diagnóstico Executivo" (cards de alerta, um por problema/destaque encontrado) é composta em duas etapas com responsabilidades separadas — de propósito, para não repetir o padrão que causou o bug do ROI/Purchase (regra de negócio que só existia na cabeça de quem revisava o número, nunca escrita em código):
 
-1. **`detectar_sinais(dados)` em `reports/google_ads.py` — regra fixa em Python, sem IA.** Decide quais campanhas/keywords entram e qual a severidade (`bad`/`warn`/`ok`), aplicando os limiares já documentados nas seções acima deste spec. A Claude API **não** participa dessa decisão.
+1. **`detectar_sinais(dados)` em `reports/google_ads.py` — regra fixa em Python, sem IA.** Decide quais campanhas/keywords entram e qual a severidade (`bad`/`warn`/`ok`), aplicando os limiares já documentados nas seções acima deste spec. A Claude API **não** participa dessa decisão. A lista devolvida já vem ordenada por severidade — urgente (`bad`) primeiro, positivo (`ok`) por último — mesma leitura do HTML de referência.
 2. **Claude API — só escreve o texto.** Recebe a lista de sinais já filtrada (não as tabelas `rpt` inteiras) e devolve título/corpo/ação recomendada citando os números que o Python já calculou.
 
 Limiares usados por `detectar_sinais()` (capados em `LIMITE_SINAIS_POR_CATEGORIA = 3` por categoria, priorizando sempre o maior impacto financeiro dentro da categoria — evita lista enorme em contas com muitas campanhas no mesmo problema):
@@ -110,6 +110,8 @@ Limiares usados por `detectar_sinais()` (capados em `LIMITE_SINAIS_POR_CATEGORIA
 | `impression_share_budget` / `impression_share_ranking` | `impression_share` | `warn` se perda por budget ou por ranking ≥ 15%, capado em 3 por tipo | **Limiar novo, introduzido em `detectar_sinais()`** — o spec só documentava a distinção budget-vs-ranking (Seção 6), sem número; 15% foi definido ao implementar a Fase 7, não vem de benchmark de mercado documentado antes |
 
 **Nota de qualidade de dado (2026-07-01):** a categoria `quality_score` foi a que expôs o bug de fan-out de join em `rpt_gads_keywords_top` (`cd_keyword` reaproveitado entre grupos de anúncio — ver Fase 8 do `MIGRACAO-RELATORIOS.md`). Corrigido na fonte (`sb_dw_dbt`); `detectar_sinais()` não precisou de mitigação própria porque o dado agora chega correto.
+
+**Regra de negócio: geração no máximo 1x por dia.** `gerar_diagnostico()` é cacheado por data (fuso BRT, `_data_referencia_brt()` em `reports/google_ads.py`), não por tempo fixo. Isso é intencional, pedido pelo usuário em 2026-07-01: a primeira abertura do relatório em um dia gera os insights e chama a Claude API; qualquer abertura seguinte no mesmo dia reaproveita o resultado, mesmo que os dados subjacentes mudem com a atualização de hora em hora do cron. Vira o dia (BRT) → próxima abertura gera de novo. Se o relatório não for aberto num dia, nenhuma chamada é feita — a função só executa quando alguém carrega a página, nunca em segundo plano. Isso é uma escolha de custo/produto, não um limite técnico da API.
 
 ## Fora de escopo (documentado, não implementado)
 

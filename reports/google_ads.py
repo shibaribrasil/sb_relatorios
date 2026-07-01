@@ -3,6 +3,8 @@
 Regras de negócio e definição de cada indicador: ver specs/google-ads.md.
 Não altere cálculo/filtro sem antes ler (e, se preciso, atualizar) esse spec.
 """
+from datetime import datetime, timedelta, timezone
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -59,6 +61,10 @@ LIMITE_SINAIS_POR_CATEGORIA = 3
 # budget vs. ranking, sem limiar numérico) — limiar novo, introduzido aqui e
 # documentado no spec junto com esta função.
 LIMIAR_PERDA_IMPRESSION_SHARE = 0.15
+
+# Ordem de exibição no Diagnóstico Executivo: urgente primeiro, positivo por
+# último — mesma leitura do HTML de referência (🔴 → 🟡 → 🟢).
+ORDEM_SEVERIDADE = {"bad": 0, "warn": 1, "ok": 2}
 
 
 def detectar_sinais(dados):
@@ -159,7 +165,7 @@ def detectar_sinais(dados):
             },
         })
 
-    return sinais
+    return sorted(sinais, key=lambda s: ORDEM_SEVERIDADE[s["severidade"]])
 
 
 LABEL_CATEGORIA_SINAL = {
@@ -212,11 +218,28 @@ def _serializar_sinais(sinais):
     return "\n".join(linhas)
 
 
-@st.cache_data(ttl=3600)
-def gerar_diagnostico(sinais):
+BRT = timezone(timedelta(hours=-3))  # Brasil não observa horário de verão desde 2019 — offset fixo
+
+
+def _data_referencia_brt():
+    """Chave de cache do diagnóstico — muda só quando o dia (BRT) muda, não
+    por hora. Gera insights só na primeira abertura do relatório em cada
+    dia; se ninguém abrir, não gasta token nenhum (a função só executa
+    quando o Streamlit renderiza a página)."""
+    return datetime.now(BRT).date().isoformat()
+
+
+@st.cache_data(ttl=90000)  # ~25h — rede de segurança; a chave por dia (abaixo) já é quem decide quando regenerar
+def gerar_diagnostico(sinais, data_referencia):
     """Transforma os sinais de detectar_sinais() em texto (título, corpo, ações)
     via Claude API. A severidade e quais sinais existem já vêm decididos —
     aqui a IA só redige, nunca reavalia (ver specs/google-ads.md).
+
+    `data_referencia` (ver _data_referencia_brt) é só uma chave de cache: o
+    Streamlit já derruba o cache quando `sinais` muda, mas aqui queremos o
+    oposto — mesmo que o dado subjacente mude durante o dia (atualização de
+    hora em hora), o diagnóstico fica congelado na primeira geração do dia
+    até o dia seguinte, para não gerar de novo a cada abertura do relatório.
     """
     if not sinais:
         return []
@@ -295,7 +318,7 @@ def render():
             # dependência de IA) continua funcionando normalmente.
             try:
                 sinais = detectar_sinais(dados)
-                diagnosticos = gerar_diagnostico(sinais)
+                diagnosticos = gerar_diagnostico(sinais, _data_referencia_brt())
             except Exception:
                 diagnosticos = None
             if diagnosticos is not None:
