@@ -8,7 +8,7 @@ arquivo em reports/ + entrada aqui.
 """
 import streamlit as st
 
-from reports import google_ads
+from reports import google_ads, vendas
 
 st.set_page_config(
     page_title="Relatórios — Shibari Brasil",
@@ -18,6 +18,7 @@ st.set_page_config(
 
 pages = [
     st.Page(google_ads.render, title="Google Ads", icon="📊", url_path="google-ads", default=True),
+    st.Page(vendas.render, title="Vendas", icon="🛒", url_path="vendas"),
 ]
 
 pg = st.navigation(pages)
