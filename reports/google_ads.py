@@ -60,13 +60,20 @@ def render():
             custo = r["vl_custo_total"]
             roi = (receita - custo) / custo if custo else 0
 
-            df_camp = dados["performance_campanhas"].sort_values("vl_custo_total", ascending=False)
-            nomes_curtos = [nome_curto(n) for n in df_camp["nm_campanha"]]
+            # cada gráfico/tabela ordena pela sua própria métrica principal
+            # (maior pro menor) — por isso são views separadas, não uma só.
+            df_camp = dados["performance_campanhas"]
             n_campanhas = df_camp["nm_campanha"].nunique()
             n_dias = (pd.to_datetime(r["dt_fim_periodo"]) - pd.to_datetime(r["dt_inicio_periodo"])).days + 1
             retorno_liquido = receita - custo
             n_campanhas_com_compra = int((df_camp["qt_conversoes_total"] > 0).sum())
             cpa_validos = df_camp["vl_cpa"].dropna()
+
+            df_roas = df_camp.sort_values("vl_roas", ascending=False)
+            nomes_roas = [nome_curto(n) for n in df_roas["nm_campanha"]]
+
+            df_receita = df_camp.sort_values("vl_conversoes_total", ascending=False)
+            nomes_receita = [nome_curto(n) for n in df_receita["nm_campanha"]]
 
             st.html(f"""
             <div class="report-header">
@@ -107,7 +114,7 @@ def render():
             # ═══ 2 — ORÇAMENTO ═══
             section_title("2 — Orçamento: Budget vs. Gasto Médio Diário")
             with st.container(border=True):
-                df_orc = dados["orcamento"].sort_values("vl_gasto_total", ascending=False)
+                df_orc = dados["orcamento"].sort_values("vl_orcamento_diario", ascending=False)
                 nomes_orc = [nome_curto(n) for n in df_orc["nm_campanha"]]
                 fig = go.Figure()
                 # ordenado do maior pro menor de cima pra baixo: dado já vem
@@ -147,15 +154,15 @@ def render():
                     st.html('<div class="c-label" style="margin-bottom:10px">ROAS por Campanha</div>')
                     bench_row([("Meta", "3–5×"), ("Mínimo", "2×"), ("Crítico", "< 2×")])
                     fig = go.Figure()
-                    cores = [{"ok": OK_BG, "warn": WARN_BG, "bad": BAD}[roas_variant(v)] for v in df_camp["vl_roas"]]
-                    fig.add_bar(y=nomes_curtos, x=df_camp["vl_roas"], orientation="h", marker_color=cores,
-                                text=[f"{v:.2f}×" for v in df_camp["vl_roas"]], textposition="outside",
-                                customdata=df_camp["nm_campanha"],
+                    cores = [{"ok": OK_BG, "warn": WARN_BG, "bad": BAD}[roas_variant(v)] for v in df_roas["vl_roas"]]
+                    fig.add_bar(y=nomes_roas, x=df_roas["vl_roas"], orientation="h", marker_color=cores,
+                                text=[f"{v:.2f}×" for v in df_roas["vl_roas"]], textposition="outside",
+                                customdata=df_roas["nm_campanha"],
                                 hovertemplate="<b>%{customdata}</b><br>ROAS: %{x:.2f}×<extra></extra>")
-                    fig.add_vline(x=2, line_dash="dash", line_color=WARN_BG, annotation_text="mínimo 2×", annotation_font_size=10)
-                    plotly_layout(fig, showlegend=False, height=300, xaxis=dict(gridcolor=GRID, ticksuffix="×"))
+                    plotly_layout(fig, showlegend=False, height=300, xaxis=dict(gridcolor=GRID, ticksuffix="×"),
+                                  yaxis=dict(gridcolor=GRID, autorange="reversed"))
                     st.plotly_chart(fig, use_container_width=True)
-                    note("Barras à esquerda da linha tracejada estão perdendo dinheiro considerando margem mínima de 2×.")
+                    note("Barras vermelhas (ROAS abaixo de 2×) estão perdendo dinheiro considerando margem mínima.")
 
             with col2:
                 with st.container(border=True):
@@ -165,17 +172,18 @@ def render():
                     # Plotly desenha o primeiro trace embaixo e o segundo em cima
                     # num grupo de barra horizontal — Receita entra primeiro para
                     # que Investido apareça por cima (ordem de leitura: Investido, Receita).
-                    fig.add_bar(name="Receita", y=nomes_curtos, x=df_camp["vl_conversoes_total"], orientation="h", marker_color=SCARLET,
-                                customdata=df_camp["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Receita: R$ %{x:,.2f}<extra></extra>")
-                    fig.add_bar(name="Investido", y=nomes_curtos, x=df_camp["vl_custo_total"], orientation="h", marker_color=PLUM,
-                                customdata=df_camp["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Investido: R$ %{x:,.2f}<extra></extra>")
+                    fig.add_bar(name="Receita", y=nomes_receita, x=df_receita["vl_conversoes_total"], orientation="h", marker_color=SCARLET,
+                                customdata=df_receita["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Receita: R$ %{x:,.2f}<extra></extra>")
+                    fig.add_bar(name="Investido", y=nomes_receita, x=df_receita["vl_custo_total"], orientation="h", marker_color=PLUM,
+                                customdata=df_receita["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Investido: R$ %{x:,.2f}<extra></extra>")
                     plotly_layout(fig, barmode="group", height=300, xaxis=dict(gridcolor=GRID, tickprefix="R$"),
+                                  yaxis=dict(gridcolor=GRID, autorange="reversed"),
                                   legend=dict(orientation="h", y=1.12, font=dict(size=11), traceorder="reversed"))
                     st.plotly_chart(fig, use_container_width=True)
                     note("Quando a barra de receita (vermelha) é menor que a de investido (roxa), a campanha está no prejuízo no período.")
 
             with st.container(border=True):
-                df_tab = df_camp.copy()
+                df_tab = df_receita.copy()
                 df_tab["pct_conv_rate"] = df_tab["qt_conversoes_total"] / df_tab["qt_cliques_total"]
                 tabela = pd.DataFrame({
                     "Campanha": df_tab["nm_campanha"],
@@ -252,7 +260,7 @@ def render():
             with st.container(border=True):
                 st.html('<div class="c-label" style="margin-bottom:10px">Top Keywords por Gasto</div>')
                 bench_row([("QS meta", "≥ 7"), ("Aceitável", "5–6"), ("Crítico", "< 5"), ("Perfeito", "QS 10")])
-                df_kw = dados["keywords_top"].sort_values("vl_custo_total", ascending=False)
+                df_kw = dados["keywords_top"].sort_values("nr_quality_score", ascending=False)
                 tabela_kw = pd.DataFrame({
                     "Keyword": [f"{k} ★" if qs == 10 else k for k, qs in zip(df_kw["ds_keyword"], df_kw["nr_quality_score"])],
                     "Correspondência": df_kw["ds_correspondencia"],
