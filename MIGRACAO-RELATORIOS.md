@@ -305,6 +305,25 @@ Depois da arquitetura multi-página (Fase 9), o relatório de Google Ads passou 
 
 - [x] `specs/google-ads.md` atualizado com a nova numeração e uma seção explicando a reorganização
 
+### Fase 11 — Oportunidades + Últimas Ações / Resultado das Últimas Ações ✅
+
+Duas frentes pedidas pelo usuário depois da Fase 7, ambas seguindo a mesma disciplina: Python decide os fatos, a Claude API só escreve o texto.
+
+**Oportunidades** (gaps de configuração, não problema nos dados — fonte: manual `hab-google-ads` em `sb_marketing_team/.claude/skills/hab-google-ads/SKILL.md`):
+- [x] `detectar_oportunidades()` — 3 regras com dado já disponível: keyword de alto custo sem correspondência Exata (Cap. 4.1), Ad Strength abaixo de "Bom" (Cap. 5.1), Customer Match para campanha de remarketing com ROAS alto e orçamento subutilizado (Cap. 4.4/7.6) — restrito às duas condições pra não contradizer o alerta de orçamento do Diagnóstico Executivo
+- [x] `gerar_oportunidades()` via Claude API, citando capítulo do manual, cache 1x/dia
+- [x] `opportunity_card()` + seção "Oportunidades", logo após o Diagnóstico Executivo
+- [x] Documentado em `specs/google-ads.md`, incluindo limitações (detecção de remarketing por nome, campos não disponíveis pra outros capítulos do manual)
+
+**Últimas Ações + Resultado das Últimas Ações** (log manual de ações tomadas, migrado de `sb_marketing_team/relatorios/diagnostico-google-ads/acoes-e-consideracoes.md`):
+- [x] `content/acoes-google-ads.md` criado, com template e fluxo de edição documentados (usuário anota informal, formata como entrada nova)
+- [x] `carregar_acoes()` — parser simples por cabeçalho, sem estruturar demais o corpo (markdown renderizado direto)
+- [x] Seção "Últimas Ações Tomadas" no final do relatório — 3 entradas mais recentes
+- [x] `detectar_acoes_avaliaveis()` — correlaciona ação (status Executado/Monitorando) com campanha atual por sobreposição de ≥2 palavras do nome; sem correlação, a ação nem chega na IA
+- [x] `gerar_resultado_acoes()` via Claude API — veredito `surtiu_efeito`/`nao_surtiu_efeito`/`cedo_para_avaliar`, reaproveitando `insight_card()`. Testado com a ação real de 25/06/2026: IA respondeu corretamente `cedo_para_avaliar` (sem snapshot "antes", não dá pra confirmar melhora — limitação documentada no spec)
+
+**Custo medido (2026-07-01):** as 3 chamadas de IA juntas (Diagnóstico + Oportunidades + Resultado das Ações), numa geração completa: 5.614 tokens de entrada / 4.715 de saída ≈ **US$ 0,029/dia** (Haiku 4.5) — e só roda 1x por dia (BRT) por seção, cacheado.
+
 ---
 
 ## Ampliações Futuras (pós-validação Google Ads)

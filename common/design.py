@@ -112,6 +112,24 @@ CSS = f"""
   .insight-action li {{ font-size: 11px; color: #141419; margin-bottom: 4px; padding-left: 14px; position: relative; }}
   .insight-action li:last-child {{ margin-bottom: 0; }}
   .insight-action li::before {{ content: '→'; color: {SCARLET}; position: absolute; left: 0; font-weight: 700; }}
+
+  .opportunities {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 6px; }}
+  .opp-card {{
+    background: #fff; border: 1px solid {BORDER}; border-top: 2px solid {PLUM};
+    border-radius: 0 0 10px 10px; padding: 20px 22px; box-shadow: 0 1px 3px rgba(91,30,75,0.05);
+  }}
+  .opp-title {{ font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 600; color: #141419; margin-bottom: 6px; }}
+  .opp-desc {{ font-size: 12px; color: {TAUPE}; line-height: 1.6; margin-bottom: 10px; }}
+  .opp-gain {{
+    display: inline-block; background: rgba(76,175,130,0.08); border: 1px solid rgba(76,175,130,0.25);
+    color: {OK}; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 5px; margin-bottom: 10px;
+  }}
+  .opp-where {{ font-size: 11px; color: {TAUPE}; margin-bottom: 10px; }}
+  .opp-where strong {{ color: #141419; }}
+  .opp-how-label {{ font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: {TAUPE}; margin-bottom: 6px; }}
+  .opp-how {{ margin: 0; padding-left: 18px; font-size: 11px; color: #141419; }}
+  .opp-how li {{ margin-bottom: 4px; }}
+  .opp-how li:last-child {{ margin-bottom: 0; }}
 </style>
 """
 
@@ -157,6 +175,24 @@ def insight_card(severidade, categoria_label, titulo, corpo, acoes):
 
 def render_insights(insights_html):
     st.html(f'<div class="insights">{"".join(insights_html)}</div>')
+
+
+def opportunity_card(titulo, descricao, ganho_esperado, onde_aplicar, como_aplicar):
+    """Card de Oportunidades. Gap e categoria vêm de detectar_oportunidades()
+    — este helper só formata, não decide nada."""
+    passos = "".join(f"<li>{p}</li>" for p in como_aplicar)
+    return f"""<div class="opp-card">
+        <div class="opp-title">{titulo}</div>
+        <div class="opp-desc">{descricao}</div>
+        <div class="opp-gain">📈 {ganho_esperado}</div>
+        <div class="opp-where"><strong>Onde aplicar:</strong> {onde_aplicar}</div>
+        <div class="opp-how-label">Como aplicar</div>
+        <ol class="opp-how">{passos}</ol>
+    </div>"""
+
+
+def render_opportunities(cards_html):
+    st.html(f'<div class="opportunities">{"".join(cards_html)}</div>')
 
 
 def section_title(text):

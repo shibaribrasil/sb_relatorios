@@ -54,6 +54,8 @@ ROI **não inclui custo do produto** — considera só gasto de mídia. Importan
 
 Subtítulo de cada card mostra um fato/número concreto, não a fórmula (a fórmula fica no `ref`, junto com a meta): Custo Total → nº de campanhas e dias do período (usa `rpt_gads_performance_campanhas` pra contar); Receita Gerada → nº de compras confirmadas; ROI → retorno líquido em R$; ROAS → quantas campanhas tiveram alguma compra; CPA → variação (mín–máx) de CPA entre campanhas.
 
+**Card "Custo — Mês Atual" (adicionado em 2026-07-01):** único indicador do relatório que **não** usa a janela de 30 dias corridos — soma `vl_custo` de `rpt_gads_tendencia_diaria` filtrado por mês calendário (BRT), mês-a-data. Calculado em `reports/google_ads.py` a partir da tabela já carregada (`dados["tendencia_diaria"]`), sem tabela `rpt` nova. Como `rpt_gads_tendencia_diaria` cobre exatamente os últimos 30 dias e nunca inclui o dia de hoje, o mês calendário atual está sempre coberto por completo (nenhum "buraco" mesmo em mês de 31 dias — o único dia sempre ausente é hoje, que também está ausente em todo o resto do relatório por atraso normal do dado do Google Ads). No primeiro dia do mês, mostra "sem dados ainda este mês" em vez de R$ 0,00, pra não parecer que o gasto foi zero.
+
 ## Seção 2 — Orçamento
 
 Fonte: `rpt_gads_orcamento`. Compara `vl_orcamento_diario` (budget configurado) com `vl_gasto_medio_diario` (gasto médio real) por campanha. Gráfico de barra horizontal, ordenado do maior pro menor gasto total de cima pra baixo (`sort_values(ascending=False)` + `yaxis=dict(autorange="reversed")` — sem o reversed, o Plotly desenha o primeiro item embaixo).
@@ -71,7 +73,7 @@ Fonte: `rpt_gads_performance_campanhas`. Tabela com uma linha por campanha: Inve
 
 Dois gráficos acompanham a tabela (mesmos dados, visão por campanha):
 - **ROAS por Campanha**: cor por faixa (`roas_variant`: ok ≥3×, warn 2–3×, bad <2×), linha de referência em 2×. Barra horizontal (nome de campanha abreviado via `nome_curto()` — nome completo aparece no hover) para não quebrar rótulo.
-- **Investido vs. Receita por Campanha**: receita menor que investido na mesma campanha = prejuízo no período. Também horizontal; ordem de leitura de cima pra baixo é sempre Investido, depois Receita (cuidado: no Plotly, em barra horizontal agrupada, o primeiro trace adicionado desenha embaixo — por isso o código adiciona "Receita" antes de "Investido").
+- **Investido vs. Receita por Campanha**: receita menor que investido na mesma campanha = prejuízo no período. Também horizontal; ordem de leitura de cima pra baixo é sempre Investido, depois Receita (cuidado: no Plotly, em barra horizontal agrupada, o primeiro trace adicionado desenha embaixo — por isso o código adiciona "Receita" antes de "Investido"). Ordenado por **Investido** (`vl_custo_total` decrescente, ajustado em 2026-07-01) — diferente da tabela abaixo, que continua ordenada por Receita.
 
 ## Seção 4 — Tendência Diária
 
@@ -113,8 +115,45 @@ Limiares usados por `detectar_sinais()` (capados em `LIMITE_SINAIS_POR_CATEGORIA
 
 **Regra de negócio: geração no máximo 1x por dia.** `gerar_diagnostico()` é cacheado por data (fuso BRT, `_data_referencia_brt()` em `reports/google_ads.py`), não por tempo fixo. Isso é intencional, pedido pelo usuário em 2026-07-01: a primeira abertura do relatório em um dia gera os insights e chama a Claude API; qualquer abertura seguinte no mesmo dia reaproveita o resultado, mesmo que os dados subjacentes mudem com a atualização de hora em hora do cron. Vira o dia (BRT) → próxima abertura gera de novo. Se o relatório não for aberto num dia, nenhuma chamada é feita — a função só executa quando alguém carrega a página, nunca em segundo plano. Isso é uma escolha de custo/produto, não um limite técnico da API.
 
+## Oportunidades: detecção de gaps (Fase 11)
+
+Seção separada do Diagnóstico Executivo, posicionada logo depois dele. Enquanto o Diagnóstico aponta problemas nos números, Oportunidades aponta **ausência de uma prática recomendada** — coisas que a conta poderia ter e não tem. Fonte das recomendações: manual interno `hab-google-ads` (`sb_marketing_team/.claude/skills/hab-google-ads/SKILL.md`, 14 capítulos de boas práticas de Google Ads com contexto Shibari Brasil) — é a mesma fonte que o HTML de referência do time de marketing já citava.
+
+Mesma separação de responsabilidades do Diagnóstico: **`detectar_oportunidades(dados)` em `reports/google_ads.py` decide o gap (Python, sem IA); a Claude API só escreve o texto**, citando o capítulo do manual e os números reais. Capado em `LIMITE_OPORTUNIDADES_POR_CATEGORIA = 3` por categoria.
+
+**v1 (2026-07-01) cobre só os 3 gaps detectáveis com dado já disponível hoje** — sem nova tabela no `sb_dw_dbt`:
+
+| Categoria | Regra | Fonte no manual |
+|---|---|---|
+| `correspondencia_exata` | Keyword sem NENHUMA variante `EXACT` entre as `keywords_top` (agrupado por `ds_keyword`, checando o conjunto de `ds_correspondencia`), capado nas 3 de maior custo agregado | Cap. 4.1 — termos críticos com alto CPC merecem correspondência Exata |
+| `ad_strength` | Anúncio (RSA) com `ds_forca_anuncio` em `AVERAGE`/`POOR` (não `UNSPECIFIED` — dado insuficiente não é sinal de problema), capado nos 3 primeiros grupos de anúncio distintos | Cap. 5.1 — meta mínima "Bom"; de "Ruim" pra "Excelente" o manual cita em média **+15% de cliques e conversões** (único número de impacto que a IA pode citar — as outras categorias ficam qualitativas, sem inventar percentual) |
+| `customer_match` | Campanha cujo nome contém "remarketing" (case-insensitive) **E** `vl_roas ≥ 3` (mesma meta da Seção 1) **E** `pct_utilizacao_media < 70%` (mesmo limiar da Seção 2) | Cap. 4.4/7.6 — escalar audiência via lista de e-mails a partir de campanha já comprovadamente eficiente |
+
+**Por que as duas condições no Customer Match:** orçamento subutilizado por si só já é sinal `warn` no Diagnóstico Executivo (sugerindo reduzir orçamento). Se qualquer campanha subutilizada também gerasse a oportunidade de Customer Match (sugerindo expandir), o relatório mostraria conselho contraditório sobre a mesma campanha. Restringir a remarketing + ROAS alto garante que só aparece quando a leitura é genuinamente "está funcionando bem, amplie" — não "corte".
+
+**Limitações conhecidas:**
+- Detecção de "é campanha de remarketing" é heurística por **nome da campanha**, não um campo estrutural — o Google Ads não expõe um tipo de campanha "remarketing" separado de Search/Display neste export. Se a convenção de nome mudar, a regra para de funcionar silenciosamente (nenhum erro, só para de detectar).
+- `nm_anuncio` em `rpt_gads_anuncios` vem sempre vazio (RSA não tem nome editável) — a oportunidade de Ad Strength referencia por grupo de anúncio, não por nome do anúncio individual.
+- `rpt_gads_anuncios` tem uma pequena quantidade de linhas com `nm_campanha` nulo (falha de join preexistente em `tb_gads_anuncio`, não relacionada ao bug de `cd_keyword` já corrigido) — `detectar_oportunidades()` descarta essas linhas.
+- Fora de escopo por falta de dado (exigiria nova tabela/fonte no `sb_dw_dbt`, alguns talvez nem disponíveis no export do BigQuery): AI Max ativado, extensões de anúncio (sitelinks/callouts), sinais de audiência configurados, qualidade do feed do Google Shopping, estratégia de lance configurada.
+
+## Últimas Ações Tomadas + Resultado das Últimas Ações (Fase 11)
+
+Duas seções no final do relatório, alimentadas por `content/acoes-google-ads.md` — log manual de ações tomadas na conta (editado pelo usuário; ver formato e fluxo de edição no topo do próprio arquivo, e em `CLAUDE.md`).
+
+**Últimas Ações Tomadas** (leitura humana): `carregar_acoes()` em `reports/google_ads.py` faz parsing simples do markdown (divide por cabeçalho `### `, sem estruturar o corpo — o conteúdo já é markdown rico com tabelas/subseções, renderizado direto via `st.markdown()`). Mostra as `LIMITE_ACOES_RECENTES = 3` entradas mais recentes (mesma ordem do arquivo — mais recente primeiro).
+
+**Resultado das Últimas Ações** (com IA): mesma disciplina das outras duas seções de IA — Python decide os fatos, a IA só escreve.
+
+1. **`detectar_acoes_avaliaveis(acoes, dados)` — regra fixa em Python.** Só entram ações com status `Executado` ou `Monitorando` (não `Planejado` — nada pra avaliar ainda) dentre as `LIMITE_ACOES_RECENTES` mais recentes, e só quando pelo menos uma campanha atual correlaciona com o texto da ação por sobreposição de palavras do nome (`LIMIAR_PALAVRAS_CORRELACAO = 2` palavras significativas — 1 palavra sozinha gera falso positivo entre campanhas parecidas, ex. "Compra" aparece em duas campanhas diferentes; 2 palavras desambiguou corretamente as 5 campanhas do teste com dado real). Palavras genéricas da conta (`shibari`, `brasil`, artigos/preposições) são ignoradas na contagem. Sem correlação, a ação é descartada — não há número real pra ancorar a avaliação da IA.
+2. **Claude API — só escreve a avaliação**, recebendo a ação + os números atuais (custo, ROAS, utilização de orçamento) das campanhas já correlacionadas pelo Python. Devolve um `veredito` de 3 valores fixos (`surtiu_efeito`/`nao_surtiu_efeito`/`cedo_para_avaliar`) mapeado pra a mesma cor do Diagnóstico Executivo (reaproveita `insight_card()`, sem componente visual novo).
+
+**Limitação conhecida (importante):** não existe snapshot "antes" da ação — a avaliação compara o que a ação **esperava** (texto do log) com o estado **atual** dos dados, não um antes/depois real. Testado com a ação histórica de 25/06/2026: a IA corretamente respondeu `cedo_para_avaliar` em vez de inventar uma melhora, porque os dados fornecidos não permitem isolar o efeito do ajuste. Se isso for revisitado, exigiria guardar um snapshot das métricas no momento em que cada ação é registrada.
+
+**Correlação por nome de campanha é heurística** (mesmo aviso da regra de `customer_match` em Oportunidades) — se o nome da campanha mudar significativamente depois do registro da ação, a correlação para de encontrar essa campanha silenciosamente (sem erro, só sem correlação).
+
 ## Fora de escopo (documentado, não implementado)
 
-- **Oportunidades** (recomendações de features do Google Ads, tipo "ativar AI Max") — depende mais de conhecimento de produto do que de limiar sobre os dados; fica para depois do Diagnóstico Executivo estar validado em produção.
 - **Landing Page por intenção de busca** — exigiria classificar keyword por intenção (curadoria manual ou IA); não é extraível direto das tabelas `rpt` atuais.
 - **Orçamento recomendado + projeção 30 dias** — era cálculo manual/IA no relatório de referência (HTML do time de marketing), não uma regra fixa.
+- **Snapshot antes/depois de ação** — permitiria "Resultado das Últimas Ações" comparar de verdade, não só narrar o estado atual; não implementado nesta rodada.

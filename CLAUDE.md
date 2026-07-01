@@ -17,8 +17,14 @@ sb_relatorios/
     (futuro) vendas.py, financeiro.py, estoque.py
   specs/
     google-ads.md          # regras de negócio e especificação de indicadores do relatório
+  content/
+    acoes-google-ads.md    # log manual de ações tomadas na conta — editado pelo usuário, formatado por IA
   MIGRACAO-RELATORIOS.md   # histórico e checklist da migração
 ```
+
+## Log de ações tomadas (`content/`)
+
+Cada relatório pode ter um `content/acoes-<relatorio>.md` — log manual de ações tomadas na conta (ex.: "pausei campanha X", "ajustei orçamento de Y"), editado pelo usuário. Fluxo: o usuário passa notas informais sobre uma ação e pede pra formatar como entrada nova, seguindo o template documentado no topo do próprio arquivo. Esse log alimenta seções do relatório que mostram as últimas ações e avaliam se surtiram resultado — ver `specs/<relatorio>.md` para os detalhes de cada relatório.
 
 Cada novo relatório é uma página nova em `reports/`, registrada em `streamlit_app.py`. Código de tema/estilo/conexão BigQuery deve morar em `common/`, nunca duplicado por relatório.
 

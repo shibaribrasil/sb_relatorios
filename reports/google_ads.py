@@ -3,7 +3,9 @@
 Regras de negócio e definição de cada indicador: ver specs/google-ads.md.
 Não altere cálculo/filtro sem antes ler (e, se preciso, atualizar) esse spec.
 """
+import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -15,7 +17,7 @@ from common.design import (
     PLUM, SCARLET, TAUPE, SKIN, OK, OK_BG, WARN, WARN_BG, BAD, GRID,
     inject_css, card, render_cards, section_title, bench_row, note,
     roas_variant, util_variant, qs_variant, style_color, plotly_layout, nome_curto,
-    insight_card, render_insights,
+    insight_card, render_insights, opportunity_card, render_opportunities,
 )
 
 # Classificação de conversão por relevância de negócio — específica do Google
@@ -49,6 +51,181 @@ TABELAS = {
 def carregar_dados():
     client = bq.get_client()
     return bq.query_tables(client, DATASET, TABELAS)
+
+
+ACOES_PATH = Path(__file__).resolve().parent.parent / "content" / "acoes-google-ads.md"
+
+
+@st.cache_data(ttl=3600)
+def carregar_acoes():
+    """Lê e faz parsing simples de content/acoes-google-ads.md — cada
+    entrada começa num cabeçalho '### DD/MM/AAAA — Título'. Não estrutura o
+    corpo (já é markdown rico, com tabelas e subseções) — cada entrada guarda
+    o corpo bruto pra renderizar direto com st.markdown(). Entradas mais
+    recentes primeiro (mesma ordem do arquivo — ver content/acoes-google-ads.md).
+    """
+    texto = ACOES_PATH.read_text(encoding="utf-8")
+    _, _, registro = texto.partition("## Registro de Ações")
+    entradas = []
+    for bloco in re.split(r"\n### ", registro)[1:]:
+        cabecalho, _, corpo = bloco.partition("\n")
+        data_str, _, titulo = cabecalho.partition(" — ")
+        status_match = re.search(r"\*\*Status(?:\s+geral)?:?\*\*\s*(.+)", corpo)
+        entradas.append({
+            "data": data_str.strip(),
+            "titulo": titulo.strip(),
+            "corpo": corpo.strip().rstrip("-").strip(),
+            "status": status_match.group(1).strip() if status_match else None,
+        })
+    return entradas
+
+
+# Palavras genéricas demais pra contar como sinal de correlação (aparecem no
+# nome de quase toda campanha desta conta) — sem isso, "shibari"/"brasil"
+# combinaria qualquer ação com qualquer campanha.
+_STOPWORDS_CORRELACAO = {"de", "da", "do", "e", "a", "o", "os", "as", "shibari", "brasil"}
+
+# Nº mínimo de palavras do nome da campanha que precisam aparecer no texto da
+# ação pra considerar correlacionada — 1 palavra sozinha ("compra", "shibari")
+# gera falso positivo entre campanhas parecidas; 2+ desambiguou bem em teste
+# com dado real (ver specs/google-ads.md).
+LIMIAR_PALAVRAS_CORRELACAO = 2
+
+
+def _palavras_significativas(texto):
+    palavras = re.findall(r"[\wÀ-ú/]+", texto.lower())
+    return {p for p in palavras if p not in _STOPWORDS_CORRELACAO and len(p) > 1}
+
+
+def detectar_acoes_avaliaveis(acoes, dados):
+    """Decide quais ações do log já têm o que avaliar — regra fixa em
+    Python, sem IA. Só entram ações com status Executado ou Monitorando
+    (Planejado ainda não tem resultado pra medir) dentre as mais recentes, e
+    só quando pelo menos uma campanha atual correlaciona pelo nome (ver
+    LIMIAR_PALAVRAS_CORRELACAO) — sem correlação, não há número real pra
+    ancorar a avaliação da IA, então a ação é descartada aqui, não enviada
+    à Claude API. Correlação é heurística por sobreposição de palavras do
+    nome da campanha — documentada e com limitação conhecida em
+    specs/google-ads.md (pode errar se o nome da campanha mudou desde o
+    registro da ação).
+    """
+    df_camp = dados["performance_campanhas"]
+    df_orc = dados["orcamento"]
+    palavras_por_campanha = {
+        nome: _palavras_significativas(nome) for nome in df_camp["nm_campanha"].unique()
+    }
+
+    avaliaveis = []
+    for acao in acoes[:LIMITE_ACOES_RECENTES]:
+        status = (acao["status"] or "").lower()
+        if "executado" not in status and "monitorando" not in status:
+            continue
+
+        texto_acao = f'{acao["titulo"]} {acao["corpo"]}'.lower()
+        campanhas_correlacionadas = []
+        for nome, palavras in palavras_por_campanha.items():
+            score = sum(1 for p in palavras if p in texto_acao)
+            if score < LIMIAR_PALAVRAS_CORRELACAO:
+                continue
+            camp_row = df_camp[df_camp["nm_campanha"] == nome].iloc[0]
+            orc_row = df_orc[df_orc["nm_campanha"] == nome]
+            campanhas_correlacionadas.append({
+                "campanha": nome,
+                "custo_total": float(camp_row["vl_custo_total"]),
+                "roas": float(camp_row["vl_roas"]),
+                "utilizacao_orcamento": float(orc_row.iloc[0]["pct_utilizacao_media"]) if not orc_row.empty else None,
+            })
+
+        if not campanhas_correlacionadas:
+            continue
+        avaliaveis.append({
+            "data": acao["data"],
+            "titulo": acao["titulo"],
+            "status": acao["status"],
+            "resumo_acao": acao["corpo"][:800],  # cap — evita mandar markdown gigante (tabelas grandes) pro prompt
+            "campanhas_correlacionadas": campanhas_correlacionadas,
+        })
+    return avaliaveis
+
+
+# Reaproveita o mesmo componente visual do Diagnóstico Executivo
+# (insight_card) — mapeia veredito pra severidade em vez de criar um card
+# novo só pra isso.
+VEREDITO_SEVERIDADE = {"surtiu_efeito": "ok", "nao_surtiu_efeito": "bad", "cedo_para_avaliar": "warn"}
+VEREDITO_LABEL = {"surtiu_efeito": "Resultado positivo", "nao_surtiu_efeito": "Sem resultado", "cedo_para_avaliar": "Cedo para avaliar"}
+
+RESULTADO_ACOES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "resultados": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "indice": {"type": "integer", "description": "mesmo índice da ação na lista recebida"},
+                    "titulo": {"type": "string"},
+                    "avaliacao": {"type": "string"},
+                    "veredito": {"type": "string", "enum": ["surtiu_efeito", "nao_surtiu_efeito", "cedo_para_avaliar"]},
+                },
+                "required": ["indice", "titulo", "avaliacao", "veredito"],
+            },
+        },
+    },
+    "required": ["resultados"],
+}
+
+RESULTADO_ACOES_SYSTEM_PROMPT = (
+    "Você é analista de performance de Google Ads da Shibari Brasil. Você recebe ações JÁ "
+    "TOMADAS na conta (extraídas de um log manual) junto com os números ATUAIS das campanhas "
+    "correlacionadas — a correlação e os números já vêm prontos, não reavalie nem invente "
+    "outra campanha. Sua tarefa: para cada ação, escrever uma avaliação de até 70 palavras "
+    "dizendo se o resultado esperado (descrito na ação) parece estar se confirmando nos "
+    "números atuais, citando os números reais fornecidos. Se os dados não permitirem concluir "
+    "com confiança (ex.: ação muito recente, período curto), diga isso explicitamente em vez "
+    "de forçar uma conclusão — use veredito 'cedo_para_avaliar' nesses casos. Nunca invente "
+    "número que não esteja nos dados fornecidos. Responda em português do Brasil, tom direto "
+    "e profissional."
+)
+
+
+def _serializar_acoes_avaliaveis(acoes_avaliaveis):
+    linhas = []
+    for i, a in enumerate(acoes_avaliaveis):
+        linhas.append(
+            f'{i}. data={a["data"]} | titulo="{a["titulo"]}" | status={a["status"]} | '
+            f'resumo_da_acao="{a["resumo_acao"]}" | campanhas_atuais={a["campanhas_correlacionadas"]}'
+        )
+    return "\n".join(linhas)
+
+
+@st.cache_data(ttl=90000)  # mesma lógica de gerar_diagnostico()/gerar_oportunidades() — 1x por dia (BRT)
+def gerar_resultado_acoes(acoes_avaliaveis, data_referencia):
+    """Transforma as ações avaliáveis em texto (avaliação + veredito) via
+    Claude API. Quais ações entram e com quais números já vêm decididos por
+    detectar_acoes_avaliaveis() — aqui a IA só redige (ver specs/google-ads.md).
+    """
+    if not acoes_avaliaveis:
+        return []
+
+    client = claude.get_client()
+    user = "Ações tomadas e números atuais das campanhas correlacionadas:\n" + _serializar_acoes_avaliaveis(acoes_avaliaveis)
+    max_tokens = min(8192, max(1500, len(acoes_avaliaveis) * 350))
+    resultado, usage = claude.gerar_texto_estruturado(
+        client, RESULTADO_ACOES_SYSTEM_PROMPT, user, RESULTADO_ACOES_SCHEMA, max_tokens=max_tokens,
+    )
+
+    textos_por_indice = {item["indice"]: item for item in resultado.get("resultados", [])}
+    finais = []
+    for i, acao in enumerate(acoes_avaliaveis):
+        texto = textos_por_indice.get(i)
+        if texto is None:
+            continue
+        finais.append({
+            **acao,
+            "avaliacao": texto["avaliacao"],
+            "veredito": texto["veredito"],
+        })
+    return finais
 
 
 # Limite de sinais por categoria no Diagnóstico Executivo — evita que uma
@@ -270,6 +447,181 @@ def gerar_diagnostico(sinais, data_referencia):
     return diagnosticos
 
 
+# Limite de oportunidades por categoria — mesmo motivo do limite de sinais:
+# prioriza sempre o maior impacto (custo) dentro da categoria.
+LIMITE_OPORTUNIDADES_POR_CATEGORIA = 3
+
+# Meta de utilização de orçamento (ver Seção 2 do spec) e meta de ROAS (Seção
+# 1) reaproveitadas aqui — mesmos limiares, não valores novos.
+META_UTILIZACAO_ORCAMENTO = 0.7
+META_ROAS = 3.0
+
+# Quantas entradas do log de ações mostrar na seção "Últimas Ações Tomadas"
+# — as mais recentes primeiro (mesma ordem do arquivo).
+LIMITE_ACOES_RECENTES = 3
+
+
+def detectar_oportunidades(dados):
+    """Decide quais oportunidades entram — regra fixa em Python, sem IA,
+    mesmo espírito de detectar_sinais() (ver specs/google-ads.md). Baseado em
+    gaps do manual hab-google-ads (sb_marketing_team) detectáveis com o dado
+    já disponível hoje — não é "problema" nos dados, é ausência de uma
+    prática recomendada.
+    """
+    oportunidades = []
+
+    # Correspondência Exata — keyword de maior custo sem NENHUMA variante
+    # EXACT entre as top keywords (Cap. 4.1 do manual: "termos críticos com
+    # alto CPC" merecem controle via correspondência exata).
+    df_kw = dados["keywords_top"]
+    por_keyword = df_kw.groupby("ds_keyword").agg(
+        custo_total=("vl_custo_total", "sum"),
+        correspondencias=("ds_correspondencia", lambda s: set(s)),
+    ).reset_index()
+    sem_exata = por_keyword[~por_keyword["correspondencias"].apply(lambda s: "EXACT" in s)]
+    sem_exata = sem_exata.sort_values("custo_total", ascending=False).head(LIMITE_OPORTUNIDADES_POR_CATEGORIA)
+    for _, row in sem_exata.iterrows():
+        oportunidades.append({
+            "categoria": "correspondencia_exata",
+            "campanha": None,
+            "numeros": {"keyword": row["ds_keyword"], "custo_total": float(row["custo_total"])},
+        })
+
+    # Ad Strength — RSA abaixo de "Bom" (Cap. 5.1: meta mínima é "Bom"; de
+    # "Pobre" pra "Excelente" o manual cita em média +15% de cliques e
+    # conversões). UNSPECIFIED = dado insuficiente, não é sinal de problema.
+    # nm_anuncio vem sempre vazio nesta tabela (RSA não tem nome editável) —
+    # referencia por grupo de anúncio, não por nome do anúncio. Descarta
+    # linhas sem nm_campanha (falha de join já conhecida em rpt_gads_anuncios
+    # — poucas linhas órfãs, não é o fan-out de cd_keyword já corrigido).
+    df_ads = dados["anuncios"]
+    fracos = df_ads[df_ads["ds_forca_anuncio"].isin(["AVERAGE", "POOR"]) & df_ads["nm_campanha"].notna()]
+    fracos = fracos.drop_duplicates(subset=["cd_campanha", "cd_grupo_anuncio"])
+    fracos = fracos.head(LIMITE_OPORTUNIDADES_POR_CATEGORIA)
+    for _, row in fracos.iterrows():
+        oportunidades.append({
+            "categoria": "ad_strength",
+            "campanha": row["nm_campanha"],
+            "numeros": {"grupo_anuncio": row["nm_grupo_anuncio"], "forca_atual": row["ds_forca_anuncio"]},
+        })
+
+    # Customer Match — campanha de remarketing com ROAS ≥ meta e orçamento
+    # subutilizado (Cap. 4.4/7.6: escalar audiência a partir de campanha já
+    # comprovadamente eficiente). Só promove quando as DUAS condições valem
+    # — se fosse só "orçamento subutilizado" duplicaria o alerta genérico já
+    # existente em detectar_sinais() (que sugere reduzir orçamento, não
+    # expandir — evita mensagem contraditória no mesmo relatório).
+    # Detecção de "é remarketing" é heurística por nome da campanha — o
+    # Google Ads não expõe um campo estrutural de tipo remarketing separado
+    # de Search/Display neste export.
+    df_camp = dados["performance_campanhas"]
+    df_orc = dados["orcamento"]
+    remarketing = df_camp[
+        df_camp["nm_campanha"].str.contains("remarketing", case=False, na=False)
+        & (df_camp["vl_roas"] >= META_ROAS)
+    ]
+    for _, row in remarketing.iterrows():
+        orc_row = df_orc[df_orc["nm_campanha"] == row["nm_campanha"]]
+        if orc_row.empty or orc_row.iloc[0]["pct_utilizacao_media"] >= META_UTILIZACAO_ORCAMENTO:
+            continue
+        oportunidades.append({
+            "categoria": "customer_match",
+            "campanha": row["nm_campanha"],
+            "numeros": {
+                "roas": float(row["vl_roas"]),
+                "utilizacao_orcamento": float(orc_row.iloc[0]["pct_utilizacao_media"]),
+                "custo_total": float(row["vl_custo_total"]),
+            },
+        })
+
+    return oportunidades
+
+
+OPORTUNIDADE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "oportunidades": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "indice": {"type": "integer", "description": "mesmo índice do gap na lista recebida"},
+                    "titulo": {"type": "string"},
+                    "descricao": {"type": "string"},
+                    "ganho_esperado": {"type": "string"},
+                    "onde_aplicar": {"type": "string"},
+                    "como_aplicar": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4},
+                },
+                "required": ["indice", "titulo", "descricao", "ganho_esperado", "onde_aplicar", "como_aplicar"],
+            },
+        },
+    },
+    "required": ["oportunidades"],
+}
+
+OPORTUNIDADE_SYSTEM_PROMPT = (
+    "Você é consultor de Google Ads da Shibari Brasil, com acesso a um manual interno de boas práticas "
+    "(hab-google-ads). Você recebe uma lista de GAPS JÁ DETECTADOS por um sistema de regras — não "
+    "reavalie, não invente novos gaps nem números diferentes dos fornecidos. Para cada gap, escreva uma "
+    "recomendação prática citando o número real do gap. Use estritamente estas referências do manual, sem "
+    "inventar outras:\n"
+    "- categoria=correspondencia_exata (Cap. 4.1): keyword de alto custo/CPC crítico deve ganhar uma "
+    "variante de correspondência Exata pra dar controle sobre o termo, sem abandonar a correspondência "
+    "ampla existente.\n"
+    "- categoria=ad_strength (Cap. 5.1): meta é Ad Strength mínimo \"Bom\"; o manual indica que subir de "
+    "\"Ruim\" pra \"Excelente\" gera em média +15% de cliques e conversões — cite esse +15% só nesta "
+    "categoria. Ação prática: adicionar mais variações de título e descrição no RSA.\n"
+    "- categoria=customer_match (Cap. 4.4/7.6): campanha de remarketing com ROAS alto e orçamento "
+    "subutilizado é boa candidata a Customer Match — subir lista de e-mails de clientes pra ampliar a "
+    "audiência sem perder a eficiência já comprovada.\n"
+    "Em 'ganho_esperado', só cite número de impacto (%, R$) quando a categoria já fornecer essa referência "
+    "(o +15% do ad_strength); nas outras categorias escreva qualitativamente (ex.: 'mais controle de custo "
+    "por clique'), nunca invente percentual. Responda em português do Brasil, tom direto e profissional."
+)
+
+
+def _serializar_oportunidades(oportunidades):
+    linhas = []
+    for i, o in enumerate(oportunidades):
+        campanha = f' | campanha="{o["campanha"]}"' if o["campanha"] else ""
+        linhas.append(f'{i}. categoria={o["categoria"]}{campanha} | numeros={o["numeros"]}')
+    return "\n".join(linhas)
+
+
+@st.cache_data(ttl=90000)  # mesma lógica de gerar_diagnostico() — 1x por dia (BRT), não por hora
+def gerar_oportunidades(oportunidades, data_referencia):
+    """Transforma os gaps de detectar_oportunidades() em texto (título,
+    descrição, ganho esperado, onde/como aplicar) via Claude API. Quais
+    gaps existem já vêm decididos — aqui a IA só redige, citando o capítulo
+    do manual hab-google-ads (ver specs/google-ads.md).
+    """
+    if not oportunidades:
+        return []
+
+    client = claude.get_client()
+    user = "Gaps detectados na conta:\n" + _serializar_oportunidades(oportunidades)
+    max_tokens = min(8192, max(1500, len(oportunidades) * 350))
+    resultado, usage = claude.gerar_texto_estruturado(
+        client, OPORTUNIDADE_SYSTEM_PROMPT, user, OPORTUNIDADE_SCHEMA, max_tokens=max_tokens,
+    )
+
+    textos_por_indice = {item["indice"]: item for item in resultado.get("oportunidades", [])}
+    finais = []
+    for i, o in enumerate(oportunidades):
+        texto = textos_por_indice.get(i)
+        if texto is None:
+            continue
+        finais.append({
+            **o,
+            "titulo": texto["titulo"],
+            "descricao": texto["descricao"],
+            "ganho_esperado": texto["ganho_esperado"],
+            "onde_aplicar": texto["onde_aplicar"],
+            "como_aplicar": texto["como_aplicar"],
+        })
+    return finais
+
+
 def render():
     inject_css()
 
@@ -297,6 +649,18 @@ def render():
 
             df_receita = df_camp.sort_values("vl_conversoes_total", ascending=False)
             nomes_receita = [nome_curto(n) for n in df_receita["nm_campanha"]]
+
+            df_investido = df_camp.sort_values("vl_custo_total", ascending=False)
+            nomes_investido = [nome_curto(n) for n in df_investido["nm_campanha"]]
+
+            # Custo do mês calendário atual (BRT) — diferente da janela de 30
+            # dias corridos usada no resto do relatório (ver specs/google-ads.md).
+            df_tend_mes = dados["tendencia_diaria"].copy()
+            df_tend_mes["dt_data"] = pd.to_datetime(df_tend_mes["dt_data"])
+            hoje_brt = datetime.now(BRT).date()
+            filtro_mes_atual = (df_tend_mes["dt_data"].dt.year == hoje_brt.year) & (df_tend_mes["dt_data"].dt.month == hoje_brt.month)
+            custo_mes_atual = df_tend_mes.loc[filtro_mes_atual, "vl_custo"].sum()
+            n_dias_mes_atual = int(filtro_mes_atual.sum())
 
             st.html(f"""
             <div class="report-header">
@@ -336,10 +700,34 @@ def render():
             else:
                 note("Diagnóstico Executivo indisponível no momento — o restante do relatório não é afetado.")
 
+            # ═══ OPORTUNIDADES ═══
+            # Mesmo padrão de try/except isolado do Diagnóstico Executivo.
+            try:
+                gaps = detectar_oportunidades(dados)
+                oportunidades = gerar_oportunidades(gaps, _data_referencia_brt())
+            except Exception:
+                oportunidades = None
+            if oportunidades is not None:
+                section_title("Oportunidades")
+                if oportunidades:
+                    render_opportunities([
+                        opportunity_card(
+                            o["titulo"], o["descricao"], o["ganho_esperado"], o["onde_aplicar"], o["como_aplicar"],
+                        )
+                        for o in oportunidades
+                    ])
+                else:
+                    note("Nenhuma oportunidade relevante detectada pelas regras atuais (correspondência exata, Ad Strength, Customer Match).")
+            else:
+                note("Oportunidades indisponível no momento — o restante do relatório não é afetado.")
+
             # ═══ 1 — VISÃO GERAL DA CONTA ═══
             section_title("1 — Visão Geral da Conta")
             render_cards([
                 card("Custo Total", f"R$ {custo:,.2f}", f"{n_campanhas} campanhas · {n_dias} dias", variant="neutral"),
+                card("Custo — Mês Atual", f"R$ {custo_mes_atual:,.2f}",
+                     f"{n_dias_mes_atual} dias registrados" if n_dias_mes_atual else "sem dados ainda este mês",
+                     "mês calendário (BRT) — não é a janela de 30 dias corridos do resto do relatório", variant="neutral"),
                 card("Receita Gerada", f"R$ {receita:,.2f}", f"{r['qt_conversoes_total']:,.0f} compras confirmadas", variant="neutral"),
                 card("ROI", f"{roi*100:.0f}%", f"R$ {retorno_liquido:,.2f} de retorno líquido",
                      "meta: > 100% · (receita − gasto) ÷ gasto", variant="ok" if roi >= 1 else ("warn" if roi >= 0 else "bad")),
@@ -419,10 +807,10 @@ def render():
                     # Plotly desenha o primeiro trace embaixo e o segundo em cima
                     # num grupo de barra horizontal — Receita entra primeiro para
                     # que Investido apareça por cima (ordem de leitura: Investido, Receita).
-                    fig.add_bar(name="Receita", y=nomes_receita, x=df_receita["vl_conversoes_total"], orientation="h", marker_color=SCARLET,
-                                customdata=df_receita["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Receita: R$ %{x:,.2f}<extra></extra>")
-                    fig.add_bar(name="Investido", y=nomes_receita, x=df_receita["vl_custo_total"], orientation="h", marker_color=PLUM,
-                                customdata=df_receita["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Investido: R$ %{x:,.2f}<extra></extra>")
+                    fig.add_bar(name="Receita", y=nomes_investido, x=df_investido["vl_conversoes_total"], orientation="h", marker_color=SCARLET,
+                                customdata=df_investido["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Receita: R$ %{x:,.2f}<extra></extra>")
+                    fig.add_bar(name="Investido", y=nomes_investido, x=df_investido["vl_custo_total"], orientation="h", marker_color=PLUM,
+                                customdata=df_investido["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Investido: R$ %{x:,.2f}<extra></extra>")
                     plotly_layout(fig, barmode="group", height=300, xaxis=dict(gridcolor=GRID, tickprefix="R$"),
                                   yaxis=dict(gridcolor=GRID, autorange="reversed"),
                                   legend=dict(orientation="h", y=1.12, font=dict(size=11), traceorder="reversed"))
@@ -560,6 +948,48 @@ def render():
                     hide_index=True, use_container_width=True
                 )
                 note("Anúncios com força \"Ruim\" ou \"Regular\" perdem posição no leilão — adicionar mais variações de título/descrição costuma elevar para \"Boa\"/\"Excelente\".")
+
+            # ═══ ÚLTIMAS AÇÕES TOMADAS ═══
+            # Try/except isolado — lê um arquivo local (content/acoes-google-ads.md),
+            # não depende de BigQuery nem da Claude API; se faltar ou vier
+            # malformado, o resto do relatório não é afetado.
+            try:
+                acoes = carregar_acoes()
+            except Exception:
+                acoes = None
+            if acoes:
+                section_title("Últimas Ações Tomadas")
+                for a in acoes[:LIMITE_ACOES_RECENTES]:
+                    with st.container(border=True):
+                        status_html = f' <span class="tag t-muted">{a["status"]}</span>' if a["status"] else ""
+                        st.html(f'<div class="c-label" style="margin-bottom:10px">{a["data"]} — {a["titulo"]}{status_html}</div>')
+                        st.markdown(a["corpo"])
+
+            # ═══ RESULTADO DAS ÚLTIMAS AÇÕES ═══
+            # Try/except isolado, mesmo padrão do Diagnóstico Executivo e
+            # Oportunidades. Depende de `acoes` ter carregado com sucesso.
+            try:
+                if acoes:
+                    acoes_avaliaveis = detectar_acoes_avaliaveis(acoes, dados)
+                    resultados_acoes = gerar_resultado_acoes(acoes_avaliaveis, _data_referencia_brt())
+                else:
+                    resultados_acoes = []
+            except Exception:
+                resultados_acoes = None
+            if resultados_acoes is not None:
+                section_title("Resultado das Últimas Ações")
+                if resultados_acoes:
+                    render_insights([
+                        insight_card(
+                            VEREDITO_SEVERIDADE.get(r["veredito"], "warn"), VEREDITO_LABEL.get(r["veredito"], r["veredito"]),
+                            r["titulo"], r["avaliacao"], ["Ver detalhes completos em \"Últimas Ações Tomadas\", acima"],
+                        )
+                        for r in resultados_acoes
+                    ])
+                else:
+                    note("Nenhuma ação recente com dado suficiente pra avaliar resultado (ver \"Últimas Ações Tomadas\" acima).")
+            else:
+                note("Resultado das Últimas Ações indisponível no momento — o restante do relatório não é afetado.")
 
         except Exception as e:
             st.error(f"Erro ao carregar dados: {e}")
