@@ -229,7 +229,7 @@ Referência de design: `sb_marketing_team/relatorios/diagnostico-google-ads/rela
 - [ ] Ajustar prompts de insight se necessário
 - [ ] Documentar URL final do relatório
 
-### Fase 9 — Arquitetura Multi-página + Especificação de Regras de Negócio
+### Fase 9 — Arquitetura Multi-página + Especificação de Regras de Negócio ✅
 
 O bug do ROI/ROAS (Fase 8) mostrou o risco de regra de negócio não documentada — a categoria PURCHASE só estava "na cabeça" de quem revisou o número, não em nenhum lugar do projeto. Diretriz do projeto: um único link fixo do Streamlit, com várias páginas internas (uma por relatório: Google Ads, futuramente Vendas/Financeiro/Estoque), e uma forma explícita de registrar/consultar regras de negócio e especificação de cada relatório antes de mexer no código.
 
@@ -260,8 +260,8 @@ Documentado também em `CLAUDE.md` (raiz do projeto) como convenção permanente
 - [x] 7. Criar `streamlit_app.py` com `st.navigation()` registrando a página de Google Ads
 - [x] 8. Testar localmente (AppTest com dados simulados, como nas correções da Fase 8) antes de considerar pronto
 - [x] 9. **Ajuste de rota:** o Streamlit Cloud não permite trocar o "Main file path" pela interface depois do deploy. Em vez de usar `streamlit_app.py` como arquivo separado, o conteúdo dele foi movido para dentro do `app.py` (que já é o entrypoint configurado) — `streamlit_app.py` foi removido. Nenhuma configuração do Streamlit Cloud precisou ser alterada. Testado com dados reais do BigQuery via `AppTest.from_file("app.py")` — OK
-- [ ] 10. Deploy e validação visual no Streamlit Cloud
-- [ ] 11. ~~Remover o `app.py` antigo~~ — não se aplica mais (ver passo 9); o `app.py` antigo (monolítico) foi substituído pelo novo entrypoint no mesmo passo
+- [x] 10. Deploy e validação visual no Streamlit Cloud — commit/push feito manualmente pelo usuário, relatório confirmado funcionando em produção em 2026-07-01
+- [x] 11. ~~Remover o `app.py` antigo~~ — não se aplica mais (ver passo 9); o `app.py` antigo (monolítico) foi substituído pelo novo entrypoint no mesmo passo
 
 ---
 
