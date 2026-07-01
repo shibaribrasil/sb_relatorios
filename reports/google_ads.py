@@ -11,7 +11,7 @@ from common import bigquery as bq
 from common.design import (
     PLUM, SCARLET, TAUPE, SKIN, OK, OK_BG, WARN, WARN_BG, BAD, GRID,
     inject_css, card, render_cards, section_title, bench_row, note,
-    roas_variant, style_color, plotly_layout,
+    roas_variant, style_color, plotly_layout, nome_curto,
 )
 
 DATASET = "dbt_dw_us_rpt"
@@ -82,6 +82,7 @@ def render():
             st.subheader("")
             col1, col2 = st.columns(2)
             df_camp = dados["performance_campanhas"].sort_values("vl_custo_total", ascending=False)
+            nomes_curtos = [nome_curto(n) for n in df_camp["nm_campanha"]]
 
             with col1:
                 with st.container(border=True):
@@ -89,21 +90,25 @@ def render():
                     bench_row([("Meta", "3–5×"), ("Mínimo", "2×"), ("Crítico", "< 2×")])
                     fig = go.Figure()
                     cores = [{"ok": OK_BG, "warn": WARN_BG, "bad": BAD}[roas_variant(v)] for v in df_camp["vl_roas"]]
-                    fig.add_bar(x=df_camp["nm_campanha"], y=df_camp["vl_roas"], marker_color=cores,
-                                text=[f"{v:.2f}×" for v in df_camp["vl_roas"]], textposition="outside")
-                    fig.add_hline(y=2, line_dash="dash", line_color=WARN_BG, annotation_text="mínimo 2×", annotation_font_size=10)
-                    plotly_layout(fig, showlegend=False, height=300, yaxis=dict(gridcolor=GRID, ticksuffix="×"))
+                    fig.add_bar(y=nomes_curtos, x=df_camp["vl_roas"], orientation="h", marker_color=cores,
+                                text=[f"{v:.2f}×" for v in df_camp["vl_roas"]], textposition="outside",
+                                customdata=df_camp["nm_campanha"],
+                                hovertemplate="<b>%{customdata}</b><br>ROAS: %{x:.2f}×<extra></extra>")
+                    fig.add_vline(x=2, line_dash="dash", line_color=WARN_BG, annotation_text="mínimo 2×", annotation_font_size=10)
+                    plotly_layout(fig, showlegend=False, height=300, xaxis=dict(gridcolor=GRID, ticksuffix="×"))
                     st.plotly_chart(fig, use_container_width=True)
-                    note("Barras abaixo da linha tracejada estão perdendo dinheiro considerando margem mínima de 2×.")
+                    note("Barras à esquerda da linha tracejada estão perdendo dinheiro considerando margem mínima de 2×.")
 
             with col2:
                 with st.container(border=True):
                     st.html('<div class="c-label" style="margin-bottom:10px">Investido vs. Receita por Campanha</div>')
                     bench_row([("Barras iguais", "= ROAS 1× (empate)")])
                     fig = go.Figure()
-                    fig.add_bar(name="Investido", x=df_camp["nm_campanha"], y=df_camp["vl_custo_total"], marker_color=PLUM)
-                    fig.add_bar(name="Receita", x=df_camp["nm_campanha"], y=df_camp["vl_conversoes_total"], marker_color=SCARLET)
-                    plotly_layout(fig, barmode="group", height=300, yaxis=dict(gridcolor=GRID, tickprefix="R$"))
+                    fig.add_bar(name="Investido", y=nomes_curtos, x=df_camp["vl_custo_total"], orientation="h", marker_color=PLUM,
+                                customdata=df_camp["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Investido: R$ %{x:,.2f}<extra></extra>")
+                    fig.add_bar(name="Receita", y=nomes_curtos, x=df_camp["vl_conversoes_total"], orientation="h", marker_color=SCARLET,
+                                customdata=df_camp["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Receita: R$ %{x:,.2f}<extra></extra>")
+                    plotly_layout(fig, barmode="group", height=300, xaxis=dict(gridcolor=GRID, tickprefix="R$"))
                     st.plotly_chart(fig, use_container_width=True)
                     note("Quando a barra de receita (vermelha) é menor que a de investido (roxa), a campanha está no prejuízo no período.")
 

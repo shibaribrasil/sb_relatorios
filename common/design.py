@@ -4,6 +4,8 @@ Extraído de app.py (relatório Google Ads) na Fase 9 da migração — ver
 MIGRACAO-RELATORIOS.md e CLAUDE.md. Qualquer novo relatório deve reusar isto
 em vez de duplicar CSS/cores/helpers.
 """
+import re
+
 import streamlit as st
 
 # ── Design System — mesmo tema do relatório HTML (sb_marketing_team/relatorios) ──
@@ -120,6 +122,26 @@ def note(html):
 
 def tag(text, variant):
     return f'<span class="tag t-{variant}">{text}</span>'
+
+
+def nome_curto(nome, max_len=30):
+    """Encurta nome de campanha para rótulo de gráfico (o nome completo
+    continua nas tabelas e no hover). Remove sufixo de data/mês entre
+    parênteses (ex.: "(Set-25)"), sufixo de data no fim (ex.: "- 22/10/2023")
+    e a palavra "Shibari" (redundante — o relatório inteiro já é da conta).
+    """
+    s = nome
+    s = re.sub(r"\s*\([^)]{2,10}\)\s*$", "", s)
+    s = re.sub(r"\s*[-–]\s*\d{1,2}/\d{1,2}/\d{2,4}\s*$", "", s)
+    s = re.sub(r"\bshibari\b", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s*[-–]\s*[-–]\s*", " – ", s)
+    s = re.sub(r"^\s*[-–]\s*|\s*[-–]\s*$", "", s)
+    s = re.sub(r"\s{2,}", " ", s).strip()
+    if not s:
+        return nome
+    if len(s) > max_len:
+        s = s[:max_len - 1].rstrip() + "…"
+    return s
 
 
 def roas_variant(v):
