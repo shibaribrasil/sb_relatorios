@@ -155,7 +155,7 @@ Tabelas pequenas e específicas. Aplicam a janela de 30 dias e selecionam exatam
 - [x] Criar `rpt_gads_impression_share.sql`
 - [x] Criar `rpt_gads_anuncios.sql`
 - [x] Rodar `dbt run --select tag:rpt --target us` — **8/8 passou**
-- [ ] Inspecionar tabelas no BQ e validar dados das tabelas `rpt`
+- [x] Inspecionar tabelas no BQ e validar dados das tabelas `rpt` (feito a fundo durante a investigação do bug de ROI/Purchase, Fase 8)
 
 ### Fase 4 — GitHub Actions (substituição ao .bat) ✅
 
@@ -166,7 +166,7 @@ Tabelas pequenas e específicas. Aplicam a janela de 30 dias e selecionam exatam
   - Rodar modelos Bling/Drive com `--target dev`
   - Rodar modelos Google Ads com `--target us`
 - [x] Testar dispatch manual do workflow no GitHub
-- [ ] Confirmar tabelas `rpt` atualizadas no BQ após o run
+- [x] Confirmar tabelas `rpt` atualizadas no BQ após o run
 
 ### Fase 5 — Streamlit (relatório com URL fixa) ✅
 
@@ -210,7 +210,7 @@ Referência de design: `sb_marketing_team/relatorios/diagnostico-google-ads/rela
 - [x] Adicionar nota explicativa com benchmark abaixo de cada gráfico/tabela
 - [x] Exibir Receita e ROI (já existiam em `rpt_gads_resumo_conta`, só não eram mostrados)
 - [x] Colorir ROAS/Utilização/Quality Score por faixa (regra fixa, sem IA)
-- [ ] Validar visualmente no Streamlit Cloud após o deploy desta versão
+- [x] Validar visualmente no Streamlit Cloud após o deploy desta versão
 - [ ] Seção "Landing Page por intenção de busca" — decidir se vale curar manualmente ou esperar a fase de insights
 - [ ] Seção "Diagnóstico Executivo" / "Oportunidades" — depende da Fase 7 (Claude API)
 
@@ -224,6 +224,7 @@ Referência de design: `sb_marketing_team/relatorios/diagnostico-google-ads/rela
 ### Fase 8 — Validação e Ajustes
 
 - [x] Corrigido: Receita/ROI/ROAS/CPA somavam TODAS as conversões (Purchase + Page View + Add to Cart + Begin Checkout), inflando o retorno em ~16x. `tb_gads_conta_diario` e `tb_gads_campanha_performance` agora filtram só `ds_categoria_conversao = 'PURCHASE'` (fonte: `stg_gads_campanha_conversoes`)
+- [x] Corrigido (2026-07-01, achado ao testar `detectar_sinais()` da Fase 7): `cd_keyword` (`ad_group_criterion_criterion_id`) não é globalmente único — o Google Ads reaproveita o mesmo criterion_id em grupos de anúncio diferentes (15 keywords afetadas na conta). O join por `cd_keyword` sozinho em `tb_gads_keyword_performance` e `rpt_gads_keywords_top` (projeto `sb_dw_dbt`) causava fan-out: custo/cliques/impressões chegaram a inflar **6x** para a keyword "shibari", além de misturar Quality Score de keywords de outros grupos na mesma linha. Corrigido escopando o join também por `cd_grupo_anuncio` (commit `1c7d1fe` em `sb_dw_dbt`). Afeta só a Seção 6 (Top Keywords) — Seções 1/3 (métricas por campanha) usam uma linhagem de dados separada e não têm esse bug.
 - [ ] Comparar dados do Streamlit com relatório atual gerado pelo Claude
 - [ ] Validar que a janela de 30 dias está correta em todas as tabelas `rpt`
 - [ ] Ajustar prompts de insight se necessário
@@ -262,6 +263,43 @@ Documentado também em `CLAUDE.md` (raiz do projeto) como convenção permanente
 - [x] 9. **Ajuste de rota:** o Streamlit Cloud não permite trocar o "Main file path" pela interface depois do deploy. Em vez de usar `streamlit_app.py` como arquivo separado, o conteúdo dele foi movido para dentro do `app.py` (que já é o entrypoint configurado) — `streamlit_app.py` foi removido. Nenhuma configuração do Streamlit Cloud precisou ser alterada. Testado com dados reais do BigQuery via `AppTest.from_file("app.py")` — OK
 - [x] 10. Deploy e validação visual no Streamlit Cloud — commit/push feito manualmente pelo usuário, relatório confirmado funcionando em produção em 2026-07-01
 - [x] 11. ~~Remover o `app.py` antigo~~ — não se aplica mais (ver passo 9); o `app.py` antigo (monolítico) foi substituído pelo novo entrypoint no mesmo passo
+
+### Fase 10 — Refinamento Visual e Reorganização do Relatório ✅
+
+Depois da arquitetura multi-página (Fase 9), o relatório de Google Ads passou por uma rodada de ajustes finos de UX, comparando lado a lado com o HTML de referência do time de marketing e com o feedback direto do usuário olhando o relatório no ar.
+
+**Rótulos e gráficos:**
+- [x] Criado `nome_curto()` em `common/design.py` — abrevia nome de campanha pra rótulo de gráfico (remove sufixo de data e a palavra "Shibari", redundante); nome completo continua no hover
+- [x] Gráficos "ROAS por Campanha", "Investido vs. Receita" e "Orçamento" viraram barra horizontal (nomes longos quebravam em várias linhas na barra vertical)
+- [x] Corrigida ordem de desenho do Plotly em barra horizontal agrupada (primeiro trace adicionado desenha embaixo, não em cima — inverteu a ordem de leitura em alguns gráficos até isso ser corrigido)
+- [x] Removida a linha tracejada de "mínimo 2×" do gráfico de ROAS (mantido só o código de cor)
+
+**Ordenação (maior pro menor, por métrica relevante de cada gráfico/tabela):**
+- [x] Orçamento (gráfico + tabela) → por Budget diário
+- [x] ROAS por Campanha → por ROAS
+- [x] Investido vs. Receita → por Receita
+- [x] Performance por Campanha (tabela) → por Receita
+- [x] Keywords → por Quality Score
+
+**Conteúdo dos cards (Seção 1):** trocada fórmula por fato concreto no subtítulo de cada card (Custo Total → nº de campanhas e dias; Receita → nº de compras confirmadas; ROI → retorno líquido em R$; ROAS → nº de campanhas com compra; CPA → variação mín–máx) — a fórmula/meta ficou só no `ref`, sem duplicar.
+
+**Conversões por Tipo:** nova classificação `tipo_conversao()` (Primária/Secundária/Micro), específica deste relatório, substituindo a categoria técnica crua do Google Ads na tabela.
+
+**Keywords:** linhas com Quality Score 10 ganham "★" no nome e fundo verde claro na linha inteira.
+
+**Reorganização de seções** (de 7 para 6 — dado de custo/gasto aparecia repetido em várias seções sem uma ser "a fonte"):
+
+| Antes | Depois |
+|---|---|
+| 1. Saúde Financeira (cards + 2 gráficos por campanha) | 1. Visão Geral da Conta (só cards, conta inteira) |
+| 2. Performance por Campanha (tabela) | 2. Orçamento (subiu — pergunta "gastei dentro do planejado?") |
+| 3. Tendência + Conversões (dividindo espaço) | 3. Performance por Campanha (tabela **+ os 2 gráficos**, que saíram da seção 1) |
+| 4. Orçamento | 4. Tendência Diária (sozinha) |
+| 5. Keywords | 5. Conversões por Tipo (sozinha) |
+| 6. Impression Share | 6. Diagnóstico de Leilão e Criativos (Keywords + Impression Share + Anúncios, sob um título comum) |
+| 7. Anúncios Ativos | |
+
+- [x] `specs/google-ads.md` atualizado com a nova numeração e uma seção explicando a reorganização
 
 ---
 

@@ -85,8 +85,38 @@ CSS = f"""
   .t-warn  {{ background: rgba(201,150,58,0.18);  color: #7a5208; }}
   .t-bad   {{ background: rgba(209,15,47,0.12);   color: {BAD}; }}
   .t-muted {{ background: rgba(140,111,104,0.14); color: #5e3e3a; }}
+
+  .insights {{ display: flex; flex-direction: column; gap: 12px; margin-bottom: 6px; }}
+  .insight {{
+    background: #fff; border: 1px solid {BORDER}; border-left: 3px solid {TAUPE};
+    border-radius: 0 8px 8px 0; padding: 16px 20px; box-shadow: 0 1px 3px rgba(91,30,75,0.06);
+    display: flex; gap: 12px;
+  }}
+  .insight.i-bad  {{ border-left-color: {BAD}; }}
+  .insight.i-warn {{ border-left-color: {WARN_BG}; }}
+  .insight.i-ok   {{ border-left-color: {OK_BG}; }}
+  .insight-icon {{
+    width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 13px;
+  }}
+  .insight.i-bad  .insight-icon {{ background: rgba(209,15,47,0.10); }}
+  .insight.i-warn .insight-icon {{ background: rgba(201,150,58,0.14); }}
+  .insight.i-ok   .insight-icon {{ background: rgba(76,175,130,0.14); }}
+  .insight-content {{ flex: 1; min-width: 0; }}
+  .insight-label {{ font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: {TAUPE}; margin-bottom: 4px; }}
+  .insight-title {{ font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 600; color: #141419; margin-bottom: 6px; }}
+  .insight-body {{ font-size: 12px; color: {TAUPE}; line-height: 1.6; margin-bottom: 10px; }}
+  .insight-action {{ background: rgba(91,30,75,0.04); border: 1px solid {BORDER}; border-radius: 6px; padding: 10px 14px; }}
+  .insight-action-lbl {{ font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: {TAUPE}; margin-bottom: 6px; }}
+  .insight-action ul {{ margin: 0; padding-left: 0; list-style: none; }}
+  .insight-action li {{ font-size: 11px; color: #141419; margin-bottom: 4px; padding-left: 14px; position: relative; }}
+  .insight-action li:last-child {{ margin-bottom: 0; }}
+  .insight-action li::before {{ content: '→'; color: {SCARLET}; position: absolute; left: 0; font-weight: 700; }}
 </style>
 """
+
+_INSIGHT_ICONE = {"bad": "🔴", "warn": "🟡", "ok": "🟢"}
+_INSIGHT_ROTULO = {"bad": "Urgente", "warn": "Atenção", "ok": "Positivo"}
 
 
 def inject_css():
@@ -105,6 +135,28 @@ def card(label, value, sub="", ref="", variant="neutral"):
 
 def render_cards(cards_html):
     st.html(f'<div class="cards">{"".join(cards_html)}</div>')
+
+
+def insight_card(severidade, categoria_label, titulo, corpo, acoes):
+    """Card do Diagnóstico Executivo. `severidade` (bad/warn/ok) e os dados
+    vêm de detectar_sinais() — este helper só formata, não decide nada."""
+    itens = "".join(f"<li>{a}</li>" for a in acoes)
+    return f"""<div class="insight i-{severidade}">
+        <div class="insight-icon">{_INSIGHT_ICONE[severidade]}</div>
+        <div class="insight-content">
+            <div class="insight-label">{_INSIGHT_ROTULO[severidade]} · {categoria_label}</div>
+            <div class="insight-title">{titulo}</div>
+            <div class="insight-body">{corpo}</div>
+            <div class="insight-action">
+                <div class="insight-action-lbl">Ação recomendada</div>
+                <ul>{itens}</ul>
+            </div>
+        </div>
+    </div>"""
+
+
+def render_insights(insights_html):
+    st.html(f'<div class="insights">{"".join(insights_html)}</div>')
 
 
 def section_title(text):

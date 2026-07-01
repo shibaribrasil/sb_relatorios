@@ -8,10 +8,12 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from common import bigquery as bq
+from common import claude
 from common.design import (
     PLUM, SCARLET, TAUPE, SKIN, OK, OK_BG, WARN, WARN_BG, BAD, GRID,
     inject_css, card, render_cards, section_title, bench_row, note,
-    roas_variant, style_color, plotly_layout, nome_curto,
+    roas_variant, util_variant, qs_variant, style_color, plotly_layout, nome_curto,
+    insight_card, render_insights,
 )
 
 # Classificação de conversão por relevância de negócio — específica do Google
@@ -45,6 +47,204 @@ TABELAS = {
 def carregar_dados():
     client = bq.get_client()
     return bq.query_tables(client, DATASET, TABELAS)
+
+
+# Limite de sinais por categoria no Diagnóstico Executivo — evita que uma
+# conta com muitas campanhas/keywords no mesmo problema gere uma lista
+# enorme; prioriza sempre os de maior impacto financeiro dentro da categoria.
+LIMITE_SINAIS_POR_CATEGORIA = 3
+
+# Perda de Impression Share considerada relevante o suficiente para virar
+# alerta. Não vem de specs/google-ads.md (o spec só documenta a distinção
+# budget vs. ranking, sem limiar numérico) — limiar novo, introduzido aqui e
+# documentado no spec junto com esta função.
+LIMIAR_PERDA_IMPRESSION_SHARE = 0.15
+
+
+def detectar_sinais(dados):
+    """Decide quais alertas entram no Diagnóstico Executivo — regra fixa em
+    Python, sem IA (ver specs/google-ads.md, seção "Diagnóstico Executivo:
+    detecção de sinais"). A Claude API só escreve o texto a partir da lista
+    que esta função devolve; não decide severidade nem quais campanhas
+    aparecem.
+
+    Retorna uma lista de dicts: {categoria, severidade, campanha, numeros}.
+    """
+    sinais = []
+
+    df_camp = dados["performance_campanhas"]
+    df_camp_ativa = df_camp[df_camp["vl_custo_total"] > 0]
+
+    # ROAS — campanhas no prejuízo (todas; normalmente são poucas) e o
+    # melhor performer do período (só 1, como destaque positivo).
+    for _, row in df_camp_ativa[df_camp_ativa["vl_roas"].apply(roas_variant) == "bad"].iterrows():
+        sinais.append({
+            "categoria": "roas", "severidade": "bad", "campanha": row["nm_campanha"],
+            "numeros": {
+                "custo": float(row["vl_custo_total"]), "receita": float(row["vl_conversoes_total"]),
+                "roas": float(row["vl_roas"]), "cpa": float(row["vl_cpa"]) if pd.notna(row["vl_cpa"]) else None,
+            },
+        })
+    melhor = df_camp_ativa.sort_values("vl_roas", ascending=False).head(1)
+    if len(melhor) and roas_variant(melhor.iloc[0]["vl_roas"]) == "ok":
+        row = melhor.iloc[0]
+        sinais.append({
+            "categoria": "roas", "severidade": "ok", "campanha": row["nm_campanha"],
+            "numeros": {
+                "custo": float(row["vl_custo_total"]), "receita": float(row["vl_conversoes_total"]),
+                "roas": float(row["vl_roas"]),
+            },
+        })
+
+    # Orçamento — limitada (≥100%, perdendo oportunidade) e subutilizada
+    # (<70%, capada nas de maior budget diário, mais relevante realocar).
+    df_orc = dados["orcamento"]
+    for _, row in df_orc[df_orc["pct_utilizacao_media"] >= 1.0].iterrows():
+        sinais.append({
+            "categoria": "orcamento", "severidade": "bad", "campanha": row["nm_campanha"],
+            "numeros": {
+                "orcamento_diario": float(row["vl_orcamento_diario"]),
+                "gasto_medio_diario": float(row["vl_gasto_medio_diario"]),
+                "utilizacao": float(row["pct_utilizacao_media"]),
+            },
+        })
+    subutilizadas = df_orc[df_orc["pct_utilizacao_media"] < 0.7] \
+        .sort_values("vl_orcamento_diario", ascending=False).head(LIMITE_SINAIS_POR_CATEGORIA)
+    for _, row in subutilizadas.iterrows():
+        sinais.append({
+            "categoria": "orcamento", "severidade": "warn", "campanha": row["nm_campanha"],
+            "numeros": {
+                "orcamento_diario": float(row["vl_orcamento_diario"]),
+                "gasto_medio_diario": float(row["vl_gasto_medio_diario"]),
+                "utilizacao": float(row["pct_utilizacao_media"]),
+            },
+        })
+
+    # Quality Score crítico (<5, meta é ≥7 — ver spec) — capado nas keywords
+    # de maior custo entre as críticas, prioridade de ação por impacto.
+    df_kw = dados["keywords_top"]
+    criticas = df_kw[df_kw["nr_quality_score"] < 5] \
+        .sort_values("vl_custo_total", ascending=False).head(LIMITE_SINAIS_POR_CATEGORIA)
+    for _, row in criticas.iterrows():
+        sinais.append({
+            "categoria": "quality_score", "severidade": "bad", "campanha": row["nm_campanha"],
+            "numeros": {
+                "keyword": row["ds_keyword"], "quality_score": int(row["nr_quality_score"]),
+                "custo": float(row["vl_custo_total"]), "cpc": float(row["vl_cpc"]),
+            },
+        })
+
+    # Impression Share — perda por budget e perda por ranking são
+    # diagnósticos opostos (ver spec); capados nas campanhas com maior perda
+    # de cada tipo, acima do limiar definido nesta função.
+    df_is = dados["impression_share"]
+    top_budget = df_is[df_is["pct_perda_budget"] >= LIMIAR_PERDA_IMPRESSION_SHARE] \
+        .sort_values("pct_perda_budget", ascending=False).head(LIMITE_SINAIS_POR_CATEGORIA)
+    for _, row in top_budget.iterrows():
+        sinais.append({
+            "categoria": "impression_share_budget", "severidade": "warn", "campanha": row["nm_campanha"],
+            "numeros": {
+                "impression_share": float(row["pct_impression_share"]),
+                "perda_budget": float(row["pct_perda_budget"]),
+            },
+        })
+    top_ranking = df_is[df_is["pct_perda_ranking"] >= LIMIAR_PERDA_IMPRESSION_SHARE] \
+        .sort_values("pct_perda_ranking", ascending=False).head(LIMITE_SINAIS_POR_CATEGORIA)
+    for _, row in top_ranking.iterrows():
+        sinais.append({
+            "categoria": "impression_share_ranking", "severidade": "warn", "campanha": row["nm_campanha"],
+            "numeros": {
+                "impression_share": float(row["pct_impression_share"]),
+                "perda_ranking": float(row["pct_perda_ranking"]),
+            },
+        })
+
+    return sinais
+
+
+LABEL_CATEGORIA_SINAL = {
+    "roas": "ROAS",
+    "orcamento": "Orçamento (budget vs. gasto)",
+    "quality_score": "Quality Score de keyword",
+    "impression_share_budget": "Impression Share perdido por orçamento",
+    "impression_share_ranking": "Impression Share perdido por ranking (Quality Score/lance)",
+}
+
+DIAGNOSTICO_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "insights": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "indice": {"type": "integer", "description": "mesmo índice do sinal na lista recebida"},
+                    "titulo": {"type": "string"},
+                    "corpo": {"type": "string"},
+                    "acoes": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4},
+                },
+                "required": ["indice", "titulo", "corpo", "acoes"],
+            },
+        },
+    },
+    "required": ["insights"],
+}
+
+DIAGNOSTICO_SYSTEM_PROMPT = (
+    "Você é analista de performance de Google Ads da Shibari Brasil. Você recebe uma "
+    "lista de sinais JÁ DETECTADOS E CLASSIFICADOS por um sistema de regras — não "
+    "reavalie, não mude e não invente severidade, categoria ou números diferentes dos "
+    "fornecidos. Sua única tarefa é, para cada sinal, escrever: um título curto (até 15 "
+    "palavras), um corpo de até 60 palavras explicando o contexto e citando os números "
+    "exatos do sinal (nunca invente número que não esteja nos dados fornecidos), e de 3 a "
+    "4 ações recomendadas, concretas e específicas ao Google Ads (ex.: pausar campanha, "
+    "realocar orçamento, revisar keyword) — não genéricas. Responda em português do "
+    "Brasil, tom direto e profissional."
+)
+
+
+def _serializar_sinais(sinais):
+    linhas = []
+    for i, s in enumerate(sinais):
+        categoria = LABEL_CATEGORIA_SINAL.get(s["categoria"], s["categoria"])
+        linhas.append(f'{i}. severidade={s["severidade"]} | categoria={categoria} | '
+                       f'campanha="{s["campanha"]}" | numeros={s["numeros"]}')
+    return "\n".join(linhas)
+
+
+@st.cache_data(ttl=3600)
+def gerar_diagnostico(sinais):
+    """Transforma os sinais de detectar_sinais() em texto (título, corpo, ações)
+    via Claude API. A severidade e quais sinais existem já vêm decididos —
+    aqui a IA só redige, nunca reavalia (ver specs/google-ads.md).
+    """
+    if not sinais:
+        return []
+
+    client = claude.get_client()
+    user = "Sinais detectados nos últimos 30 dias:\n" + _serializar_sinais(sinais)
+    # ~300 tokens por sinal (título + corpo + ações + overhead do JSON) —
+    # sem isso, com muitos sinais a resposta trunca em max_tokens e o
+    # tool_use volta com input vazio (visto na prática com 15 sinais e o
+    # default de 1500).
+    max_tokens = min(8192, max(1500, len(sinais) * 300))
+    resultado, usage = claude.gerar_texto_estruturado(
+        client, DIAGNOSTICO_SYSTEM_PROMPT, user, DIAGNOSTICO_SCHEMA, max_tokens=max_tokens,
+    )
+
+    textos_por_indice = {item["indice"]: item for item in resultado.get("insights", [])}
+    diagnosticos = []
+    for i, sinal in enumerate(sinais):
+        texto = textos_por_indice.get(i)
+        if texto is None:
+            continue
+        diagnosticos.append({
+            **sinal,
+            "titulo": texto["titulo"],
+            "corpo": texto["corpo"],
+            "acoes": texto["acoes"],
+        })
+    return diagnosticos
 
 
 def render():
@@ -88,6 +288,30 @@ def render():
               </div>
             </div>
             """)
+
+            # ═══ DIAGNÓSTICO EXECUTIVO ═══
+            # Try/except isolado do try/except geral desta função: se a
+            # Claude API falhar, o resto do relatório (100% dado, sem
+            # dependência de IA) continua funcionando normalmente.
+            try:
+                sinais = detectar_sinais(dados)
+                diagnosticos = gerar_diagnostico(sinais)
+            except Exception:
+                diagnosticos = None
+            if diagnosticos is not None:
+                section_title("Diagnóstico Executivo")
+                if diagnosticos:
+                    render_insights([
+                        insight_card(
+                            d["severidade"], LABEL_CATEGORIA_SINAL.get(d["categoria"], d["categoria"]),
+                            d["titulo"], d["corpo"], d["acoes"],
+                        )
+                        for d in diagnosticos
+                    ])
+                else:
+                    note("Nenhum alerta relevante detectado nos últimos 30 dias pelas regras atuais (ROAS, orçamento, Quality Score, Impression Share).")
+            else:
+                note("Diagnóstico Executivo indisponível no momento — o restante do relatório não é afetado.")
 
             # ═══ 1 — VISÃO GERAL DA CONTA ═══
             section_title("1 — Visão Geral da Conta")

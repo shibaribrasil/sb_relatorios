@@ -93,8 +93,26 @@ Três blocos na mesma seção — juntos porque todos respondem "por que a perfo
 - **Impression Share por Campanha** (`rpt_gads_impression_share`): barras empilhadas — IS conquistado, perda por budget, perda por ranking. Regra de leitura: **perda por budget** se resolve aumentando orçamento; **perda por ranking** se resolve melhorando Quality Score ou lance — são diagnósticos opostos, não confundir um pelo outro.
 - **Anúncios Ativos** (`rpt_gads_anuncios`): lista de criativos ativos com Ad Strength e status de aprovação — sem cálculo, só apresentação. Ad Strength "Ruim"/"Regular" costuma perder posição no leilão; mais variações de título/descrição geralmente elevam para "Boa"/"Excelente".
 
+## Diagnóstico Executivo: detecção de sinais (Fase 7, em implementação)
+
+A seção "Diagnóstico Executivo" (cards de alerta, um por problema/destaque encontrado) é composta em duas etapas com responsabilidades separadas — de propósito, para não repetir o padrão que causou o bug do ROI/Purchase (regra de negócio que só existia na cabeça de quem revisava o número, nunca escrita em código):
+
+1. **`detectar_sinais(dados)` em `reports/google_ads.py` — regra fixa em Python, sem IA.** Decide quais campanhas/keywords entram e qual a severidade (`bad`/`warn`/`ok`), aplicando os limiares já documentados nas seções acima deste spec. A Claude API **não** participa dessa decisão.
+2. **Claude API — só escreve o texto.** Recebe a lista de sinais já filtrada (não as tabelas `rpt` inteiras) e devolve título/corpo/ação recomendada citando os números que o Python já calculou.
+
+Limiares usados por `detectar_sinais()` (capados em `LIMITE_SINAIS_POR_CATEGORIA = 3` por categoria, priorizando sempre o maior impacto financeiro dentro da categoria — evita lista enorme em contas com muitas campanhas no mesmo problema):
+
+| Categoria | Fonte | Regra | Já documentado em |
+|---|---|---|---|
+| `roas` | `performance_campanhas` | `bad` se ROAS < 2× (todas); `ok` só a campanha de maior ROAS, se ≥ 3× (1 destaque) | Seção 1/3 acima (`roas_variant`) |
+| `orcamento` | `orcamento` | `bad` se utilização ≥ 100% (todas); `warn` utilização < 70%, capado nas 3 de maior budget diário | Seção 2 acima (`util_variant`) |
+| `quality_score` | `keywords_top` | `bad` se QS < 5, capado nas 3 keywords de maior custo entre as críticas | Seção 6 acima (benchmark "crítico < 5") |
+| `impression_share_budget` / `impression_share_ranking` | `impression_share` | `warn` se perda por budget ou por ranking ≥ 15%, capado em 3 por tipo | **Limiar novo, introduzido em `detectar_sinais()`** — o spec só documentava a distinção budget-vs-ranking (Seção 6), sem número; 15% foi definido ao implementar a Fase 7, não vem de benchmark de mercado documentado antes |
+
+**Nota de qualidade de dado (2026-07-01):** a categoria `quality_score` foi a que expôs o bug de fan-out de join em `rpt_gads_keywords_top` (`cd_keyword` reaproveitado entre grupos de anúncio — ver Fase 8 do `MIGRACAO-RELATORIOS.md`). Corrigido na fonte (`sb_dw_dbt`); `detectar_sinais()` não precisou de mitigação própria porque o dado agora chega correto.
+
 ## Fora de escopo (documentado, não implementado)
 
-- **Diagnóstico Executivo / Oportunidades** (insights gerados por IA) — depende da Fase 7 (Claude API) do `MIGRACAO-RELATORIOS.md`.
+- **Oportunidades** (recomendações de features do Google Ads, tipo "ativar AI Max") — depende mais de conhecimento de produto do que de limiar sobre os dados; fica para depois do Diagnóstico Executivo estar validado em produção.
 - **Landing Page por intenção de busca** — exigiria classificar keyword por intenção (curadoria manual ou IA); não é extraível direto das tabelas `rpt` atuais.
 - **Orçamento recomendado + projeção 30 dias** — era cálculo manual/IA no relatório de referência (HTML do time de marketing), não uma regra fixa.
