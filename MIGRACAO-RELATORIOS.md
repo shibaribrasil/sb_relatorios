@@ -216,10 +216,14 @@ Referência de design: `sb_marketing_team/relatorios/diagnostico-google-ads/rela
 
 ### Fase 7 — Insights via Claude API
 
-- [ ] Implementar chamada à Claude API com o snapshot das tabelas `rpt`
-- [ ] Exibir insights gerados pela IA (seção "Diagnóstico Executivo" / "Oportunidades", no estilo do HTML de referência)
-- [ ] Configurar secret da Anthropic API key no Streamlit Cloud
-- [ ] Medir custo de tokens da chamada no novo fluxo
+Abordagem (decidida em 2026-07-01): regra de negócio 100% em Python decide quais alertas aparecem e a severidade (`detectar_sinais()`, ver `specs/google-ads.md`); a Claude API só escreve título/corpo/ações a partir dos sinais já filtrados — nunca decide o que é problema. Evita repetir o padrão do bug do ROI (regra só na cabeça de quem escreveu o prompt). Modelo: Haiku 4.5.
+
+- [x] Implementar chamada à Claude API com sinais detectados (não o snapshot bruto das tabelas `rpt`) — `common/claude.py` (`get_client()`, `gerar_texto_estruturado()` com tool-use forçado) + `reports/google_ads.py` (`detectar_sinais()`, `gerar_diagnostico()`)
+- [x] Exibir insights gerados pela IA — seção "Diagnóstico Executivo" (cards de alerta, estilo do HTML de referência), inserida logo após o header, antes da Seção 1. "Oportunidades" (sugestões de feature do Google Ads) fica para uma tarefa futura — depende mais de conhecimento de produto do que de limiar sobre os dados
+- [ ] Configurar secret da Anthropic API key no Streamlit Cloud — pendente, ação do usuário no painel (local já configurado em `.streamlit/secrets.toml`)
+- [x] Medir custo de tokens da chamada no novo fluxo — testado com os 15 sinais reais da conta: **2.226 tokens de entrada / 3.206 de saída** por geração. Com preço do Haiku 4.5 ($1,00 / $5,00 por milhão de tokens de entrada/saída): **≈ US$ 0,0183 por geração**. Cacheado a `ttl=3600` (mesma janela de `carregar_dados()`), então na prática é 1 chamada por hora de tráfego, não por view do relatório.
+
+**Bug de dados encontrado durante o teste** (não fazia parte do escopo original, mas bloqueava `detectar_sinais()` com dado confiável): `cd_keyword` do Google Ads não é globalmente único — o mesmo `criterion_id` se repete em grupos de anúncio diferentes. Um join por `cd_keyword` sozinho em `tb_gads_keyword_performance` e `rpt_gads_keywords_top` (projeto `sb_dw_dbt`) causava fan-out, inflando custo/cliques/impressões de 15 keywords (até 6× em um caso). Corrigido escopando o join também por `cd_grupo_anuncio` (commit `1c7d1fe` em `sb_dw_dbt`, já enviado para não ser revertido pelo cron do GitHub Actions).
 
 ### Fase 8 — Validação e Ajustes
 
