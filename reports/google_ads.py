@@ -14,6 +14,19 @@ from common.design import (
     roas_variant, style_color, plotly_layout, nome_curto,
 )
 
+# Classificação de conversão por relevância de negócio — específica do Google
+# Ads (segments_conversion_action_category), por isso mora aqui e não em
+# common/design.py. Ver specs/google-ads.md.
+TIPO_CONVERSAO = {
+    "PURCHASE": ("Primária", "ok"),
+    "ADD_TO_CART": ("Secundária", "warn"),
+    "BEGIN_CHECKOUT": ("Secundária", "warn"),
+}
+
+
+def tipo_conversao(categoria):
+    return TIPO_CONVERSAO.get(categoria, ("Micro", "muted"))
+
 DATASET = "dbt_dw_us_rpt"
 
 TABELAS = {
@@ -47,6 +60,14 @@ def render():
             custo = r["vl_custo_total"]
             roi = (receita - custo) / custo if custo else 0
 
+            df_camp = dados["performance_campanhas"].sort_values("vl_custo_total", ascending=False)
+            nomes_curtos = [nome_curto(n) for n in df_camp["nm_campanha"]]
+            n_campanhas = df_camp["nm_campanha"].nunique()
+            n_dias = (pd.to_datetime(r["dt_fim_periodo"]) - pd.to_datetime(r["dt_inicio_periodo"])).days + 1
+            retorno_liquido = receita - custo
+            n_campanhas_com_compra = int((df_camp["qt_conversoes_total"] > 0).sum())
+            cpa_validos = df_camp["vl_cpa"].dropna()
+
             st.html(f"""
             <div class="report-header">
               <div>
@@ -64,11 +85,15 @@ def render():
             # ═══ 1 — SAÚDE FINANCEIRA ═══
             section_title("1 — Saúde Financeira")
             render_cards([
-                card("Custo Total", f"R$ {custo:,.2f}", "últimos 30 dias", variant="neutral"),
-                card("Receita Gerada", f"R$ {receita:,.2f}", "valor de conversão total", variant="neutral"),
-                card("ROI", f"{roi*100:.0f}%", "(receita − gasto) ÷ gasto", "meta: > 100%", variant="ok" if roi >= 1 else ("warn" if roi >= 0 else "bad")),
-                card("ROAS Médio", f"{r['vl_roas']:.2f}×", "receita ÷ custo", "meta: 3–5× · mínimo: 2×", variant=roas_variant(r["vl_roas"])),
-                card("CPA Médio", f"R$ {r['vl_cpa']:,.2f}", f"{r['qt_conversoes_total']:,.1f} conversões", variant="neutral"),
+                card("Custo Total", f"R$ {custo:,.2f}", f"{n_campanhas} campanhas · {n_dias} dias", variant="neutral"),
+                card("Receita Gerada", f"R$ {receita:,.2f}", f"{r['qt_conversoes_total']:,.0f} compras confirmadas", variant="neutral"),
+                card("ROI", f"{roi*100:.0f}%", f"R$ {retorno_liquido:,.2f} de retorno líquido",
+                     "meta: > 100% · (receita − gasto) ÷ gasto", variant="ok" if roi >= 1 else ("warn" if roi >= 0 else "bad")),
+                card("ROAS Médio", f"{r['vl_roas']:.2f}×", f"{n_campanhas_com_compra} de {n_campanhas} campanhas com compra",
+                     "meta: 3–5× · mínimo: 2×", variant=roas_variant(r["vl_roas"])),
+                card("CPA Médio", f"R$ {r['vl_cpa']:,.2f}",
+                     f"variação: R$ {cpa_validos.min():,.2f} → R$ {cpa_validos.max():,.2f}" if len(cpa_validos) else "sem compras no período",
+                     "definir meta de CPA por produto", variant="neutral"),
             ])
             render_cards([
                 card("Impressões", f"{int(r['qt_impressoes_total']):,}", variant="neutral"),
@@ -81,8 +106,6 @@ def render():
 
             st.subheader("")
             col1, col2 = st.columns(2)
-            df_camp = dados["performance_campanhas"].sort_values("vl_custo_total", ascending=False)
-            nomes_curtos = [nome_curto(n) for n in df_camp["nm_campanha"]]
 
             with col1:
                 with st.container(border=True):
@@ -104,11 +127,15 @@ def render():
                     st.html('<div class="c-label" style="margin-bottom:10px">Investido vs. Receita por Campanha</div>')
                     bench_row([("Barras iguais", "= ROAS 1× (empate)")])
                     fig = go.Figure()
-                    fig.add_bar(name="Investido", y=nomes_curtos, x=df_camp["vl_custo_total"], orientation="h", marker_color=PLUM,
-                                customdata=df_camp["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Investido: R$ %{x:,.2f}<extra></extra>")
+                    # Plotly desenha o primeiro trace embaixo e o segundo em cima
+                    # num grupo de barra horizontal — Receita entra primeiro para
+                    # que Investido apareça por cima (ordem de leitura: Investido, Receita).
                     fig.add_bar(name="Receita", y=nomes_curtos, x=df_camp["vl_conversoes_total"], orientation="h", marker_color=SCARLET,
                                 customdata=df_camp["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Receita: R$ %{x:,.2f}<extra></extra>")
-                    plotly_layout(fig, barmode="group", height=300, xaxis=dict(gridcolor=GRID, tickprefix="R$"))
+                    fig.add_bar(name="Investido", y=nomes_curtos, x=df_camp["vl_custo_total"], orientation="h", marker_color=PLUM,
+                                customdata=df_camp["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Investido: R$ %{x:,.2f}<extra></extra>")
+                    plotly_layout(fig, barmode="group", height=300, xaxis=dict(gridcolor=GRID, tickprefix="R$"),
+                                  legend=dict(orientation="h", y=1.12, font=dict(size=11), traceorder="reversed"))
                     st.plotly_chart(fig, use_container_width=True)
                     note("Quando a barra de receita (vermelha) é menor que a de investido (roxa), a campanha está no prejuízo no período.")
 
@@ -169,26 +196,38 @@ def render():
                                             textinfo="percent"))
                     plotly_layout(fig, height=220, showlegend=True, legend=dict(orientation="v", y=0.5, font=dict(size=10)))
                     st.plotly_chart(fig, use_container_width=True)
-                    st.dataframe(
-                        df_conv[["nm_acao_conversao", "ds_categoria_conversao", "qt_conversoes_total", "vl_conversoes_total"]]
-                        .assign(
-                            qt_conversoes_total=df_conv["qt_conversoes_total"].apply(lambda v: f"{v:.1f}"),
-                            vl_conversoes_total=df_conv["vl_conversoes_total"].apply(lambda v: f"R$ {v:,.2f}"),
-                        )
-                        .rename(columns={"nm_acao_conversao": "Ação", "ds_categoria_conversao": "Categoria",
-                                          "qt_conversoes_total": "Qtd", "vl_conversoes_total": "Valor"}),
-                        hide_index=True, use_container_width=True
+                    variante_cor = {"ok": OK, "warn": WARN, "muted": TAUPE}
+                    variante_por_tipo = {"Primária": "ok", "Secundária": "warn", "Micro": "muted"}
+                    tabela_conv = pd.DataFrame({
+                        "Ação": df_conv["nm_acao_conversao"],
+                        "Tipo": [tipo_conversao(c)[0] for c in df_conv["ds_categoria_conversao"]],
+                        "Qtd": df_conv["qt_conversoes_total"].apply(lambda v: f"{v:.1f}"),
+                        "Valor": df_conv["vl_conversoes_total"].apply(lambda v: f"R$ {v:,.2f}"),
+                    })
+                    styled_conv = style_color(
+                        tabela_conv.style,
+                        lambda t: f"color: {variante_cor[variante_por_tipo[t]]}; font-weight:700",
+                        subset=["Tipo"]
                     )
-                    note("Conversões de categoria diferente de \"compra\" (ex.: visualização de página) não são receita real — não devem entrar no cálculo de ROAS.")
+                    st.dataframe(styled_conv, hide_index=True, use_container_width=True)
+                    note("<strong>Primária</strong> = compra real. <strong>Secundária</strong> = etapa do funil (carrinho/checkout). "
+                         "<strong>Micro</strong> = ex. visualização de página — não é receita real e não entra no cálculo de ROAS.")
 
             # ═══ 4 — ORÇAMENTO ═══
             section_title("4 — Orçamento: Budget vs. Gasto Médio Diário")
             with st.container(border=True):
                 df_orc = dados["orcamento"].sort_values("vl_gasto_total", ascending=False)
+                nomes_orc = [nome_curto(n) for n in df_orc["nm_campanha"]]
                 fig = go.Figure()
-                fig.add_bar(name="Budget diário", x=df_orc["nm_campanha"], y=df_orc["vl_orcamento_diario"], marker_color=SKIN)
-                fig.add_bar(name="Gasto médio diário", x=df_orc["nm_campanha"], y=df_orc["vl_gasto_medio_diario"], marker_color=PLUM)
-                plotly_layout(fig, barmode="group", height=300, yaxis=dict(gridcolor=GRID, tickprefix="R$"))
+                # ordenado do maior pro menor de cima pra baixo: dado já vem
+                # decrescente, e o eixo precisa ser invertido (ver nota em
+                # ROAS/Investido sobre a ordem de desenho do Plotly).
+                fig.add_bar(name="Budget diário", y=nomes_orc, x=df_orc["vl_orcamento_diario"], orientation="h", marker_color=SKIN,
+                            customdata=df_orc["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Budget diário: R$ %{x:,.2f}<extra></extra>")
+                fig.add_bar(name="Gasto médio diário", y=nomes_orc, x=df_orc["vl_gasto_medio_diario"], orientation="h", marker_color=PLUM,
+                            customdata=df_orc["nm_campanha"], hovertemplate="<b>%{customdata}</b><br>Gasto médio: R$ %{x:,.2f}<extra></extra>")
+                plotly_layout(fig, barmode="group", height=300, xaxis=dict(gridcolor=GRID, tickprefix="R$"),
+                              yaxis=dict(gridcolor=GRID, autorange="reversed"))
                 st.plotly_chart(fig, use_container_width=True)
 
                 tabela_orc = pd.DataFrame({
@@ -214,7 +253,7 @@ def render():
                 bench_row([("QS meta", "≥ 7"), ("Aceitável", "5–6"), ("Crítico", "< 5"), ("Perfeito", "QS 10")])
                 df_kw = dados["keywords_top"].sort_values("vl_custo_total", ascending=False)
                 tabela_kw = pd.DataFrame({
-                    "Keyword": df_kw["ds_keyword"],
+                    "Keyword": [f"{k} ★" if qs == 10 else k for k, qs in zip(df_kw["ds_keyword"], df_kw["nr_quality_score"])],
                     "Correspondência": df_kw["ds_correspondencia"],
                     "Campanha": df_kw["nm_campanha"],
                     "Grupo": df_kw["nm_grupo_anuncio"],
@@ -233,9 +272,12 @@ def render():
                     tabela_kw.style,
                     lambda v: f"color: {OK}; font-weight:700" if v >= 9 else (f"color: {WARN}; font-weight:700" if v >= 7 else f"color: {BAD}; font-weight:700"),
                     subset=["QS"]
+                ).apply(
+                    lambda row: ["background-color: rgba(76,175,130,0.08)"] * len(row) if row["QS"] == 10 else [""] * len(row),
+                    axis=1
                 )
                 st.dataframe(styled_kw, hide_index=True, use_container_width=True)
-                note("QS abaixo de 5 normalmente eleva o CPC e reduz a posição no leilão — priorize melhorar anúncio/landing page dessas keywords antes de aumentar lance.")
+                note("★ = Quality Score perfeito (10). QS abaixo de 5 normalmente eleva o CPC e reduz a posição no leilão — priorize melhorar anúncio/landing page dessas keywords antes de aumentar lance.")
 
             # ═══ 6 — IMPRESSION SHARE ═══
             section_title("6 — Impression Share por Campanha")
