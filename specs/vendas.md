@@ -12,6 +12,7 @@ Duas tabelas no BigQuery, dataset **`dbt_dw_rpt`** (região `us-east4`, produzid
 
 - **`rpt_vendas_dia`** — grão 1 linha por dia. Fonte do bloco "Dia Atual", dos 3 blocos de cards do "Mês" e do gráfico "Vendas por Dia" (todos deriváveis de somas/valores diários, ver seção "Bloco Mês" abaixo).
 - **`rpt_vendas_pedidos`** — grão 1 linha por item de pedido. Fonte da tabela "Pedidos do Mês" e de toda a seção "Produtos" (tabela por produto, gráficos de categoria/subcategoria). Além das colunas de valor, traz `nm_produto_base` (nome do produto **sem** variação de cor/tamanho — vem de `tb_produto` via `tb_pedido.nm_produto`, diferente de `nm_produto_completo`/`nm_produto`, que inclui a variação), `ds_categoria` e `ds_subcategoria` (também de `tb_produto`, via `tb_pedido`).
+- **`rpt_vendas_recorrencia_dia`** — grão 1 linha por dia, fonte da seção "Clientes — Retorno" (v6, 2026-07-01). Diferente das outras duas, **não é filtrada pelo seletor de mês** — é uma janela móvel própria de 60 dias, recalculada para cada dia do histórico. Ver seção própria abaixo.
 
 Ambas leem, direta ou indiretamente, de `tb_pedido`/`tb_pedido_agg_dia` (camada `az`, projeto `sb_dw_dbt`), que vêm da origem **Bling** (`stg_pedido`/`stg_item_pedido` → `tb_pedido` → `tb_pedido_agg_dia`) e **Google Drive** (`stg_meta_faturamento` → `tb_objetivo_faturamento`) para a meta mensal. `tb_pedido_agg_dia` já traz `vl_meta_dia` pronto, calculado em `tb_objetivo_faturamento.sql` como `vl_objetivo_total (meta do mês) ÷ quantidade de dias do mês` (via `safe_divide`).
 
@@ -146,9 +147,60 @@ Colunas: Produto, Quantidade Vendida (soma de `qt_item`), Custo do Produto (soma
 
 ### Gráficos "Faturamento por Categoria" e "Faturamento por Subcategoria"
 
-Barra horizontal (`_grafico_participacao()`) de `vl_faturamento_total` somado por `ds_categoria`, depois por `ds_subcategoria` (mesma função, coluna de agrupamento diferente), ordenada do maior pro menor, com % de participação no rótulo de cada barra (`valor da categoria ÷ soma de todas as categorias do período`). Capado nas 15 categorias/subcategorias de maior faturamento (`top_n=15`) para não estourar o gráfico em caso de muitas categorias — hoje a conta tem só 7 categorias e 14 subcategorias, então o cap não afeta nada na prática.
+**Pizza (v6, 2026-07-01, trocado de barra horizontal a pedido do usuário)** — `_grafico_pizza_participacao()`, lado a lado via `st.columns(2)`. Rótulo (nome + %) fora da fatia, com linha conectora (comportamento nativo do Plotly com `textposition="outside"`, sem configuração extra). Sem legenda — cada fatia já tem nome e % escritos ao lado, uma legenda só repetiria a mesma informação.
+
+Valor: `vl_faturamento_total` somado por `ds_categoria`, depois por `ds_subcategoria`. **Cor por identidade, não por ranking do período**: a cor de cada categoria é fixa, baseada no ranking de faturamento de **todo o histórico** (`_mapa_cores_categoria()`), não do(s) mês(es) selecionado(s) no filtro — assim, trocar o filtro de mês nunca repinta a mesma categoria com uma cor diferente (a categoria "Shibari" é sempre a mesma cor, esteja ela em 1º ou 5º lugar no mês em tela). Só as **7 categorias de maior faturamento no histórico completo** ganham cor própria (paleta categórica de 8 tons em `common/design.py`, `CATEGORICAL_PALETTE`); o resto soma em **"Outros"** (cinza `MUTED`) — com 14 subcategorias reais, uma pizza com 14 cores ficaria ilegível e sem segurança de contraste para daltonismo; 7 + Outros é o limite recomendado para gráfico de pizza/paleta categórica.
 
 **Regra de negócio: "faturamento sem frete" = `vl_faturamento_total`** (pedido explicitamente pelo usuário). Não é preciso subtrair frete de nada — `vl_faturamento_total` (= `vl_total_item` em `tb_pedido`) já é o valor bruto do item, calculado **antes** de frete e desconto entrarem na conta (ver Tabela "Pedidos do Mês" acima). É diferente de "Faturamento Bruto" dos blocos de cards (que é `vl_total_pedido`, já com frete/desconto aplicados) — os dois "faturamento" deste relatório não são a mesma base, ver "Limitações conhecidas".
+
+### Mapa "Pedidos por Estado" (v7, 2026-07-01)
+
+Choropleth (`_mapa_pedidos_estado()`) de `count(distinct cd_pedido)` por UF do cliente (`ds_uf`, coluna nova em `rpt_vendas_pedidos` — vem de `tb_cliente.ds_endereco_uf`, via `left join` por `cd_contato` em `rpt_vendas_pedidos.sql`), para os meses selecionados no filtro de topo (**segue o mesmo filtro de mês** do resto da seção "Mês" — diferente da seção "Clientes", que usa janela própria de 60 dias). Cor sequencial de 1 tom só (plum claro → escuro) — é magnitude (quantidade), não identidade, então não usa a paleta categórica.
+
+Contornos geográficos: `common/geo/brasil_uf.geojson`, baixado da API oficial de malhas territoriais do IBGE (`servicodados.ibge.gov.br/api/v2/malhas/BR`, resolução simplificada, ~489 KB) — o Plotly não traz limites de estado do Brasil embutidos (só dos EUA). O GeoJSON do IBGE identifica cada estado por `codarea` (código IBGE de 2 dígitos, ex. "35" = SP), não pela sigla da UF — `_carregar_geojson_uf()` adiciona a propriedade `sigla` a cada feature via um mapa fixo `CODAREA_PARA_UF` (tabela pública do IBGE, 27 UFs) em `reports/vendas.py`, pra poder casar com `ds_uf` dos dados.
+
+**Limitação:** pedidos de clientes sem UF cadastrada (~1% da base, valor vazio ou `"0"` em `ds_endereco_uf`) não aparecem no mapa — não há onde desenhá-los. Não afeta os outros indicadores da página, só este mapa.
+
+## Seção "Clientes — Retorno" (v6, 2026-07-01)
+
+**Não é filtrada pelo seletor de mês** — usa todo o histórico de `rpt_vendas_recorrencia_dia`, porque é uma janela móvel própria (60 dias), um conceito diferente do "mês selecionado" do resto da página. Deixado explícito no título da seção pra não confundir.
+
+### Histórico da decisão (por que não é média nem contagem acumulada)
+
+Pedido original do usuário: um indicador de "retorno do cliente" — quantidade média de compras por cliente, em todo o período de dados, recalculado todo dia. Duas ideias foram descartadas em conversa antes de chegar na definição final, porque ambas tinham problemas reais:
+
+1. **Média de compras por cliente, acumulada desde o início dos dados.** Problema: é diluída por aquisição — todo cliente novo entra na conta com 1 compra, então crescer a base de clientes empurra a média pra baixo (ou trava ela) mesmo que a fidelidade dos clientes antigos esteja melhorando de verdade. Mistura "crescimento de base" com "retenção" numa métrica só, que são efeitos opostos.
+2. **Contagem de clientes com mais de 1 compra, acumulada.** Problema: é um contador que só sobe (ratchet) — uma vez que um cliente cruza a linha de 2 compras, ele fica contado ali pra sempre, mesmo que nunca volte a comprar. Não captura o cliente que já tinha 2 compras e comprou de novo (ele já tinha cruzado a linha há tempo), nem reflete quando alguém para de comprar.
+
+**Definição final: Clientes Recorrentes, numa janela móvel de 60 dias.** Um cliente conta como recorrente no dia D se comprou no período (D-59 a D) **e** já tinha comprado antes desse período começar (antes de D-60). Não é diluído por cliente novo (ele entra em "Clientes Novos", não em "Recorrentes") e não tem ratchet (se o cliente para de comprar, ele sai da contagem quando a janela avança 60 dias além da última compra dele). É o equivalente ao conceito de mercado **"Returning Customers"**, numa janela móvel em vez de acumulada — a mesma ideia usada por padrão em relatórios de e-commerce (Shopify, GA, Klaviyo etc.) pra separar cliente novo de cliente recorrente.
+
+**60 dias foi escolhido pelo usuário** ("pro meu negócio 60 dias seria o ideal") — não é um benchmark de mercado, é o ciclo de recompra que faz sentido pro negócio da Shibari Brasil.
+
+### Fonte de dados e cálculo
+
+`rpt_vendas_recorrencia_dia` (passthrough de `models/3.az/Cliente/tb_cliente_recorrencia_dia.sql`, projeto `sb_dw_dbt`), grão 1 linha por dia, **com backfill retroativo** desde que há dado de pedido (~nov/2023) — decisão do usuário, pra já nascer com histórico longo em vez de esperar meses pra ver tendência. Materializada como `table` normal (não incremental) — é função pura do histórico de pedidos, não tem "congelamento do passado" como `tb_atingimento_faturamento_dinamico`.
+
+Reaproveita `tb_cliente.sql` (já existente, projeto `sb_dw_dbt`) — que já calcula `dt_prim_pedido` (data da primeira compra de cada cliente, já excluindo `CANCELADO`) por `cd_contato`. `tb_cliente_recorrencia_dia.sql` não recalcula "primeira compra por cliente" do zero: pra cada dia D, junta `stg_tempo` com os pedidos por intervalo (`dt_pedido` dentro de `(D-60, D]`, um join por range, não por igualdade de data) e cruza com `dt_prim_pedido` de `tb_cliente` pra decidir se cada cliente comprador daquele dia já existia antes da janela.
+
+| Indicador | Fórmula | Coluna em `rpt_vendas_recorrencia_dia` |
+|---|---|---|
+| Clientes Recorrentes | clientes com compra nos últimos 60 dias E primeira compra antes disso | `qt_clientes_recorrentes` |
+| Taxa de Recorrência | Clientes Recorrentes ÷ Clientes Compradores (60 dias) | `pct_recorrencia` |
+| Clientes Novos (60 dias) | Clientes Compradores − Clientes Recorrentes | `qt_clientes_novos` |
+
+**Regra de negócio: exclusão de `CANCELADO`** também vale aqui — herdada de `tb_pedido` (filtro na CTE de pedidos) e de `tb_cliente.dt_prim_pedido` (que já exclui `CANCELADO` na própria definição).
+
+**Semântica de borda dos 60 dias, validada com dado real:** o dia exatamente 60 dias após a primeira compra de um cliente **ainda não** conta como recorrente — só a partir do dia seguinte (`dt_prim_pedido < D-60`, comparação estrita). Testado com um cliente real (primeira compra 2026-02-11): em D=2026-04-12 (exatamente 60 dias depois) ele ainda não é recorrente; em D=2026-04-13 já é, se tiver compra na janela.
+
+### Tabela "Clientes que Mais Gastaram" (v7, 2026-07-01)
+
+Top 10 clientes por `vl_total_pedido` somado, nos últimos 60 dias — **mesma janela móvel desta seção, não segue o filtro de mês** (o usuário confirmou explicitamente que não faria sentido misturar as duas janelas). Fonte: `rpt_vendas_pedidos`, agrupado por `cd_contato` (chave de cliente — agrupar só por nome poderia confundir dois clientes homônimos) via `_tabela_top_clientes_60dias()`.
+
+| Coluna | Fórmula |
+|---|---|
+| Cliente | `nm_cliente` |
+| Qtd Pedidos | contagem de `cd_pedido` distintos no período |
+| Faturamento Total | soma de `vl_total_pedido` no período — **"quanto o cliente efetivamente pagou"**, mesma base de "Faturamento Bruto"/"Total do Pedido" do resto do relatório (não é `vl_faturamento_total`, que é o bruto antes de frete/desconto) |
 
 ## Limitações conhecidas
 
@@ -157,3 +209,4 @@ Barra horizontal (`_grafico_participacao()`) de `vl_faturamento_total` somado po
 - Nem `rpt_vendas_dia` nem `rpt_vendas_pedidos` filtram por loja/canal de venda — é a conta consolidada. Quebra por canal fica fora de escopo.
 - "Faturamento Bruto" nos blocos de cards já vem líquido de desconto (ver decisão acima) — não é o bruto "de livro contábil" antes de qualquer dedução. "Faturamento Total"/"sem frete" na tabela de pedidos e na seção "Produtos" (tabela por produto, gráficos de categoria/subcategoria), por outro lado, é o bruto de verdade (antes de frete/desconto) — os dois "bruto" do relatório não significam a mesma coisa; ler as tabelas com atenção antes de comparar entre seções.
 - Categoria/subcategoria vêm de `tb_produto` (cadastro do Bling) — produto sem categoria cadastrada ou com cadastro `[Interno]` (ex.: material de embalagem/suprimento interno, não produto de venda) aparece nos gráficos igual a qualquer outra categoria; não há filtro para excluir categorias internas nesta v4.
+- Os primeiros ~60 dias de `rpt_vendas_recorrencia_dia` (a partir de ~nov/2023) sempre mostram `qt_clientes_recorrentes = 0` — é esperado, não é bug: ainda não havia 60 dias de histórico anterior pra ninguém poder ser considerado "cliente antes da janela".

@@ -3,7 +3,9 @@
 Regras de negócio e definição de cada indicador: ver specs/vendas.md.
 Não altere cálculo/filtro sem antes ler (e, se preciso, atualizar) esse spec.
 """
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -16,11 +18,24 @@ from common.design import (
     CATEGORICAL_PALETTE, MUTED,
 )
 
+# Mapa código IBGE (2 dígitos) -> sigla de UF — tabela fixa e pública do IBGE,
+# usada pra casar o GeoJSON (que só tem "codarea") com ds_uf (sigla) dos dados.
+CODAREA_PARA_UF = {
+    "11": "RO", "12": "AC", "13": "AM", "14": "RR", "15": "PA", "16": "AP", "17": "TO",
+    "21": "MA", "22": "PI", "23": "CE", "24": "RN", "25": "PB", "26": "PE", "27": "AL", "28": "SE", "29": "BA",
+    "31": "MG", "32": "ES", "33": "RJ", "35": "SP",
+    "41": "PR", "42": "SC", "43": "RS",
+    "50": "MS", "51": "MT", "52": "GO", "53": "DF",
+}
+
+GEOJSON_UF_PATH = Path(__file__).resolve().parent.parent / "common" / "geo" / "brasil_uf.geojson"
+
 DATASET = "dbt_dw_rpt"
 
 TABELAS = {
     "vendas_dia": "rpt_vendas_dia",
     "pedidos": "rpt_vendas_pedidos",
+    "recorrencia": "rpt_vendas_recorrencia_dia",
 }
 
 BRT = timezone(timedelta(hours=-3))  # Brasil não observa horário de verão desde 2019 — offset fixo
@@ -30,6 +45,15 @@ BRT = timezone(timedelta(hours=-3))  # Brasil não observa horário de verão de
 def carregar_dados():
     client = bq.get_client()
     return bq.query_tables(client, DATASET, TABELAS)
+
+
+@st.cache_data
+def _carregar_geojson_uf():
+    with open(GEOJSON_UF_PATH, encoding="utf-8") as f:
+        gj = json.load(f)
+    for feature in gj["features"]:
+        feature["properties"]["sigla"] = CODAREA_PARA_UF.get(feature["properties"]["codarea"])
+    return gj
 
 
 def _hoje_brt():
@@ -115,6 +139,28 @@ def _filtrar_pedidos_mes(df_pedidos, meses_selecionados):
     df = df_pedidos.copy()
     df["dt_prim_dia_mes"] = pd.to_datetime(df["dt_prim_dia_mes"]).dt.date
     return df[df["dt_prim_dia_mes"].isin(meses_selecionados)]
+
+
+def _mapa_pedidos_estado(df_pedidos, meses_selecionados):
+    """Choropleth de quantidade de pedidos por UF, para os meses
+    selecionados (segue o mesmo filtro de mês do resto da seção 'Mês').
+    Cor sequencial de 1 só tom (plum, claro → escuro) — magnitude, não
+    identidade. Pedidos sem UF cadastrada (~1% dos clientes) são excluídos
+    do mapa — não têm onde ser desenhados. Ver specs/vendas.md."""
+    sel = _filtrar_pedidos_mes(df_pedidos, meses_selecionados)
+    sel = sel[sel["ds_uf"].notna() & (sel["ds_uf"] != "") & (sel["ds_uf"] != "0")]
+
+    agrupado = sel.groupby("ds_uf")["cd_pedido"].nunique().reset_index(name="qt_pedidos")
+
+    fig = go.Figure(go.Choropleth(
+        geojson=_carregar_geojson_uf(), locations=agrupado["ds_uf"], featureidkey="properties.sigla",
+        z=agrupado["qt_pedidos"], colorscale=[[0, "#e8d5e2"], [1, PLUM]],
+        marker_line_color="white", marker_line_width=0.5,
+        colorbar=dict(title="Pedidos", ticks="outside"),
+    ))
+    fig.update_geos(fitbounds="geojson", visible=False)
+    plotly_layout(fig, height=450, margin=dict(l=0, r=0, t=0, b=0))
+    return fig
 
 
 def _tabela_pedidos_detalhe(df_pedidos, meses_selecionados):
@@ -238,6 +284,44 @@ def _grafico_pizza_participacao(df_pedidos_todos, meses_selecionados, coluna_gru
     ))
     plotly_layout(fig, height=380, showlegend=False)
     return fig
+
+
+def _grafico_recorrencia(df_recorrencia):
+    """Linha de % de Clientes Recorrentes (janela móvel de 60 dias) ao longo
+    de todo o histórico — não é filtrada pelo seletor de mês, porque é um
+    conceito de janela própria (60 dias), diferente do 'mês selecionado' do
+    resto da página. Ver specs/vendas.md."""
+    df = df_recorrencia.sort_values("dt_data")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df["dt_data"], y=df["pct_recorrencia"], name="% Recorrentes",
+                              line=dict(color=PLUM, width=2, shape="spline"), fill="tozeroy",
+                              fillcolor="rgba(91,30,75,0.06)"))
+    plotly_layout(fig, height=300, hovermode="x unified",
+                  yaxis=dict(gridcolor=GRID, tickformat=".0%"))
+    return fig
+
+
+def _filtrar_pedidos_60dias(df_pedidos, hoje):
+    """Mesma janela móvel de 60 dias da seção 'Clientes — Retorno' — não
+    segue o filtro de mês, de propósito (ver conversa em specs/vendas.md)."""
+    df = df_pedidos.copy()
+    df["dt_pedido"] = pd.to_datetime(df["dt_pedido"]).dt.date
+    inicio = hoje - timedelta(days=59)
+    return df[(df["dt_pedido"] >= inicio) & (df["dt_pedido"] <= hoje)]
+
+
+def _tabela_top_clientes_60dias(df_pedidos, hoje, top_n=10):
+    sel = _filtrar_pedidos_60dias(df_pedidos, hoje)
+    resumo = sel.groupby(["cd_contato", "nm_cliente"], as_index=False).agg(
+        qt_pedido=("cd_pedido", "nunique"),
+        vl_total_pedido=("vl_total_pedido", "sum"),
+    ).sort_values("vl_total_pedido", ascending=False).head(top_n)
+
+    return pd.DataFrame({
+        "Cliente": resumo["nm_cliente"],
+        "Qtd Pedidos": resumo["qt_pedido"],
+        "Faturamento Total": resumo["vl_total_pedido"].apply(lambda v: f"R$ {v:,.2f}"),
+    })
 
 
 def render():
@@ -396,3 +480,31 @@ def render():
             st.plotly_chart(_grafico_pizza_participacao(dados["pedidos"], meses_selecionados, "ds_subcategoria"), use_container_width=True)
     note("Faturamento sem frete (valor do item antes de frete/desconto) — % é a participação no faturamento total do período selecionado. "
          "Categorias fora das 7 de maior faturamento (no histórico completo) somam em \"Outros\".")
+
+    st.html('<div class="c-label" style="margin:20px 0 10px">Pedidos por Estado</div>')
+    with st.container(border=True):
+        st.plotly_chart(_mapa_pedidos_estado(dados["pedidos"], meses_selecionados), use_container_width=True)
+    note("Quantidade de pedidos por UF do cliente, no(s) mês(es) selecionado(s). Pedidos sem UF cadastrada não aparecem no mapa.")
+
+    # ═══ CLIENTES ═══
+    section_title("Clientes — Retorno (janela móvel de 60 dias, não segue o filtro de mês acima)")
+
+    df_rec = dados["recorrencia"].sort_values("dt_data")
+    ultima = df_rec.iloc[-1]
+
+    render_cards([
+        card("Clientes Recorrentes", f"{int(ultima['qt_clientes_recorrentes'])}",
+             "compraram nos últimos 60 dias e já eram clientes antes disso", variant="neutral"),
+        card("Taxa de Recorrência",
+             f"{ultima['pct_recorrencia'] * 100:.1f}%" if pd.notna(ultima["pct_recorrencia"]) else "—",
+             "recorrentes ÷ total de compradores nos últimos 60 dias", variant="neutral"),
+        card("Clientes Novos (60 dias)", f"{int(ultima['qt_clientes_novos'])}",
+             "primeira compra dentro da janela de 60 dias", variant="neutral"),
+    ])
+    with st.container(border=True):
+        st.plotly_chart(_grafico_recorrencia(df_rec), use_container_width=True)
+    note("Cliente conta como recorrente num dia se comprou nos últimos 60 dias <strong>e</strong> já tinha comprado antes desses 60 dias começarem. "
+         "Não é média nem contagem acumulada — ver specs/vendas.md para o porquê dessa escolha.")
+
+    st.html('<div class="c-label" style="margin:20px 0 10px">Clientes que Mais Gastaram (últimos 60 dias)</div>')
+    st.dataframe(_tabela_top_clientes_60dias(dados["pedidos"], hoje), hide_index=True, use_container_width=True)
