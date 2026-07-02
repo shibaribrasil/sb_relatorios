@@ -41,11 +41,13 @@ Se a linha do dia de hoje ainda não existir em `rpt_vendas_dia` (ex.: cron do `
 
 **Regra de cor (v3, 2026-07-01, pedida explicitamente pelo usuário):** o card "Atingimento da Meta" é verde (`variant="ok"`) se ≥ 100%, vermelho (`variant="bad"`) se < 100% — sem faixa intermediária de alerta. Mesma regra vale para o card "Atingimento da Meta" do bloco "Mês" (ver abaixo). Implementada em `_atingimento_variant()` em `reports/vendas.py`. Os demais cards deste bloco continuam sem cor — não há limiar definido pelo usuário para eles.
 
-## Regra de negócio: margem de lucro % (decisão de v1, a confirmar)
+## Regra de negócio: margem de lucro % e taxa (v5, 2026-07-01 — taxa real unificada)
 
-`vl_lucro_bruto` (calculado em `rpt_vendas_dia.sql`) = faturamento líquido − custo de mercadoria vendida, onde faturamento líquido = faturamento bruto − frete rateado − taxa aproximada de **5%** sobre o faturamento bruto (mesma fórmula de taxa aproximada já usada em `tb_atingimento_faturamento_dinamico.sql`, projeto `sb_dw_dbt` — não é uma regra nova criada aqui).
+`vl_lucro_bruto` (calculado em `rpt_vendas_dia.sql`) = faturamento líquido − custo de mercadoria vendida, onde faturamento líquido = faturamento bruto − frete rateado − **taxa real por forma de pagamento** (`vl_taxa_pedido_rateio`, soma direto de `tb_pedido_agg_dia` — já vinha propagada até essa tabela, só não estava sendo usada aqui).
 
-**Margem de lucro % = `vl_lucro_bruto ÷ vl_faturamento_liquido`** (não ÷ faturamento bruto). Escolhida por ser a mesma base sobre a qual o lucro já é calculado. **Esta é uma decisão tomada nesta v1 sem confirmação explícita do usuário — se o time financeiro definir outra convenção (ex.: margem sobre faturamento bruto), é uma troca de 1 linha em `reports/vendas.py`, não uma mudança de schema.**
+**Histórico:** até 2026-07-01 este cálculo usava uma **aproximação fixa de 5%** do faturamento bruto (mesma fórmula de `tb_atingimento_faturamento_dinamico.sql`), enquanto `rpt_vendas_pedidos` (tabela de pedidos, seção "Produtos") já usava a taxa real desde a v2 — uma inconsistência conhecida e documentada nesta spec. **Pedido explícito do usuário:** "se a gente já tem o dado da taxa real, precisamos usá-lo" — trocada a aproximação pela taxa real em `rpt_vendas_dia.sql` (coluna renomeada de `vl_taxa_aproximada` para `vl_taxa`), unificando com `rpt_vendas_pedidos`. Todo o relatório usa a mesma base de taxa agora — a inconsistência intencional descrita nas versões anteriores desta spec não existe mais.
+
+**Margem de lucro % = `vl_lucro_bruto ÷ vl_faturamento_liquido`** (não ÷ faturamento bruto). Escolhida por ser a mesma base sobre a qual o lucro já é calculado.
 
 ## Filtro de meses
 
@@ -85,12 +87,12 @@ Barra por dia (`vl_faturamento_bruto`) + linha tracejada da meta do dia (`vl_met
 |---|---|---|
 | Frete | soma de `vl_frete_rateio` | `vl_frete` |
 | Descontos Totais | soma de `vl_desconto_rateio` | `vl_desconto` |
-| Faturamento Líquido | Faturamento Bruto − Frete − taxa aproximada 5% | `vl_faturamento_liquido` |
+| Faturamento Líquido | Faturamento Bruto − Frete − Taxa (real) | `vl_faturamento_liquido` |
 | Custo Total dos Produtos | soma de `vl_custo_pedido` | `vl_custo_mercadoria` |
 | Lucro | Faturamento Líquido − Custo Total dos Produtos | `vl_lucro_bruto` |
 | Margem de Lucro % | Lucro ÷ Faturamento Líquido | calculado no app |
 
-**Decisão de negócio (v2, sem confirmação explícita do usuário — fácil de reverter):** "Faturamento Bruto" continua definido como no bloco "Dia Atual" (soma de `vl_total_pedido`, que já vem líquido de desconto — ver `tb_pedido.sql`, projeto `sb_dw_dbt`). **"Descontos Totais" é informativo, não é subtraído de novo do Faturamento Bruto** (o desconto já está embutido nele) — mostrar os dois lado a lado poderia sugerir uma cascata literal bruto − frete − desconto = líquido, mas essa conta **não fecha** com os números aqui, de propósito, porque líquido usa a aproximação de 5% de taxa, não o desconto. Se isso causar confusão no uso real, a alternativa é redefinir Faturamento Bruto como pré-desconto (`vl_total_item`) — mudaria também o card já validado do bloco "Dia Atual".
+**Decisão de negócio (v2, sem confirmação explícita do usuário — fácil de reverter):** "Faturamento Bruto" continua definido como no bloco "Dia Atual" (soma de `vl_total_pedido`, que já vem líquido de desconto — ver `tb_pedido.sql`, projeto `sb_dw_dbt`). **"Descontos Totais" é informativo, não é subtraído de novo do Faturamento Bruto** (o desconto já está embutido nele) — mostrar os dois lado a lado poderia sugerir uma cascata literal bruto − frete − desconto = líquido, mas essa conta **não fecha** com os números aqui, de propósito, porque líquido desconta taxa, não desconto. Se isso causar confusão no uso real, a alternativa é redefinir Faturamento Bruto como pré-desconto (`vl_total_item`) — mudaria também o card já validado do bloco "Dia Atual".
 
 ## Bloco "Indicadores de Pedidos"
 
@@ -124,13 +126,13 @@ Ordenação em ambas as views: `dt_pedido` decrescente (mais recente primeiro).
 | Frete | soma de `vl_frete` do pedido (resumida) / fração do item (detalhada) | |
 | Desconto | soma de `vl_desconto` do pedido (resumida) / fração do item (detalhada) | |
 | Total do Pedido | soma de `vl_total_pedido` dos itens do pedido (resumida) / fração do item (detalhada) | na resumida, é o total real do pedido; na detalhada, é só a fração daquele item — a soma das linhas de um mesmo pedido é que dá o total real |
-| Taxa | soma de `vl_taxa` do pedido (resumida) / fração do item (detalhada) | **taxa real** por forma de pagamento (alíquota + taxa fixa do meio de pagamento), não a aproximação de 5% usada nos blocos de cards |
+| Taxa | soma de `vl_taxa` do pedido (resumida) / fração do item (detalhada) | **taxa real** por forma de pagamento (alíquota + taxa fixa do meio de pagamento) — mesma base usada em `rpt_vendas_dia` desde 2026-07-01 (v5) |
 | Lucro | soma de `vl_lucro` do pedido (resumida) / valor do item (detalhada) — fórmula: `vl_total_pedido − vl_frete − vl_taxa − vl_custo_produto` | |
 | Margem de Lucro % | Lucro ÷ (Total do Pedido − Frete − Taxa) — **não** é Lucro ÷ Total do Pedido | recalculada no nível do pedido na view resumida, não é a média das margens dos itens |
 
 **Bug corrigido em 2026-07-01** (achado pelo usuário comparando o Lucro desta tabela com o Lucro do bloco "Hoje" — ficou muito evidente porque o mês tinha só 1 pedido): `vl_lucro` em `rpt_vendas_pedidos.sql` esquecia de descontar o frete (`vl_frete_rateio`), calculando só `Total do Pedido − Taxa − Custo`. Como `vl_total_pedido` já inclui o frete cobrado do cliente (ver Fonte de Dados), isso inflava o lucro em exatamente o valor do frete — R$ 24,52 de diferença no pedido de teste (151,40 em vez de 126,88). A fórmula correta espelha a mesma lógica de `rpt_vendas_dia` (que já descontava frete corretamente): `Total do Pedido − Frete − Taxa − Custo`. `pct_margem_lucro` também foi corrigida (denominador passa a ser líquido de frete e taxa, não o Total do Pedido bruto), e o cálculo equivalente em Python (`_tabela_pedidos_resumo()`, que recalcula a margem localmente pois agrega várias linhas) foi ajustado do mesmo jeito.
 
-**Decisão de negócio (v2, sem confirmação explícita do usuário):** esta tabela usa a **taxa real por forma de pagamento** (`vl_taxa_pedido_rateio` em `tb_pedido`, já calculada a partir de `stg_forma_pagamento`), enquanto os blocos de cards (Dia Atual e Detalhamento do Lucro) continuam usando a **aproximação fixa de 5%**. É uma inconsistência intencional: a taxa real só existe nativamente no grão de `tb_pedido`/`rpt_vendas_pedidos`; trocar os blocos agregados para a taxa real também exigiria somar `vl_taxa_pedido_rateio` em vez de `vl_total_pedido * 0.05` em `rpt_vendas_dia`, o que mudaria o lucro/margem já validado do bloco "Dia Atual" em produção. Se o time decidir que vale a pena unificar, é uma troca localizada em `rpt_vendas_dia.sql` (troca `vl_taxa_aproximada` por uma soma real, com re-run do dbt). **Por causa dessa inconsistência intencional, o Lucro desta tabela nunca vai bater 100% com o Lucro dos cards agregados — só a parte referente ao frete estava incorreta (já corrigida); a diferença de taxa é esperada e documentada.**
+**Unificação de taxa (v5, 2026-07-01):** até então, esta tabela já usava a taxa real e os blocos de cards usavam a aproximação de 5% — uma inconsistência intencional documentada aqui. Resolvida a pedido do usuário: `rpt_vendas_dia` passou a usar a mesma taxa real (ver "Regra de negócio: margem de lucro % e taxa" acima). Depois da correção do bug de frete (parágrafo acima) **e** desta unificação, o Lucro de um pedido nesta tabela agora bate exatamente com o Lucro do bloco "Hoje"/"Mês" quando o período é o mesmo (validado com o pedido de teste: R$ 126,88 nos dois lugares).
 
 ## Seção "Produtos" (v4, 2026-07-01)
 
@@ -150,7 +152,7 @@ Barra horizontal (`_grafico_participacao()`) de `vl_faturamento_total` somado po
 
 ## Limitações conhecidas
 
-- A taxa de **5%** usada nos blocos de cards é uma aproximação (não é o custo real de gateway/marketplace por pedido) — herdada de `tb_atingimento_faturamento_dinamico`, não recalculada aqui. A tabela de pedidos usa a taxa real (ver acima) — os dois números não são diretamente comparáveis linha a linha.
+- ~~A taxa de 5% usada nos blocos de cards é uma aproximação~~ — resolvido em 2026-07-01 (v5): todo o relatório usa a taxa real por forma de pagamento (`vl_taxa_pedido_rateio`). Limitação residual: essa taxa real vem de `stg_forma_pagamento` (alíquota + taxa fixa cadastradas por forma de pagamento) — se a taxa negociada com o meio de pagamento mudar e o cadastro não for atualizado, o valor fica desatualizado; não é mais uma aproximação estrutural, mas depende de cadastro correto.
 - `vl_objetivo_total`/`vl_meta_dia` dependem de `stg_meta_faturamento` (planilha do Drive) estar preenchida para o mês em questão — meses sem meta cadastrada terão essas colunas nulas, e "Atingimento da Meta" fica indefinido (não dividir por nulo/zero).
 - Nem `rpt_vendas_dia` nem `rpt_vendas_pedidos` filtram por loja/canal de venda — é a conta consolidada. Quebra por canal fica fora de escopo.
 - "Faturamento Bruto" nos blocos de cards já vem líquido de desconto (ver decisão acima) — não é o bruto "de livro contábil" antes de qualquer dedução. "Faturamento Total"/"sem frete" na tabela de pedidos e na seção "Produtos" (tabela por produto, gráficos de categoria/subcategoria), por outro lado, é o bruto de verdade (antes de frete/desconto) — os dois "bruto" do relatório não significam a mesma coisa; ler as tabelas com atenção antes de comparar entre seções.
