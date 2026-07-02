@@ -6,10 +6,14 @@ Não altere cálculo/filtro sem antes ler (e, se preciso, atualizar) esse spec.
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from common import bigquery as bq
-from common.design import inject_css, card, render_cards, section_title, note
+from common.design import (
+    inject_css, card, render_cards, section_title, note,
+    PLUM, TAUPE, OK_BG, BAD, GRID, plotly_layout,
+)
 
 DATASET = "dbt_dw_rpt"
 
@@ -41,6 +45,12 @@ def _linha_do_dia(df, data):
 
 def _fmt_mes(d):
     return d.strftime("%m/%Y")
+
+
+def _atingimento_variant(pct):
+    if pct is None:
+        return "neutral"
+    return "ok" if pct >= 1 else "bad"
 
 
 def _meses_disponiveis(df):
@@ -77,10 +87,39 @@ def _agregado_mes(df_dia, meses_selecionados, hoje):
     }
 
 
-def _tabela_pedidos_mes(df_pedidos, meses_selecionados):
+def _grafico_venda_diaria(df_dia, meses_selecionados):
+    """Barra por dia (verde = dia acima da meta, vermelho = abaixo, cinza =
+    mês sem meta cadastrada) + linha tracejada da meta do dia. Ver
+    specs/vendas.md."""
+    df = df_dia.copy()
+    df["dt_prim_dia_mes"] = pd.to_datetime(df["dt_prim_dia_mes"]).dt.date
+    sel = df[df["dt_prim_dia_mes"].isin(meses_selecionados)].sort_values("dt_data")
+
+    def _cor(faturamento, meta):
+        if pd.isna(meta):
+            return TAUPE
+        return OK_BG if faturamento >= meta else BAD
+
+    cores = [_cor(f, m) for f, m in zip(sel["vl_faturamento_bruto"], sel["vl_meta_dia"])]
+
+    fig = go.Figure()
+    fig.add_bar(x=sel["dt_data"], y=sel["vl_faturamento_bruto"], name="Faturamento Bruto", marker_color=cores)
+    fig.add_trace(go.Scatter(x=sel["dt_data"], y=sel["vl_meta_dia"], name="Meta do Dia",
+                              line=dict(color=PLUM, width=2, dash="dash")))
+    plotly_layout(fig, height=300, hovermode="x unified", yaxis=dict(gridcolor=GRID, tickprefix="R$"))
+    return fig
+
+
+def _filtrar_pedidos_mes(df_pedidos, meses_selecionados):
     df = df_pedidos.copy()
     df["dt_prim_dia_mes"] = pd.to_datetime(df["dt_prim_dia_mes"]).dt.date
-    sel = df[df["dt_prim_dia_mes"].isin(meses_selecionados)].sort_values("dt_pedido", ascending=False)
+    return df[df["dt_prim_dia_mes"].isin(meses_selecionados)]
+
+
+def _tabela_pedidos_detalhe(df_pedidos, meses_selecionados):
+    """1 linha por item de pedido — usada só quando o usuário marca 'Mostrar
+    produtos'. Ver specs/vendas.md."""
+    sel = _filtrar_pedidos_mes(df_pedidos, meses_selecionados).sort_values("dt_pedido", ascending=False)
 
     return pd.DataFrame({
         "Código do Pedido": sel["cd_pedido"],
@@ -96,6 +135,89 @@ def _tabela_pedidos_mes(df_pedidos, meses_selecionados):
         "Lucro": sel["vl_lucro"].apply(lambda v: f"R$ {v:,.2f}"),
         "Margem de Lucro %": sel["pct_margem_lucro"].apply(lambda v: f"{v * 100:.1f}%" if pd.notna(v) else "—"),
     })
+
+
+def _tabela_pedidos_resumo(df_pedidos, meses_selecionados):
+    """1 linha por pedido/cliente — view padrão da tabela 'Pedidos do Mês'.
+    Soma os itens de cada pedido (produto não aparece aqui — é o nível a
+    mais, só exibido via 'Mostrar produtos'). Margem recalculada no nível do
+    pedido (lucro do pedido ÷ total do pedido), não é a média das margens
+    dos itens. Ver specs/vendas.md."""
+    sel = _filtrar_pedidos_mes(df_pedidos, meses_selecionados)
+
+    resumo = sel.groupby(["cd_pedido", "nm_cliente", "dt_pedido"], as_index=False).agg(
+        qt_item=("qt_item", "sum"),
+        vl_custo_produto=("vl_custo_produto", "sum"),
+        vl_faturamento_total=("vl_faturamento_total", "sum"),
+        vl_frete=("vl_frete", "sum"),
+        vl_desconto=("vl_desconto", "sum"),
+        vl_total_pedido=("vl_total_pedido", "sum"),
+        vl_taxa=("vl_taxa", "sum"),
+        vl_lucro=("vl_lucro", "sum"),
+    ).sort_values("dt_pedido", ascending=False)
+
+    pct_margem = resumo["vl_lucro"] / resumo["vl_total_pedido"]
+
+    return pd.DataFrame({
+        "Código do Pedido": resumo["cd_pedido"],
+        "Cliente": resumo["nm_cliente"],
+        "Quantidade": resumo["qt_item"],
+        "Custo do Produto": resumo["vl_custo_produto"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Faturamento Total": resumo["vl_faturamento_total"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Frete": resumo["vl_frete"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Desconto": resumo["vl_desconto"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Total do Pedido": resumo["vl_total_pedido"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Taxa": resumo["vl_taxa"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Lucro": resumo["vl_lucro"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Margem de Lucro %": pct_margem.apply(lambda v: f"{v * 100:.1f}%" if pd.notna(v) else "—"),
+    })
+
+
+def _tabela_venda_produto(df_pedidos, meses_selecionados):
+    """1 linha por produto, agrupando pelo nome sem variação (nm_produto_base
+    — ex.: cor/tamanho não separam a linha, mas um comprimento diferente de
+    corda continua sendo outro produto na fonte, ver specs/vendas.md)."""
+    sel = _filtrar_pedidos_mes(df_pedidos, meses_selecionados)
+
+    resumo = sel.groupby("nm_produto_base", as_index=False).agg(
+        qt_item=("qt_item", "sum"),
+        vl_custo_produto=("vl_custo_produto", "sum"),
+        vl_faturamento_total=("vl_faturamento_total", "sum"),
+        vl_lucro=("vl_lucro", "sum"),
+    ).sort_values("vl_faturamento_total", ascending=False)
+
+    pct_margem = resumo["vl_lucro"] / resumo["vl_faturamento_total"]
+
+    return pd.DataFrame({
+        "Produto": resumo["nm_produto_base"],
+        "Quantidade Vendida": resumo["qt_item"],
+        "Custo do Produto": resumo["vl_custo_produto"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Faturamento Total": resumo["vl_faturamento_total"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Lucro": resumo["vl_lucro"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Margem de Lucro %": pct_margem.apply(lambda v: f"{v * 100:.1f}%" if pd.notna(v) else "—"),
+    })
+
+
+def _grafico_participacao(df_pedidos, meses_selecionados, coluna_grupo, top_n=15):
+    """Barra horizontal de Faturamento Total (já 'sem frete' — vl_faturamento_total
+    é o valor bruto do item, antes de frete/desconto) por categoria/subcategoria,
+    ordenada do maior pro menor, com % de participação no rótulo. Capado nas
+    `top_n` de maior faturamento para não estourar o gráfico em contas com
+    muitas categorias — ver specs/vendas.md."""
+    sel = _filtrar_pedidos_mes(df_pedidos, meses_selecionados)
+
+    agrupado = sel.groupby(coluna_grupo)["vl_faturamento_total"].sum().sort_values(ascending=False)
+    total = agrupado.sum()
+    agrupado = agrupado.head(top_n).sort_values()  # ascending pro maior ficar no topo da barra horizontal
+
+    pct = agrupado / total if total else agrupado * 0
+    textos = [f"R$ {v:,.2f} ({p * 100:.1f}%)" for v, p in zip(agrupado, pct)]
+
+    fig = go.Figure()
+    fig.add_bar(y=agrupado.index, x=agrupado.values, orientation="h", marker_color=PLUM,
+                text=textos, textposition="outside")
+    plotly_layout(fig, height=max(220, 34 * len(agrupado)), xaxis=dict(gridcolor=GRID, tickprefix="R$"))
+    return fig
 
 
 def render():
@@ -153,7 +275,7 @@ def render():
              f"{qt_item} item(ns) vendido(s) hoje", variant="neutral"),
         card("Atingimento da Meta",
              f"{atingimento * 100:.0f}%" if atingimento is not None else "—",
-             "faturamento bruto ÷ meta do dia", variant="neutral"),
+             "faturamento bruto ÷ meta do dia", variant=_atingimento_variant(atingimento)),
         card("Pedidos", f"{qt_pedidos}", variant="neutral"),
         card("Margem de Lucro",
              f"{margem * 100:.1f}%" if margem is not None else "—",
@@ -193,8 +315,14 @@ def render():
         card("Faturamento Bruto", f"R$ {agg['faturamento_bruto']:,.2f}", variant="neutral"),
         card("Atingimento da Meta",
              f"{atingimento_mes * 100:.0f}%" if atingimento_mes is not None else "—",
-             "faturamento bruto ÷ meta acumulada até hoje", variant="neutral"),
+             "faturamento bruto ÷ meta acumulada até hoje", variant=_atingimento_variant(atingimento_mes)),
     ])
+
+    st.html('<div class="c-label" style="margin:20px 0 10px">Vendas por Dia</div>')
+    with st.container(border=True):
+        st.plotly_chart(_grafico_venda_diaria(dados["vendas_dia"], meses_selecionados), use_container_width=True)
+        note("Barras verdes = dia acima da meta diária; vermelhas = abaixo; cinza = mês sem meta cadastrada. "
+             "Linha tracejada é a meta do dia (meta do mês ÷ dias do mês).")
 
     st.html('<div class="c-label" style="margin:20px 0 10px">Detalhamento do Lucro</div>')
     render_cards([
@@ -223,7 +351,25 @@ def render():
     ])
 
     section_title("Pedidos do Mês")
-    tabela_pedidos = _tabela_pedidos_mes(dados["pedidos"], meses_selecionados)
+    mostrar_produtos = st.checkbox("Mostrar produtos")
+    if mostrar_produtos:
+        tabela_pedidos = _tabela_pedidos_detalhe(dados["pedidos"], meses_selecionados)
+    else:
+        tabela_pedidos = _tabela_pedidos_resumo(dados["pedidos"], meses_selecionados)
     st.dataframe(tabela_pedidos, hide_index=True, use_container_width=True)
-    note(f"{len(tabela_pedidos)} linha(s) — 1 por item de pedido (um pedido com vários produtos aparece em várias linhas). "
-         "Taxa aqui é a taxa real por forma de pagamento, diferente da aproximação de 5% usada nos cards acima. Ver specs/vendas.md.")
+
+    # ═══ PRODUTOS ═══
+    section_title("Produtos")
+
+    st.html('<div class="c-label" style="margin-bottom:10px">Venda por Produto</div>')
+    st.dataframe(_tabela_venda_produto(dados["pedidos"], meses_selecionados), hide_index=True, use_container_width=True)
+    note("Agrupado pelo nome do produto sem variação de cor/tamanho — vendas de cores diferentes do mesmo produto somam na mesma linha.")
+
+    st.html('<div class="c-label" style="margin:20px 0 10px">Faturamento por Categoria</div>')
+    with st.container(border=True):
+        st.plotly_chart(_grafico_participacao(dados["pedidos"], meses_selecionados, "ds_categoria"), use_container_width=True)
+
+    st.html('<div class="c-label" style="margin:20px 0 10px">Faturamento por Subcategoria</div>')
+    with st.container(border=True):
+        st.plotly_chart(_grafico_participacao(dados["pedidos"], meses_selecionados, "ds_subcategoria"), use_container_width=True)
+    note("Faturamento sem frete (valor do item antes de frete/desconto) — % é a participação da categoria/subcategoria no faturamento total do período selecionado.")

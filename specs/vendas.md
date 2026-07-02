@@ -10,8 +10,8 @@ O relatório tem: um filtro de meses (default: mês atual, podendo selecionar um
 
 Duas tabelas no BigQuery, dataset **`dbt_dw_rpt`** (região `us-east4`, produzidas pelo projeto `sb_dw_dbt`, pasta `models/4.rpt/Vendas/`), sem janela de tempo (histórico completo — diferente do padrão de "últimos 30 dias" do relatório de Google Ads, porque aqui o volume é pequeno e o filtro de meses precisa poder olhar qualquer mês passado):
 
-- **`rpt_vendas_dia`** — grão 1 linha por dia. Fonte do bloco "Dia Atual" e dos 3 blocos de cards do "Mês" (todos deriváveis de somas diárias, ver seção "Bloco Mês" abaixo).
-- **`rpt_vendas_pedidos`** — grão 1 linha por item de pedido. Fonte só da tabela "Pedidos do Mês".
+- **`rpt_vendas_dia`** — grão 1 linha por dia. Fonte do bloco "Dia Atual", dos 3 blocos de cards do "Mês" e do gráfico "Vendas por Dia" (todos deriváveis de somas/valores diários, ver seção "Bloco Mês" abaixo).
+- **`rpt_vendas_pedidos`** — grão 1 linha por item de pedido. Fonte da tabela "Pedidos do Mês" e de toda a seção "Produtos" (tabela por produto, gráficos de categoria/subcategoria). Além das colunas de valor, traz `nm_produto_base` (nome do produto **sem** variação de cor/tamanho — vem de `tb_produto` via `tb_pedido.nm_produto`, diferente de `nm_produto_completo`/`nm_produto`, que inclui a variação), `ds_categoria` e `ds_subcategoria` (também de `tb_produto`, via `tb_pedido`).
 
 Ambas leem, direta ou indiretamente, de `tb_pedido`/`tb_pedido_agg_dia` (camada `az`, projeto `sb_dw_dbt`), que vêm da origem **Bling** (`stg_pedido`/`stg_item_pedido` → `tb_pedido` → `tb_pedido_agg_dia`) e **Google Drive** (`stg_meta_faturamento` → `tb_objetivo_faturamento`) para a meta mensal. `tb_pedido_agg_dia` já traz `vl_meta_dia` pronto, calculado em `tb_objetivo_faturamento.sql` como `vl_objetivo_total (meta do mês) ÷ quantidade de dias do mês` (via `safe_divide`).
 
@@ -39,7 +39,7 @@ Se a linha do dia de hoje ainda não existir em `rpt_vendas_dia` (ex.: cron do `
 | Margem de Lucro | `vl_lucro_bruto ÷ vl_faturamento_liquido` (ver regra abaixo) | calculado no app |
 | Lucro | `vl_lucro_bruto` | `vl_lucro_bruto` |
 
-Sem cor/benchmark nos cards nesta v1 (nem no indicador de Atingimento da Meta, que naturalmente convida a um semáforo verde/amarelo/vermelho) — não há limiar definido pelo usuário e o projeto tem histórico de bug por regra de negócio assumida sem confirmação. Fica neutro até alguém validar os limiares certos.
+**Regra de cor (v3, 2026-07-01, pedida explicitamente pelo usuário):** o card "Atingimento da Meta" é verde (`variant="ok"`) se ≥ 100%, vermelho (`variant="bad"`) se < 100% — sem faixa intermediária de alerta. Mesma regra vale para o card "Atingimento da Meta" do bloco "Mês" (ver abaixo). Implementada em `_atingimento_variant()` em `reports/vendas.py`. Os demais cards deste bloco continuam sem cor — não há limiar definido pelo usuário para eles.
 
 ## Regra de negócio: margem de lucro % (decisão de v1, a confirmar)
 
@@ -71,6 +71,14 @@ demais_agregados  = soma(coluna)              onde dt_prim_dia_mes in meses_sele
 
 Se mais de um mês estiver selecionado, os valores somam entre os meses (visão consolidada), não uma média — ex.: atingimento é sempre `soma(faturamento) ÷ soma(meta acumulada)`, nunca a média dos % de cada mês isoladamente.
 
+Mesma regra de cor do bloco "Dia Atual": verde se ≥ 100%, vermelho se < 100% (`_atingimento_variant()`).
+
+## Gráfico "Vendas por Dia" (v4, 2026-07-01)
+
+Barra por dia (`vl_faturamento_bruto`) + linha tracejada da meta do dia (`vl_meta_dia`), para os meses selecionados, ordenado por `dt_data`. Objetivo explícito pedido pelo usuário: visualizar em quais dias o faturamento ficou acima ou abaixo da meta.
+
+**Regra de cor da barra** (`_grafico_venda_diaria()` em `reports/vendas.py`): verde se `vl_faturamento_bruto >= vl_meta_dia` naquele dia, vermelho se abaixo. Cinza se o mês não tem meta cadastrada (`vl_meta_dia` nulo) — evita colorir de vermelho um dia que na verdade não tem meta pra comparar.
+
 ## Bloco "Detalhamento do Lucro"
 
 | Indicador | Fórmula | Coluna em `rpt_vendas_dia` |
@@ -99,28 +107,49 @@ Taxa de Cancelamento é o único indicador de todo o relatório que **usa** pedi
 
 ## Tabela "Pedidos do Mês"
 
-Fonte: `rpt_vendas_pedidos` (grão **1 linha por item de pedido** — um pedido com 3 produtos aparece em 3 linhas, cada uma com seu produto/quantidade/custo). Filtrada pelos meses selecionados no filtro de topo, ordenada por `dt_pedido` decrescente (mais recente primeiro).
+Fonte: `rpt_vendas_pedidos` (grão **1 linha por item de pedido**). Filtrada pelos meses selecionados no filtro de topo.
 
-| Coluna exibida | Coluna em `rpt_vendas_pedidos` | Observação |
+**View padrão (v3, 2026-07-01, pedida explicitamente pelo usuário): resumida por pedido/cliente** — 1 linha por `cd_pedido` (não por item), agrupando/somando os itens desse pedido (`_tabela_pedidos_resumo()` em `reports/vendas.py`). A coluna "Produto" não aparece nesta view — é "um nível a mais", só exibido quando o usuário marca o checkbox **"Mostrar produtos"**, que troca a tabela toda para a view detalhada (1 linha por item, `_tabela_pedidos_detalhe()`), idêntica à v2. Não existe drill-down por linha individual (o Streamlit não tem grid nativo com expandir/recolher) — a troca é global, para toda a tabela.
+
+Ordenação em ambas as views: `dt_pedido` decrescente (mais recente primeiro).
+
+| Coluna exibida | Origem | Observação |
 |---|---|---|
-| Código do Pedido | `cd_pedido` | repete entre linhas do mesmo pedido |
+| Código do Pedido | `cd_pedido` | na view resumida, é a chave de agrupamento (1 linha por valor); na detalhada, repete entre linhas do mesmo pedido |
 | Cliente | `nm_cliente` | |
-| Produto | `nm_produto` | |
-| Quantidade | `qt_item` | |
-| Custo do Produto | `vl_custo_produto` | **custo total da linha** (quantidade × custo unitário), não custo unitário |
-| Faturamento Total | `vl_faturamento_total` | valor bruto do item (`vl_total_item` em `tb_pedido`, antes de frete/desconto) |
-| Frete | `vl_frete` | fração de frete alocada a este item (rateio) |
-| Desconto | `vl_desconto` | fração de desconto alocada a este item (rateio) |
-| Total do Pedido | `vl_total_pedido` | fração líquida deste item (Faturamento Total ± Frete ∓ Desconto) — **não é o total do pedido inteiro repetido**, é a parte deste item; a soma das linhas de um mesmo pedido é que dá o total real do pedido |
-| Taxa | `vl_taxa` | **taxa real** por forma de pagamento (alíquota + taxa fixa do meio de pagamento), não a aproximação de 5% usada nos blocos de cards |
-| Lucro | `vl_lucro` | Total do Pedido − Taxa − Custo do Produto |
-| Margem de Lucro % | `pct_margem_lucro` | Lucro ÷ Total do Pedido |
+| Produto | `nm_produto` | **só na view detalhada** — ausente na resumida |
+| Quantidade | soma de `qt_item` do pedido (resumida) / `qt_item` do item (detalhada) | |
+| Custo do Produto | soma de `vl_custo_produto` do pedido (resumida) / valor do item (detalhada) | **custo total**, não custo unitário |
+| Faturamento Total | soma de `vl_faturamento_total` do pedido (resumida) / valor do item (detalhada) | bruto, antes de frete/desconto (`vl_total_item` em `tb_pedido`) |
+| Frete | soma de `vl_frete` do pedido (resumida) / fração do item (detalhada) | |
+| Desconto | soma de `vl_desconto` do pedido (resumida) / fração do item (detalhada) | |
+| Total do Pedido | soma de `vl_total_pedido` dos itens do pedido (resumida) / fração do item (detalhada) | na resumida, é o total real do pedido; na detalhada, é só a fração daquele item — a soma das linhas de um mesmo pedido é que dá o total real |
+| Taxa | soma de `vl_taxa` do pedido (resumida) / fração do item (detalhada) | **taxa real** por forma de pagamento (alíquota + taxa fixa do meio de pagamento), não a aproximação de 5% usada nos blocos de cards |
+| Lucro | soma de `vl_lucro` do pedido (resumida) / valor do item (detalhada) | |
+| Margem de Lucro % | **recalculada no nível do pedido** (Lucro do pedido ÷ Total do Pedido) na view resumida — não é a média das margens dos itens | |
 
 **Decisão de negócio (v2, sem confirmação explícita do usuário):** esta tabela usa a **taxa real por forma de pagamento** (`vl_taxa_pedido_rateio` em `tb_pedido`, já calculada a partir de `stg_forma_pagamento`), enquanto os blocos de cards (Dia Atual e Detalhamento do Lucro) continuam usando a **aproximação fixa de 5%**. É uma inconsistência intencional: a taxa real só existe nativamente no grão de `tb_pedido`/`rpt_vendas_pedidos`; trocar os blocos agregados para a taxa real também exigiria somar `vl_taxa_pedido_rateio` em vez de `vl_total_pedido * 0.05` em `rpt_vendas_dia`, o que mudaria o lucro/margem já validado do bloco "Dia Atual" em produção. Se o time decidir que vale a pena unificar, é uma troca localizada em `rpt_vendas_dia.sql` (troca `vl_taxa_aproximada` por uma soma real, com re-run do dbt).
+
+## Seção "Produtos" (v4, 2026-07-01)
+
+Fonte: `rpt_vendas_pedidos`, filtrada pelos meses selecionados no filtro de topo (a mesma seleção usada pela tabela "Pedidos do Mês").
+
+### Tabela "Venda por Produto"
+
+1 linha por `nm_produto_base` (`_tabela_venda_produto()`), somando os itens de todas as suas variações — **regra de negócio: agrupamento pelo nome do produto sem variação de cor/tamanho**, pedida explicitamente pelo usuário ("use o nome do produto sem a variação, pra agrupar todas as vendas de suas variações numa linha só"). `nm_produto_base` vem de `tb_produto` (via `tb_pedido.nm_produto`) — é o nome cadastrado no catálogo, diferente de `nm_produto_completo` (que inclui sufixos como "Cor:Amarela" ou "Tamanho:Pequeno", adicionados pelo Bling na venda). **Atenção:** dimensões que fazem parte do nome cadastrado do produto (ex.: "Corda de Algodão Tratada - 6mm X 8m" vs. "- 6mm X 10m") continuam como produtos diferentes — não é uma variação de cor/tamanho no sentido do Bling, é um produto distinto no catálogo.
+
+Colunas: Produto, Quantidade Vendida (soma de `qt_item`), Custo do Produto (soma de `vl_custo_produto`), Faturamento Total (soma de `vl_faturamento_total`), Lucro (soma de `vl_lucro`), Margem de Lucro % (Lucro ÷ Faturamento Total, recalculada no nível do produto — mesma lógica de "não é a média das margens dos itens" da tabela de pedidos). Ordenada por Faturamento Total decrescente.
+
+### Gráficos "Faturamento por Categoria" e "Faturamento por Subcategoria"
+
+Barra horizontal (`_grafico_participacao()`) de `vl_faturamento_total` somado por `ds_categoria`, depois por `ds_subcategoria` (mesma função, coluna de agrupamento diferente), ordenada do maior pro menor, com % de participação no rótulo de cada barra (`valor da categoria ÷ soma de todas as categorias do período`). Capado nas 15 categorias/subcategorias de maior faturamento (`top_n=15`) para não estourar o gráfico em caso de muitas categorias — hoje a conta tem só 7 categorias e 14 subcategorias, então o cap não afeta nada na prática.
+
+**Regra de negócio: "faturamento sem frete" = `vl_faturamento_total`** (pedido explicitamente pelo usuário). Não é preciso subtrair frete de nada — `vl_faturamento_total` (= `vl_total_item` em `tb_pedido`) já é o valor bruto do item, calculado **antes** de frete e desconto entrarem na conta (ver Tabela "Pedidos do Mês" acima). É diferente de "Faturamento Bruto" dos blocos de cards (que é `vl_total_pedido`, já com frete/desconto aplicados) — os dois "faturamento" deste relatório não são a mesma base, ver "Limitações conhecidas".
 
 ## Limitações conhecidas
 
 - A taxa de **5%** usada nos blocos de cards é uma aproximação (não é o custo real de gateway/marketplace por pedido) — herdada de `tb_atingimento_faturamento_dinamico`, não recalculada aqui. A tabela de pedidos usa a taxa real (ver acima) — os dois números não são diretamente comparáveis linha a linha.
 - `vl_objetivo_total`/`vl_meta_dia` dependem de `stg_meta_faturamento` (planilha do Drive) estar preenchida para o mês em questão — meses sem meta cadastrada terão essas colunas nulas, e "Atingimento da Meta" fica indefinido (não dividir por nulo/zero).
 - Nem `rpt_vendas_dia` nem `rpt_vendas_pedidos` filtram por loja/canal de venda — é a conta consolidada. Quebra por canal fica fora de escopo.
-- "Faturamento Bruto" nos blocos de cards já vem líquido de desconto (ver decisão acima) — não é o bruto "de livro contábil" antes de qualquer dedução. "Faturamento Total" na tabela de pedidos, por outro lado, é o bruto de verdade (antes de frete/desconto) — os dois "bruto" do relatório não significam a mesma coisa; ler a tabela acima com atenção antes de comparar.
+- "Faturamento Bruto" nos blocos de cards já vem líquido de desconto (ver decisão acima) — não é o bruto "de livro contábil" antes de qualquer dedução. "Faturamento Total"/"sem frete" na tabela de pedidos e na seção "Produtos" (tabela por produto, gráficos de categoria/subcategoria), por outro lado, é o bruto de verdade (antes de frete/desconto) — os dois "bruto" do relatório não significam a mesma coisa; ler as tabelas com atenção antes de comparar entre seções.
+- Categoria/subcategoria vêm de `tb_produto` (cadastro do Bling) — produto sem categoria cadastrada ou com cadastro `[Interno]` (ex.: material de embalagem/suprimento interno, não produto de venda) aparece nos gráficos igual a qualquer outra categoria; não há filtro para excluir categorias internas nesta v4.
