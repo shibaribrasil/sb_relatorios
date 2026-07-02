@@ -9,12 +9,13 @@ import pandas as pd
 import streamlit as st
 
 from common import bigquery as bq
-from common.design import inject_css, card, render_cards, section_title
+from common.design import inject_css, card, render_cards, section_title, note
 
 DATASET = "dbt_dw_rpt"
 
 TABELAS = {
     "vendas_dia": "rpt_vendas_dia",
+    "pedidos": "rpt_vendas_pedidos",
 }
 
 BRT = timezone(timedelta(hours=-3))  # Brasil não observa horário de verão desde 2019 — offset fixo
@@ -32,10 +33,69 @@ def _hoje_brt():
 
 def _linha_do_dia(df, data):
     """Bloco 'Hoje' é sempre a data corrente (BRT) — nunca é afetado por
-    filtro de mês, mesmo quando a seção de mês agregado (fase futura)
-    estiver olhando um mês diferente. Ver specs/vendas.md."""
+    filtro de mês, mesmo quando a seção de mês agregado estiver olhando um
+    mês diferente. Ver specs/vendas.md."""
     linhas = df[pd.to_datetime(df["dt_data"]).dt.date == data]
     return linhas.iloc[0] if not linhas.empty else None
+
+
+def _fmt_mes(d):
+    return d.strftime("%m/%Y")
+
+
+def _meses_disponiveis(df):
+    return sorted(pd.to_datetime(df["dt_prim_dia_mes"]).dt.date.unique(), reverse=True)
+
+
+def _agregado_mes(df_dia, meses_selecionados, hoje):
+    """Todo agregado do bloco 'Mês' é soma simples de rpt_vendas_dia filtrada
+    pelos meses selecionados — sem caso especial mês atual vs. mês passado
+    (dias futuros já têm faturamento zero, dias passados já são <= hoje).
+    vl_objetivo_total é excluído da regra: é o mesmo valor repetido em cada
+    dia do mês, por isso usa 1 valor por mês (drop_duplicates) antes de somar
+    entre os meses selecionados. Ver specs/vendas.md."""
+    df = df_dia.copy()
+    df["dt_prim_dia_mes"] = pd.to_datetime(df["dt_prim_dia_mes"]).dt.date
+    df["dt_data"] = pd.to_datetime(df["dt_data"]).dt.date
+    sel = df[df["dt_prim_dia_mes"].isin(meses_selecionados)]
+
+    meta_total = sel.drop_duplicates("dt_prim_dia_mes")["vl_objetivo_total"].sum()
+    meta_acumulada = sel.loc[sel["dt_data"] <= hoje, "vl_meta_dia"].sum()
+
+    return {
+        "meta_total": meta_total,
+        "meta_acumulada": meta_acumulada,
+        "faturamento_bruto": sel["vl_faturamento_bruto"].sum(),
+        "vl_frete": sel["vl_frete"].sum(),
+        "vl_desconto": sel["vl_desconto"].sum(),
+        "vl_faturamento_liquido": sel["vl_faturamento_liquido"].sum(),
+        "vl_custo_mercadoria": sel["vl_custo_mercadoria"].sum(),
+        "vl_lucro_bruto": sel["vl_lucro_bruto"].sum(),
+        "qt_pedidos": int(sel["qt_pedidos"].sum()),
+        "qt_pedidos_cancelados": int(sel["qt_pedidos_cancelados"].sum()),
+        "qt_item": int(sel["qt_item"].sum()),
+    }
+
+
+def _tabela_pedidos_mes(df_pedidos, meses_selecionados):
+    df = df_pedidos.copy()
+    df["dt_prim_dia_mes"] = pd.to_datetime(df["dt_prim_dia_mes"]).dt.date
+    sel = df[df["dt_prim_dia_mes"].isin(meses_selecionados)].sort_values("dt_pedido", ascending=False)
+
+    return pd.DataFrame({
+        "Código do Pedido": sel["cd_pedido"],
+        "Cliente": sel["nm_cliente"],
+        "Produto": sel["nm_produto"],
+        "Quantidade": sel["qt_item"],
+        "Custo do Produto": sel["vl_custo_produto"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Faturamento Total": sel["vl_faturamento_total"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Frete": sel["vl_frete"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Desconto": sel["vl_desconto"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Total do Pedido": sel["vl_total_pedido"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Taxa": sel["vl_taxa"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Lucro": sel["vl_lucro"].apply(lambda v: f"R$ {v:,.2f}"),
+        "Margem de Lucro %": sel["pct_margem_lucro"].apply(lambda v: f"{v * 100:.1f}%" if pd.notna(v) else "—"),
+    })
 
 
 def render():
@@ -101,3 +161,69 @@ def render():
         card("Lucro", f"R$ {lucro:,.2f}",
              "faturamento líquido − custo de mercadoria", variant="neutral"),
     ])
+
+    # ═══ MÊS ═══
+    section_title("Mês")
+
+    meses_disponiveis = _meses_disponiveis(dados["vendas_dia"])
+    mes_atual = hoje.replace(day=1)
+    meses_selecionados = st.multiselect(
+        "Meses", options=meses_disponiveis, default=[mes_atual] if mes_atual in meses_disponiveis else [],
+        format_func=_fmt_mes,
+    )
+
+    if not meses_selecionados:
+        st.info("Selecione ao menos um mês para ver os indicadores abaixo.")
+        return
+
+    agg = _agregado_mes(dados["vendas_dia"], meses_selecionados, hoje)
+
+    atingimento_mes = (agg["faturamento_bruto"] / agg["meta_acumulada"]) if agg["meta_acumulada"] else None
+    margem_mes = (agg["vl_lucro_bruto"] / agg["vl_faturamento_liquido"]) if agg["vl_faturamento_liquido"] else None
+    ticket_medio = (agg["faturamento_bruto"] / agg["qt_pedidos"]) if agg["qt_pedidos"] else None
+    preco_medio = (agg["faturamento_bruto"] / agg["qt_item"]) if agg["qt_item"] else None
+    qtd_media_produtos = (agg["qt_item"] / agg["qt_pedidos"]) if agg["qt_pedidos"] else None
+    qt_pedidos_totais = agg["qt_pedidos"] + agg["qt_pedidos_cancelados"]
+    taxa_cancelamento = (agg["qt_pedidos_cancelados"] / qt_pedidos_totais) if qt_pedidos_totais else None
+
+    st.html('<div class="c-label" style="margin-bottom:10px">Atingimento da Meta</div>')
+    render_cards([
+        card("Meta Total do Mês", f"R$ {agg['meta_total']:,.2f}", variant="neutral"),
+        card("Meta Acumulada até Hoje", f"R$ {agg['meta_acumulada']:,.2f}", variant="neutral"),
+        card("Faturamento Bruto", f"R$ {agg['faturamento_bruto']:,.2f}", variant="neutral"),
+        card("Atingimento da Meta",
+             f"{atingimento_mes * 100:.0f}%" if atingimento_mes is not None else "—",
+             "faturamento bruto ÷ meta acumulada até hoje", variant="neutral"),
+    ])
+
+    st.html('<div class="c-label" style="margin:20px 0 10px">Detalhamento do Lucro</div>')
+    render_cards([
+        card("Frete", f"R$ {agg['vl_frete']:,.2f}", variant="neutral"),
+        card("Descontos Totais", f"R$ {agg['vl_desconto']:,.2f}", variant="neutral"),
+        card("Faturamento Líquido", f"R$ {agg['vl_faturamento_liquido']:,.2f}", variant="neutral"),
+        card("Custo Total dos Produtos", f"R$ {agg['vl_custo_mercadoria']:,.2f}", variant="neutral"),
+        card("Lucro", f"R$ {agg['vl_lucro_bruto']:,.2f}", variant="neutral"),
+        card("Margem de Lucro",
+             f"{margem_mes * 100:.1f}%" if margem_mes is not None else "—",
+             "lucro ÷ faturamento líquido", variant="neutral"),
+    ])
+    note("Descontos Totais é informativo — já está embutido no Faturamento Bruto (que já vem líquido de desconto), "
+         "não é subtraído de novo para chegar no Faturamento Líquido. Ver specs/vendas.md.")
+
+    st.html('<div class="c-label" style="margin:20px 0 10px">Indicadores de Pedidos</div>')
+    render_cards([
+        card("Pedidos", f"{agg['qt_pedidos']}", variant="neutral"),
+        card("Produtos Vendidos", f"{agg['qt_item']}", variant="neutral"),
+        card("Ticket Médio", f"R$ {ticket_medio:,.2f}" if ticket_medio is not None else "—", variant="neutral"),
+        card("Preço Médio dos Produtos", f"R$ {preco_medio:,.2f}" if preco_medio is not None else "—", variant="neutral"),
+        card("Produtos por Pedido", f"{qtd_media_produtos:.1f}" if qtd_media_produtos is not None else "—", variant="neutral"),
+        card("Taxa de Cancelamento",
+             f"{taxa_cancelamento * 100:.1f}%" if taxa_cancelamento is not None else "—",
+             f"{agg['qt_pedidos_cancelados']} cancelado(s) de {qt_pedidos_totais}", variant="neutral"),
+    ])
+
+    section_title("Pedidos do Mês")
+    tabela_pedidos = _tabela_pedidos_mes(dados["pedidos"], meses_selecionados)
+    st.dataframe(tabela_pedidos, hide_index=True, use_container_width=True)
+    note(f"{len(tabela_pedidos)} linha(s) — 1 por item de pedido (um pedido com vários produtos aparece em várias linhas). "
+         "Taxa aqui é a taxa real por forma de pagamento, diferente da aproximação de 5% usada nos cards acima. Ver specs/vendas.md.")
