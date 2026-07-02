@@ -482,29 +482,40 @@ def render():
          "Categorias fora das 7 de maior faturamento (no histórico completo) somam em \"Outros\".")
 
     st.html('<div class="c-label" style="margin:20px 0 10px">Pedidos por Estado</div>')
-    with st.container(border=True):
-        st.plotly_chart(_mapa_pedidos_estado(dados["pedidos"], meses_selecionados), use_container_width=True)
-    note("Quantidade de pedidos por UF do cliente, no(s) mês(es) selecionado(s). Pedidos sem UF cadastrada não aparecem no mapa.")
+    try:
+        with st.container(border=True):
+            st.plotly_chart(_mapa_pedidos_estado(dados["pedidos"], meses_selecionados), use_container_width=True)
+        note("Quantidade de pedidos por UF do cliente, no(s) mês(es) selecionado(s). Pedidos sem UF cadastrada não aparecem no mapa.")
+    except Exception as e:
+        st.error(f"Erro ao montar o mapa de Pedidos por Estado: {e}")
 
     # ═══ CLIENTES ═══
+    # Cada bloco tem seu próprio try/except (mesmo padrão de isolamento de
+    # reports/google_ads.py) — um bug num bloco não deve esconder os outros.
     section_title("Clientes — Retorno (janela móvel de 60 dias, não segue o filtro de mês acima)")
 
-    df_rec = dados["recorrencia"].sort_values("dt_data")
-    ultima = df_rec.iloc[-1]
+    try:
+        df_rec = dados["recorrencia"].sort_values("dt_data")
+        ultima = df_rec.iloc[-1]
 
-    render_cards([
-        card("Clientes Recorrentes", f"{int(ultima['qt_clientes_recorrentes'])}",
-             "compraram nos últimos 60 dias e já eram clientes antes disso", variant="neutral"),
-        card("Taxa de Recorrência",
-             f"{ultima['pct_recorrencia'] * 100:.1f}%" if pd.notna(ultima["pct_recorrencia"]) else "—",
-             "recorrentes ÷ total de compradores nos últimos 60 dias", variant="neutral"),
-        card("Clientes Novos (60 dias)", f"{int(ultima['qt_clientes_novos'])}",
-             "primeira compra dentro da janela de 60 dias", variant="neutral"),
-    ])
-    with st.container(border=True):
-        st.plotly_chart(_grafico_recorrencia(df_rec), use_container_width=True)
-    note("Cliente conta como recorrente num dia se comprou nos últimos 60 dias <strong>e</strong> já tinha comprado antes desses 60 dias começarem. "
-         "Não é média nem contagem acumulada — ver specs/vendas.md para o porquê dessa escolha.")
+        render_cards([
+            card("Clientes Recorrentes", f"{int(ultima['qt_clientes_recorrentes'])}",
+                 "compraram nos últimos 60 dias e já eram clientes antes disso", variant="neutral"),
+            card("Taxa de Recorrência",
+                 f"{ultima['pct_recorrencia'] * 100:.1f}%" if pd.notna(ultima["pct_recorrencia"]) else "—",
+                 "recorrentes ÷ total de compradores nos últimos 60 dias", variant="neutral"),
+            card("Clientes Novos (60 dias)", f"{int(ultima['qt_clientes_novos'])}",
+                 "primeira compra dentro da janela de 60 dias", variant="neutral"),
+        ])
+        with st.container(border=True):
+            st.plotly_chart(_grafico_recorrencia(df_rec), use_container_width=True)
+        note("Cliente conta como recorrente num dia se comprou nos últimos 60 dias <strong>e</strong> já tinha comprado antes desses 60 dias começarem. "
+             "Não é média nem contagem acumulada — ver specs/vendas.md para o porquê dessa escolha.")
+    except Exception as e:
+        st.error(f"Erro ao montar o bloco de Clientes Recorrentes: {e}")
 
     st.html('<div class="c-label" style="margin:20px 0 10px">Clientes que Mais Gastaram (últimos 60 dias)</div>')
-    st.dataframe(_tabela_top_clientes_60dias(dados["pedidos"], hoje), hide_index=True, use_container_width=True)
+    try:
+        st.dataframe(_tabela_top_clientes_60dias(dados["pedidos"], hoje), hide_index=True, use_container_width=True)
+    except Exception as e:
+        st.error(f"Erro ao montar a tabela de Clientes que Mais Gastaram: {e}")
