@@ -156,7 +156,12 @@ def _tabela_pedidos_resumo(df_pedidos, meses_selecionados):
         vl_lucro=("vl_lucro", "sum"),
     ).sort_values("dt_pedido", ascending=False)
 
-    pct_margem = resumo["vl_lucro"] / resumo["vl_total_pedido"]
+    # Líquido do pedido = Total do Pedido − Frete − Taxa (mesma base do
+    # numerador de vl_lucro em rpt_vendas_pedidos.sql) — não usar Total do
+    # Pedido puro aqui, senão a margem infla (mesmo bug de vl_lucro que
+    # esquecia de descontar o frete, corrigido em 2026-07-01).
+    liquido_pedido = resumo["vl_total_pedido"] - resumo["vl_frete"] - resumo["vl_taxa"]
+    pct_margem = resumo["vl_lucro"] / liquido_pedido
 
     return pd.DataFrame({
         "Código do Pedido": resumo["cd_pedido"],
