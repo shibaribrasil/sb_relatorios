@@ -23,14 +23,24 @@ BAD     = "#d10f2f"
 BORDER  = "rgba(91,30,75,0.18)"
 GRID    = "rgba(91,30,75,0.10)"
 
+# Paleta categórica para gráficos de pizza/participação (identidade, não
+# magnitude) — 8 tons fixos, ordem validada (CVD ΔE mínimo entre vizinhos
+# 24.2, claridade OKLCH 0.43–0.77, croma ≥ 0.10 no fundo branco dos
+# gráficos). Nunca cicle além de 8 fatias — dobre o resto em "Outros"
+# (usa MUTED) em vez de gerar uma 9ª cor.
+CATEGORICAL_PALETTE = ["#2a78d6", "#1baf7a", "#eda100", "#008300", "#4a3aa7", "#e34948", "#e87ba4", "#eb6834"]
+MUTED = "#898781"
+
 CSS = f"""
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   .stApp {{ background: {BG}; font-family: 'Montserrat', sans-serif; }}
   .block-container {{ padding-top: 1.5rem; max-width: 1280px; }}
-  h1, h2, h3 {{ font-family: 'Playfair Display', serif !important; }}
+  h1, h2, h3 {{ font-family: 'Montserrat', sans-serif !important; }}
+
+  [data-testid="stPlotlyChart"] {{ border-radius: 10px; overflow: hidden; }}
 
   .report-header {{
     background: {PLUM_DK}; border-bottom: 3px solid {SCARLET};
@@ -38,7 +48,7 @@ CSS = f"""
     display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;
   }}
   .report-brand {{ font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: {TAUPE}; margin-bottom: 4px; }}
-  .report-title {{ font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 700; color: {BG}; }}
+  .report-title {{ font-family: 'Montserrat', sans-serif; font-size: 22px; font-weight: 700; color: {BG}; }}
   .report-title span {{ color: {SCARLET}; }}
   .report-meta {{ color: {TAUPE}; font-size: 12px; margin-top: 3px; }}
   .report-badge {{
@@ -62,7 +72,7 @@ CSS = f"""
   .card.c-warn::before {{ background: {WARN_BG}; }}
   .card.c-bad::before {{ background: {BAD}; }}
   .c-label {{ font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: {TAUPE}; margin-bottom: 8px; }}
-  .c-value {{ font-size: 26px; font-weight: 700; font-family: 'Playfair Display', serif; line-height: 1; }}
+  .c-value {{ font-size: 26px; font-weight: 700; font-family: 'Montserrat', sans-serif; line-height: 1; }}
   .card.c-neutral .c-value {{ color: #141419; }}
   .card.c-ok .c-value {{ color: {OK}; }}
   .card.c-warn .c-value {{ color: {WARN}; }}
@@ -104,7 +114,7 @@ CSS = f"""
   .insight.i-ok   .insight-icon {{ background: rgba(76,175,130,0.14); }}
   .insight-content {{ flex: 1; min-width: 0; }}
   .insight-label {{ font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: {TAUPE}; margin-bottom: 4px; }}
-  .insight-title {{ font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 600; color: #141419; margin-bottom: 6px; }}
+  .insight-title {{ font-family: 'Montserrat', sans-serif; font-size: 14px; font-weight: 600; color: #141419; margin-bottom: 6px; }}
   .insight-body {{ font-size: 12px; color: {TAUPE}; line-height: 1.6; margin-bottom: 10px; }}
   .insight-action {{ background: rgba(91,30,75,0.04); border: 1px solid {BORDER}; border-radius: 6px; padding: 10px 14px; }}
   .insight-action-lbl {{ font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: {TAUPE}; margin-bottom: 6px; }}
@@ -118,7 +128,7 @@ CSS = f"""
     background: #fff; border: 1px solid {BORDER}; border-top: 2px solid {PLUM};
     border-radius: 0 0 10px 10px; padding: 20px 22px; box-shadow: 0 1px 3px rgba(91,30,75,0.05);
   }}
-  .opp-title {{ font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 600; color: #141419; margin-bottom: 6px; }}
+  .opp-title {{ font-family: 'Montserrat', sans-serif; font-size: 14px; font-weight: 600; color: #141419; margin-bottom: 6px; }}
   .opp-desc {{ font-size: 12px; color: {TAUPE}; line-height: 1.6; margin-bottom: 10px; }}
   .opp-gain {{
     display: inline-block; background: rgba(76,175,130,0.08); border: 1px solid rgba(76,175,130,0.25);
@@ -274,4 +284,8 @@ def plotly_layout(fig, **kwargs):
     )
     layout.update(kwargs)
     fig.update_layout(**layout)
+    # cantos arredondados nas barras de todo relatório — aplicado aqui (função
+    # compartilhada) em vez de em cada add_bar(), pra valer pra qualquer gráfico
+    # de barra que passe por plotly_layout()
+    fig.update_traces(marker_cornerradius=4, selector=dict(type="bar"))
     return fig

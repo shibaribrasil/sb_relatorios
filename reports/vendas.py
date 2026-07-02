@@ -13,6 +13,7 @@ from common import bigquery as bq
 from common.design import (
     inject_css, card, render_cards, section_title, note,
     PLUM, TAUPE, OK_BG, BAD, GRID, plotly_layout,
+    CATEGORICAL_PALETTE, MUTED,
 )
 
 DATASET = "dbt_dw_rpt"
@@ -203,25 +204,39 @@ def _tabela_venda_produto(df_pedidos, meses_selecionados):
     })
 
 
-def _grafico_participacao(df_pedidos, meses_selecionados, coluna_grupo, top_n=15):
-    """Barra horizontal de Faturamento Total (já 'sem frete' — vl_faturamento_total
-    é o valor bruto do item, antes de frete/desconto) por categoria/subcategoria,
-    ordenada do maior pro menor, com % de participação no rótulo. Capado nas
-    `top_n` de maior faturamento para não estourar o gráfico em contas com
-    muitas categorias — ver specs/vendas.md."""
-    sel = _filtrar_pedidos_mes(df_pedidos, meses_selecionados)
+def _mapa_cores_categoria(df_pedidos_todos, coluna_grupo, top_n=7):
+    """Mapa fixo nome-do-grupo → cor, baseado no ranking de faturamento de
+    TODO o histórico (não do mês filtrado). Cor segue a identidade da
+    categoria, nunca o rank do período em tela — se seguisse o rank atual,
+    trocar o filtro de mês poderia repintar a mesma categoria com cor
+    diferente (anti-padrão de recolorir por filtro). Capado em `top_n`
+    grupos com cor própria; o resto dobra em 'Outros' (cinza neutro,
+    `MUTED`) em vez de gerar uma 9ª cor categórica. Ver specs/vendas.md."""
+    ranking_global = df_pedidos_todos.groupby(coluna_grupo)["vl_faturamento_total"].sum().sort_values(ascending=False)
+    topo = ranking_global.head(top_n).index
+    return {nome: CATEGORICAL_PALETTE[i] for i, nome in enumerate(topo)}
 
-    agrupado = sel.groupby(coluna_grupo)["vl_faturamento_total"].sum().sort_values(ascending=False)
-    total = agrupado.sum()
-    agrupado = agrupado.head(top_n).sort_values()  # ascending pro maior ficar no topo da barra horizontal
 
-    pct = agrupado / total if total else agrupado * 0
-    textos = [f"R$ {v:,.2f} ({p * 100:.1f}%)" for v, p in zip(agrupado, pct)]
+def _grafico_pizza_participacao(df_pedidos_todos, meses_selecionados, coluna_grupo, top_n=7):
+    """Pizza de Faturamento Total (já 'sem frete' — vl_faturamento_total é o
+    valor bruto do item, antes de frete/desconto) por categoria/subcategoria,
+    com rótulo fora da fatia (linha conectora automática do Plotly quando
+    `textposition='outside'`). Categorias fora do top `top_n` (por
+    faturamento global) somam em 'Outros'. Sem legenda: cada fatia já é
+    identificada pelo próprio rótulo — uma legenda repetiria a mesma
+    informação. Ver specs/vendas.md."""
+    mapa_cores = _mapa_cores_categoria(df_pedidos_todos, coluna_grupo, top_n)
+    sel = _filtrar_pedidos_mes(df_pedidos_todos, meses_selecionados).copy()
+    sel["_grupo"] = sel[coluna_grupo].apply(lambda v: v if v in mapa_cores else "Outros")
 
-    fig = go.Figure()
-    fig.add_bar(y=agrupado.index, x=agrupado.values, orientation="h", marker_color=PLUM,
-                text=textos, textposition="outside")
-    plotly_layout(fig, height=max(220, 34 * len(agrupado)), xaxis=dict(gridcolor=GRID, tickprefix="R$"))
+    agrupado = sel.groupby("_grupo")["vl_faturamento_total"].sum().sort_values(ascending=False)
+    cores = [mapa_cores.get(nome, MUTED) for nome in agrupado.index]
+
+    fig = go.Figure(go.Pie(
+        labels=agrupado.index, values=agrupado.values, sort=False,
+        marker=dict(colors=cores), textposition="outside", textinfo="label+percent",
+    ))
+    plotly_layout(fig, height=380, showlegend=False)
     return fig
 
 
@@ -370,11 +385,14 @@ def render():
     st.dataframe(_tabela_venda_produto(dados["pedidos"], meses_selecionados), hide_index=True, use_container_width=True)
     note("Agrupado pelo nome do produto sem variação de cor/tamanho — vendas de cores diferentes do mesmo produto somam na mesma linha.")
 
-    st.html('<div class="c-label" style="margin:20px 0 10px">Faturamento por Categoria</div>')
-    with st.container(border=True):
-        st.plotly_chart(_grafico_participacao(dados["pedidos"], meses_selecionados, "ds_categoria"), use_container_width=True)
-
-    st.html('<div class="c-label" style="margin:20px 0 10px">Faturamento por Subcategoria</div>')
-    with st.container(border=True):
-        st.plotly_chart(_grafico_participacao(dados["pedidos"], meses_selecionados, "ds_subcategoria"), use_container_width=True)
-    note("Faturamento sem frete (valor do item antes de frete/desconto) — % é a participação da categoria/subcategoria no faturamento total do período selecionado.")
+    col_cat, col_subcat = st.columns(2)
+    with col_cat:
+        st.html('<div class="c-label" style="margin:20px 0 10px">Faturamento por Categoria</div>')
+        with st.container(border=True):
+            st.plotly_chart(_grafico_pizza_participacao(dados["pedidos"], meses_selecionados, "ds_categoria"), use_container_width=True)
+    with col_subcat:
+        st.html('<div class="c-label" style="margin:20px 0 10px">Faturamento por Subcategoria</div>')
+        with st.container(border=True):
+            st.plotly_chart(_grafico_pizza_participacao(dados["pedidos"], meses_selecionados, "ds_subcategoria"), use_container_width=True)
+    note("Faturamento sem frete (valor do item antes de frete/desconto) — % é a participação no faturamento total do período selecionado. "
+         "Categorias fora das 7 de maior faturamento (no histórico completo) somam em \"Outros\".")
