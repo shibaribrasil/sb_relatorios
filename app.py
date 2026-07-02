@@ -17,8 +17,8 @@ st.set_page_config(
 )
 
 pages = [
-    st.Page(google_ads.render, title="Google Ads", icon="📊", url_path="google-ads"),
     st.Page(vendas.render, title="Vendas", icon="🛒", url_path="vendas", default=True),
+    st.Page(google_ads.render, title="Google Ads", icon="📊", url_path="google-ads"),
 ]
 
 pg = st.navigation(pages)
