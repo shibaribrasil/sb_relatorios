@@ -3,9 +3,7 @@
 Regras de negócio e definição de cada indicador: ver specs/vendas.md.
 Não altere cálculo/filtro sem antes ler (e, se preciso, atualizar) esse spec.
 """
-import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -17,18 +15,6 @@ from common.design import (
     PLUM, TAUPE, OK_BG, BAD, GRID, plotly_layout,
     CATEGORICAL_PALETTE, MUTED,
 )
-
-# Mapa código IBGE (2 dígitos) -> sigla de UF — tabela fixa e pública do IBGE,
-# usada pra casar o GeoJSON (que só tem "codarea") com ds_uf (sigla) dos dados.
-CODAREA_PARA_UF = {
-    "11": "RO", "12": "AC", "13": "AM", "14": "RR", "15": "PA", "16": "AP", "17": "TO",
-    "21": "MA", "22": "PI", "23": "CE", "24": "RN", "25": "PB", "26": "PE", "27": "AL", "28": "SE", "29": "BA",
-    "31": "MG", "32": "ES", "33": "RJ", "35": "SP",
-    "41": "PR", "42": "SC", "43": "RS",
-    "50": "MS", "51": "MT", "52": "GO", "53": "DF",
-}
-
-GEOJSON_UF_PATH = Path(__file__).resolve().parent.parent / "common" / "geo" / "brasil_uf.geojson"
 
 DATASET = "dbt_dw_rpt"
 
@@ -45,15 +31,6 @@ BRT = timezone(timedelta(hours=-3))  # Brasil não observa horário de verão de
 def carregar_dados():
     client = bq.get_client()
     return bq.query_tables(client, DATASET, TABELAS)
-
-
-@st.cache_data
-def _carregar_geojson_uf():
-    with open(GEOJSON_UF_PATH, encoding="utf-8") as f:
-        gj = json.load(f)
-    for feature in gj["features"]:
-        feature["properties"]["sigla"] = CODAREA_PARA_UF.get(feature["properties"]["codarea"])
-    return gj
 
 
 def _hoje_brt():
@@ -139,28 +116,6 @@ def _filtrar_pedidos_mes(df_pedidos, meses_selecionados):
     df = df_pedidos.copy()
     df["dt_prim_dia_mes"] = pd.to_datetime(df["dt_prim_dia_mes"]).dt.date
     return df[df["dt_prim_dia_mes"].isin(meses_selecionados)]
-
-
-def _mapa_pedidos_estado(df_pedidos, meses_selecionados):
-    """Choropleth de quantidade de pedidos por UF, para os meses
-    selecionados (segue o mesmo filtro de mês do resto da seção 'Mês').
-    Cor sequencial de 1 só tom (plum, claro → escuro) — magnitude, não
-    identidade. Pedidos sem UF cadastrada (~1% dos clientes) são excluídos
-    do mapa — não têm onde ser desenhados. Ver specs/vendas.md."""
-    sel = _filtrar_pedidos_mes(df_pedidos, meses_selecionados)
-    sel = sel[sel["ds_uf"].notna() & (sel["ds_uf"] != "") & (sel["ds_uf"] != "0")]
-
-    agrupado = sel.groupby("ds_uf")["cd_pedido"].nunique().reset_index(name="qt_pedidos")
-
-    fig = go.Figure(go.Choropleth(
-        geojson=_carregar_geojson_uf(), locations=agrupado["ds_uf"], featureidkey="properties.sigla",
-        z=agrupado["qt_pedidos"], colorscale=[[0, "#e8d5e2"], [1, PLUM]],
-        marker_line_color="white", marker_line_width=0.5,
-        colorbar=dict(title="Pedidos", ticks="outside"),
-    ))
-    fig.update_geos(fitbounds="geojson", visible=False)
-    plotly_layout(fig, height=450, margin=dict(l=0, r=0, t=0, b=0))
-    return fig
 
 
 def _tabela_pedidos_detalhe(df_pedidos, meses_selecionados):
@@ -480,14 +435,6 @@ def render():
             st.plotly_chart(_grafico_pizza_participacao(dados["pedidos"], meses_selecionados, "ds_subcategoria"), use_container_width=True)
     note("Faturamento sem frete (valor do item antes de frete/desconto) — % é a participação no faturamento total do período selecionado. "
          "Categorias fora das 7 de maior faturamento (no histórico completo) somam em \"Outros\".")
-
-    st.html('<div class="c-label" style="margin:20px 0 10px">Pedidos por Estado</div>')
-    try:
-        with st.container(border=True):
-            st.plotly_chart(_mapa_pedidos_estado(dados["pedidos"], meses_selecionados), use_container_width=True)
-        note("Quantidade de pedidos por UF do cliente, no(s) mês(es) selecionado(s). Pedidos sem UF cadastrada não aparecem no mapa.")
-    except Exception as e:
-        st.error(f"Erro ao montar o mapa de Pedidos por Estado: {e}")
 
     # ═══ CLIENTES ═══
     # Cada bloco tem seu próprio try/except (mesmo padrão de isolamento de

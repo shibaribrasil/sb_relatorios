@@ -153,13 +153,9 @@ Valor: `vl_faturamento_total` somado por `ds_categoria`, depois por `ds_subcateg
 
 **Regra de negócio: "faturamento sem frete" = `vl_faturamento_total`** (pedido explicitamente pelo usuário). Não é preciso subtrair frete de nada — `vl_faturamento_total` (= `vl_total_item` em `tb_pedido`) já é o valor bruto do item, calculado **antes** de frete e desconto entrarem na conta (ver Tabela "Pedidos do Mês" acima). É diferente de "Faturamento Bruto" dos blocos de cards (que é `vl_total_pedido`, já com frete/desconto aplicados) — os dois "faturamento" deste relatório não são a mesma base, ver "Limitações conhecidas".
 
-### Mapa "Pedidos por Estado" (v7, 2026-07-01)
+### Mapa "Pedidos por Estado" — removido (v8, 2026-07-02)
 
-Choropleth (`_mapa_pedidos_estado()`) de `count(distinct cd_pedido)` por UF do cliente (`ds_uf`, coluna nova em `rpt_vendas_pedidos` — vem de `tb_cliente.ds_endereco_uf`, via `left join` por `cd_contato` em `rpt_vendas_pedidos.sql`), para os meses selecionados no filtro de topo (**segue o mesmo filtro de mês** do resto da seção "Mês" — diferente da seção "Clientes", que usa janela própria de 60 dias). Cor sequencial de 1 tom só (plum claro → escuro) — é magnitude (quantidade), não identidade, então não usa a paleta categórica.
-
-Contornos geográficos: `common/geo/brasil_uf.geojson`, baixado da API oficial de malhas territoriais do IBGE (`servicodados.ibge.gov.br/api/v2/malhas/BR`, resolução simplificada, ~489 KB) — o Plotly não traz limites de estado do Brasil embutidos (só dos EUA). O GeoJSON do IBGE identifica cada estado por `codarea` (código IBGE de 2 dígitos, ex. "35" = SP), não pela sigla da UF — `_carregar_geojson_uf()` adiciona a propriedade `sigla` a cada feature via um mapa fixo `CODAREA_PARA_UF` (tabela pública do IBGE, 27 UFs) em `reports/vendas.py`, pra poder casar com `ds_uf` dos dados.
-
-**Limitação:** pedidos de clientes sem UF cadastrada (~1% da base, valor vazio ou `"0"` em `ds_endereco_uf`) não aparecem no mapa — não há onde desenhá-los. Não afeta os outros indicadores da página, só este mapa.
+Existiu brevemente na v7 (choropleth por UF, GeoJSON do IBGE) e foi **removido a pedido do usuário** ("não deu certo") — apresentou algum problema em produção (Streamlit Cloud) que não foi possível reproduzir localmente (ambiente de desenvolvimento local preso em Python 3.8, incompatível com a versão de `pandas` fixada em `requirements.txt`). Removido por completo: função `_mapa_pedidos_estado()`/`_carregar_geojson_uf()` e o mapa `CODAREA_PARA_UF` em `reports/vendas.py`, o arquivo `common/geo/brasil_uf.geojson`, e a coluna `ds_uf` (só existia pra alimentar o mapa) em `rpt_vendas_pedidos.sql` — a coluna `cd_contato` (adicionada na mesma leva, mas usada pela tabela "Clientes que Mais Gastaram") foi mantida. Se o mapa for retomado no futuro, considerar investigar a causa raiz antes de reimplementar — não foi identificada nesta rodada.
 
 ## Seção "Clientes — Retorno" (v6, 2026-07-01)
 
