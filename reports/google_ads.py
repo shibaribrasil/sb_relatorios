@@ -4,6 +4,7 @@ Regras de negócio e definição de cada indicador: ver specs/google-ads.md.
 Não altere cálculo/filtro sem antes ler (e, se preciso, atualizar) esse spec.
 """
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -626,6 +627,37 @@ def gerar_oportunidades(oportunidades, data_referencia):
     return finais
 
 
+# As três funções abaixo isolam cada bloco que chama a Claude API (mais
+# lento do relatório) para poderem rodar em paralelo em render() via
+# ThreadPoolExecutor, em vez de em série — cada uma mantém o próprio
+# try/except, mesmo comportamento de isolamento de falha de antes (se uma
+# chamada à IA falhar, as outras seções do relatório continuam de pé).
+def _tarefa_diagnostico(dados):
+    try:
+        sinais = detectar_sinais(dados)
+        return gerar_diagnostico(sinais, _data_referencia_brt())
+    except Exception:
+        return None
+
+
+def _tarefa_oportunidades(dados):
+    try:
+        gaps = detectar_oportunidades(dados)
+        return gerar_oportunidades(gaps, _data_referencia_brt())
+    except Exception:
+        return None
+
+
+def _tarefa_resultado_acoes(dados, acoes):
+    try:
+        if not acoes:
+            return []
+        acoes_avaliaveis = detectar_acoes_avaliaveis(acoes, dados)
+        return gerar_resultado_acoes(acoes_avaliaveis, _data_referencia_brt())
+    except Exception:
+        return None
+
+
 def render():
     inject_css()
 
@@ -680,15 +712,30 @@ def render():
             </div>
             """)
 
-            # ═══ DIAGNÓSTICO EXECUTIVO ═══
-            # Try/except isolado do try/except geral desta função: se a
-            # Claude API falhar, o resto do relatório (100% dado, sem
-            # dependência de IA) continua funcionando normalmente.
+            # ═══ CHAMADAS À CLAUDE API EM PARALELO ═══
+            # Diagnóstico, Oportunidades e Resultado das Últimas Ações eram
+            # 3 chamadas sequenciais à Claude API — cada uma isolada por
+            # try/except, mas uma esperando a outra terminar. Como as três
+            # são independentes entre si (nenhuma usa o resultado da outra),
+            # disparamos juntas e só bloqueamos na leitura do resultado; no
+            # pior caso (cache frio do dia) o tempo de espera cai de "soma
+            # das três" pra "tempo da mais lenta". carregar_acoes() é leitura
+            # de arquivo local, mantida fora do pool (rápida, sem motivo pra
+            # paralelizar) mas isolada no próprio try/except de sempre.
             try:
-                sinais = detectar_sinais(dados)
-                diagnosticos = gerar_diagnostico(sinais, _data_referencia_brt())
+                acoes = carregar_acoes()
             except Exception:
-                diagnosticos = None
+                acoes = None
+
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                fut_diagnostico = executor.submit(_tarefa_diagnostico, dados)
+                fut_oportunidades = executor.submit(_tarefa_oportunidades, dados)
+                fut_resultado_acoes = executor.submit(_tarefa_resultado_acoes, dados, acoes)
+                diagnosticos = fut_diagnostico.result()
+                oportunidades = fut_oportunidades.result()
+                resultados_acoes = fut_resultado_acoes.result()
+
+            # ═══ DIAGNÓSTICO EXECUTIVO ═══
             if diagnosticos is not None:
                 section_title("Diagnóstico Executivo")
                 if diagnosticos:
@@ -705,12 +752,6 @@ def render():
                 note("Diagnóstico Executivo indisponível no momento — o restante do relatório não é afetado.")
 
             # ═══ OPORTUNIDADES ═══
-            # Mesmo padrão de try/except isolado do Diagnóstico Executivo.
-            try:
-                gaps = detectar_oportunidades(dados)
-                oportunidades = gerar_oportunidades(gaps, _data_referencia_brt())
-            except Exception:
-                oportunidades = None
             if oportunidades is not None:
                 section_title("Oportunidades")
                 if oportunidades:
@@ -953,27 +994,9 @@ def render():
                 )
                 note("Anúncios com força \"Ruim\" ou \"Regular\" perdem posição no leilão — adicionar mais variações de título/descrição costuma elevar para \"Boa\"/\"Excelente\".")
 
-            # Carrega o log de ações uma vez — alimenta as duas seções abaixo
-            # (Resultado primeiro, depois o registro em si). Try/except
-            # isolado — lê um arquivo local, não depende de BigQuery nem da
-            # Claude API; se faltar ou vier malformado, o resto do
-            # relatório não é afetado.
-            try:
-                acoes = carregar_acoes()
-            except Exception:
-                acoes = None
-
             # ═══ RESULTADO DAS ÚLTIMAS AÇÕES ═══
-            # Mesmo padrão de try/except isolado do Diagnóstico Executivo e
-            # Oportunidades.
-            try:
-                if acoes:
-                    acoes_avaliaveis = detectar_acoes_avaliaveis(acoes, dados)
-                    resultados_acoes = gerar_resultado_acoes(acoes_avaliaveis, _data_referencia_brt())
-                else:
-                    resultados_acoes = []
-            except Exception:
-                resultados_acoes = None
+            # acoes e resultados_acoes já foram calculados no bloco paralelo
+            # lá em cima (junto com Diagnóstico e Oportunidades).
             if resultados_acoes is not None:
                 section_title("Resultado das Últimas Ações")
                 if resultados_acoes:
