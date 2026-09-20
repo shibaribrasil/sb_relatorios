@@ -63,10 +63,8 @@ Todos os componentes `*_rateio` são **aditivos por linha**.
 
 **Faturamento** (o que o cliente pagou) = `vl_liquido_item` = `vl_receita_liquida_produto + vl_frete_pago_rateio`.
 
-### Duas margens — sempre com o nome completo
-- **Margem bruta** = receita líquida de produtos − CMV (CMV = custo dos produtos vendidos + custo dos brindes). % sobre a receita líquida de produtos.
-- **Margem de contribuição** = margem bruta + resultado de frete − taxas de pagamento − reembolsos − embalagem − imposto (antes de mídia). % sobre a receita líquida de produtos.
-- Nenhuma tela mostra "margem" sem dizer qual.
+### Qual margem é exibida
+Os relatórios exibem **somente a margem de contribuição** (antes de mídia) = receita líquida de produtos − CMV + resultado de frete − taxas de pagamento − reembolsos − embalagem − imposto. Não se exibe margem bruta. **CMV** = custo dos produtos vendidos + custo dos brindes, vindo de `vl_custo_linha` (o custo da `tb_pedido` já reflete a última compra vigente na data do pedido). Toda tela diz "margem de contribuição" por extenso.
 
 ### Margem em %
 `Σ vl_margem_contribuicao ÷ Σ vl_receita_liquida_produto` (denominador = receita líquida de produtos, sem frete). **Nunca** média de percentuais de linha ou de dia; **nunca** calcular % com poucos pedidos como KPI de decisão (ver "Volume" abaixo).
@@ -121,8 +119,9 @@ Jan–Abr/26 ficam entre 57,9% e 62,6% (frete subsidiado em pedidos ≥ R$ 400 e
 
 - **Cancelamentos:** pedidos com `ds_status_pedido = 'CANCELADO'` no período (pela data do pedido). `% = cancelados ÷ (válidos + cancelados)`. Detalhe por tipo, a partir de `ds_status_pagamento`: `pending` = sem pagamento (PIX/boleto que expirou), `voided` = anulados, `refunded` = estornados, `paid` = cancelados após pago.
 - **Meta de faturamento** (`dbt_dw_az.tb_objetivo_faturamento`): faturamento (`vl_liquido_item`, mesma base da meta) ÷ meta acumulada até hoje (mês corrente) ou meta cheia (mês passado). Meses futuros ficam de fora. **A meta ainda precisa ser revista** (foi feita no início do ano e não foi seguida) — o atingimento é referência de ritmo. Gráficos: faturamento acumulado × meta acumulada do último mês selecionado; faturamento × meta por mês (histórico).
-- **CMV:** card próprio, com % da receita líquida e o valor de brindes incluído.
+- **CMV:** card próprio, com % da receita líquida e o valor de brindes incluído. O custo do produto **não** inclui embalagem (a precificação inclui); por isso a embalagem entra à parte, como estimativa — levantamento real no backlog (B052).
 - **Comparação com o período anterior:** com um único mês selecionado; mês corrente compara com o **mesmo intervalo de dias** do mês anterior (ex.: 01–20/09 × 01–20/08). O card mostra o valor do período anterior entre parênteses para poder ser conferido. Conferência com o painel da Nuvemshop: a soma de `total` de pedidos pagos em 01–20/09 bate com o faturamento do relatório (R$ 8.289); a variação depende do corte de dias e de quais status a Nuvemshop conta, então compare sempre com o intervalo indicado no card.
 - **Código do pedido:** `cd_pedido_nuvemshop` (orders.number, o mesmo do painel da loja). `cd_pedido` é o número interno do Bling e **não** deve ser exibido.
 - **Dado faltante:** `ds_incompletude` diz o tipo (`sem custo`, `sem taxa de pagamento`, `sem dados da Nuvemshop`, ou combinação). Na visão por pedido, une os tipos das linhas.
 - **Embalagem:** estimativa fixa (R$ 2,50 por pedido); o card e a cascata sempre dizem "estimada".
+- **Origem das vendas:** `ds_origem_venda` / `ds_midia_venda` de `dbt_dw_az.tb_atribuicao_pedido` (classificação da URL de entrada: UTM + detecção de clique de anúncio), unidas a `tb_pedido` por `cd_pedido`. Os parâmetros UTM crus (`ds_utm_source/medium/campaign` na `tb_pedido`) cobrem só ~7% dos pedidos de 2026 (25 de 364); a classificação atribui ~45% dos pedidos ao Google Ads (cpc) e ~12% ao Google orgânico (Shopping). Pendência de dados: unificar variações de nome (`ig`/`instagram`, `Instagram`).

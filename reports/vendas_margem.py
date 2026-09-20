@@ -7,10 +7,9 @@ Toda regra vive em `dbt_dw_az.tb_pedido` (projeto sb_dw_dbt). Aqui só se filtra
 soma e apresenta: margem em % é sempre soma(margem) ÷ soma(receita líquida de
 produtos), nunca média de percentuais.
 
-Dois conceitos de margem aparecem SEMPRE com o nome completo:
-  • Margem bruta            = receita líquida de produtos − CMV
-  • Margem de contribuição  = margem bruta + resultado de frete − taxas − reembolsos
-                              − embalagem − imposto (antes de mídia)
+A única margem exibida é a MARGEM DE CONTRIBUIÇÃO (antes de mídia) =
+receita líquida de produtos − CMV + resultado de frete − taxas de pagamento
+− reembolsos − embalagem − imposto. Toda tela diz "margem de contribuição".
 """
 import os
 import textwrap
@@ -77,11 +76,22 @@ def carregar_dados():
          WHERE ds_status_pedido = 'CANCELADO' AND NOT fg_pedido_valido AND dt_pedido >= DATE '{INICIO_HISTORICO}'
          GROUP BY cd_codigo_interno
     """)
+    origem = bq.query_df(client, f"""
+        SELECT p.cd_codigo_interno,
+               COALESCE(a.ds_origem_venda, '(sem atribuição)') AS origem,
+               COALESCE(a.ds_midia_venda, '(sem atribuição)') AS midia
+          FROM (SELECT DISTINCT cd_codigo_interno, cd_pedido FROM {base}
+                 WHERE fg_pedido_valido AND dt_pedido >= DATE '{INICIO_HISTORICO}') AS p
+     LEFT JOIN (SELECT cd_pedido, ANY_VALUE(ds_origem_venda) AS ds_origem_venda, ANY_VALUE(ds_midia_venda) AS ds_midia_venda
+                  FROM `{bq.PROJECT}.dbt_dw_az.tb_atribuicao_pedido` GROUP BY cd_pedido) AS a USING (cd_pedido)
+    """)
     metas = bq.query_df(client, f"""
         SELECT dt_prim_dia_mes, dt_data, vl_meta_dia_acumulado, vl_objetivo_total
           FROM `{bq.PROJECT}.dbt_dw_az.tb_objetivo_faturamento`
          WHERE dt_prim_dia_mes >= DATE '{INICIO_HISTORICO}'
     """)
+    vendas = vendas.merge(origem, on="cd_codigo_interno", how="left")
+    vendas[["origem", "midia"]] = vendas[["origem", "midia"]].fillna("(sem atribuição)")
     vendas["dt_pedido"] = pd.to_datetime(vendas["dt_pedido"])
     vendas["mes"] = vendas["dt_pedido"].dt.to_period("M").dt.to_timestamp()
     vendas["ds_categoria"] = vendas["ds_categoria"].fillna("Sem categoria")
@@ -114,10 +124,7 @@ def _somas(df):
 
 def _razoes(s):
     rec = s["vl_receita_liquida_produto"]
-    margem_bruta = rec - s["vl_custo_linha"]
     return {
-        "margem_bruta": margem_bruta,
-        "margem_bruta_pct": (margem_bruta / rec) if rec else None,
         "margem_pct": (s["vl_margem_contribuicao"] / rec) if rec else None,
         "cmv_pct": (s["vl_custo_linha"] / rec) if rec else None,
         "ticket": (s["vl_liquido_item"] / s["pedidos"]) if s["pedidos"] else None,
@@ -201,7 +208,6 @@ def _grafico_cascata(s, r):
         ("− Descontos", -s["vl_desconto_venda_rateio"], "relative"),
         ("= Receita líquida de produtos", None, "total"),
         ("− CMV (custo dos produtos)", -s["vl_custo_linha"], "relative"),
-        ("= Margem bruta", None, "total"),
         ("+ Frete pago pelo cliente", s["vl_frete_pago_rateio"], "relative"),
         ("− Frete real (etiqueta)", -s["vl_frete_real_rateio"], "relative"),
         ("− Taxas de pagamento", -s["vl_taxa_pedido_rateio"], "relative"),
@@ -214,7 +220,6 @@ def _grafico_cascata(s, r):
     passos = [p for p in passos if p[2] == "total" or abs(p[1]) >= 0.005]
     subtotais = {
         "= Receita líquida de produtos": s["vl_receita_liquida_produto"],
-        "= Margem bruta": r["margem_bruta"],
         "= Margem de contribuição": s["vl_margem_contribuicao"],
     }
     nomes = [p[0] for p in passos]
@@ -334,8 +339,20 @@ def _tabela_pedidos(sel):
         "Pagamento": g["ds_meio_pagamento_nuvemshop"].fillna("—"),
         "Receita líq.": g["rec"], "CMV": g["custo"], "Taxa": g["taxa"],
         "Resultado frete": g["frete_pago"] - g["frete_real"],
-        "Marg. contrib. R$": g["marg"], "Marg. contrib. %": g["pct"],
+        "Margem contrib. R$": g["marg"], "Margem contrib. %": g["pct"],
         "Dado faltante": g["incompletude"].replace("", "—"),
+    })
+
+
+def _tabela_origem(sel):
+    g = sel.groupby(["origem", "midia"], as_index=False).agg(
+        pedidos=("cd_codigo_interno", "nunique"), rec=("vl_receita_liquida_produto", "sum"), marg=("vl_margem_contribuicao", "sum"),
+    ).sort_values(["pedidos", "rec"], ascending=False)
+    g["pct_ped"] = g["pedidos"] / g["pedidos"].sum()
+    g["pct"] = g["marg"] / g["rec"]
+    return pd.DataFrame({
+        "Origem": g["origem"], "Mídia": g["midia"], "Pedidos": g["pedidos"], "% dos pedidos": g["pct_ped"],
+        "Receita líq.": g["rec"], "Margem de contrib. (R$)": g["marg"], "Margem de contrib. (%)": g["pct"],
     })
 
 
@@ -344,11 +361,10 @@ def _tabela_produtos(sel):
         qtd=("qt_item", "sum"), rec=("vl_receita_liquida_produto", "sum"),
         custo=("vl_custo_linha", "sum"), marg=("vl_margem_contribuicao", "sum"),
     ).sort_values("marg", ascending=False)
-    g["bruta_pct"] = (g["rec"] - g["custo"]) / g["rec"]
     g["pct"] = g["marg"] / g["rec"]
     return pd.DataFrame({
         "Produto": g["nm_produto"], "Qtd": g["qtd"].astype(int), "Receita líq.": g["rec"], "CMV": g["custo"],
-        "Marg. bruta %": g["bruta_pct"], "Marg. contrib. R$": g["marg"], "Marg. contrib. %": g["pct"],
+        "Margem de contrib. (R$)": g["marg"], "Margem de contrib. (%)": g["pct"],
     })
 
 
@@ -441,7 +457,6 @@ def render():
     # ═══ DA RECEITA À MARGEM ═══
     section_title("Da receita à margem")
     t_rec, c_rec = d("vl_receita_liquida_produto")
-    t_mb, c_mb = d("margem_bruta_pct", "pp", "r")
     t_mc, c_mc = d("vl_margem_contribuicao")
     t_mcp, c_mcp = d("margem_pct", "pp", "r")
     render_cards([
@@ -449,8 +464,6 @@ def render():
         card("(−) Descontos", brl(s["vl_desconto_venda_rateio"]), sobre_rec(s["vl_desconto_venda_rateio"]) + " · cupom, PIX e promoção"),
         card("Receita líquida de produtos", brl(rec), "bruta − descontos, sem frete", delta=t_rec, delta_color=c_rec),
         card("(−) CMV", brl(s["vl_custo_linha"]), f"{sobre_rec(s['vl_custo_linha'])} · inclui {brl(s['custo_brinde'])} de brindes"),
-        card("Margem bruta (%)", pct(r["margem_bruta_pct"]), f"receita líq. − CMV = {brl(r['margem_bruta'])}",
-             delta=t_mb, delta_color=c_mb),
         card("(−) Taxas de pagamento", brl(s["vl_taxa_pedido_rateio"]), sobre_rec(s["vl_taxa_pedido_rateio"])),
         card("Resultado de frete", brl(s["vl_resultado_frete"]), f"pago {brl(s['vl_frete_pago_rateio'])} − real {brl(s['vl_frete_real_rateio'])}"),
         card("(−) Reembolsos", brl(s["vl_reembolso_rateio"]), sobre_rec(s["vl_reembolso_rateio"])),
@@ -496,6 +509,19 @@ def render():
     note("Faturamento = produtos líquidos + frete pago (mesma base da meta). A meta de faturamento foi definida no início do ano e não foi revista: "
          "use o atingimento como referência de ritmo, não como veredito.")
 
+    # ═══ ORIGEM ═══
+    section_title("Origem das vendas")
+    st.dataframe(_tabela_origem(sel), hide_index=True, use_container_width=True,
+                 column_config={"Pedidos": st.column_config.NumberColumn(width=80),
+                                "% dos pedidos": st.column_config.NumberColumn(format="percent", width=110),
+                                "Receita líq.": st.column_config.NumberColumn(format="R$ %.2f", width=110),
+                                "Margem de contrib. (R$)": st.column_config.NumberColumn(format="R$ %.2f", width=150),
+                                "Margem de contrib. (%)": st.column_config.NumberColumn(format="percent", width=150)})
+    note("Origem detectada pela <strong>URL de entrada</strong> do pedido (UTM e clique de anúncio), classificada no dbt (tb_atribuicao_pedido). "
+         "\"(sem parâmetro)\" = entrou sem UTM nem clique de anúncio identificável (direto, orgânico ou link sem marcação); "
+         "\"(sem landing_url)\" = pedido sem sessão rastreável. Os parâmetros UTM crus (<code>ds_utm_*</code>) cobrem só ~7% dos pedidos, por isso o Google Ads "
+         "aparece pela detecção de clique. Variações de nome como \"ig\" e \"instagram\" ainda não estão unificadas na classificação.")
+
     # ═══ EVOLUÇÃO ═══
     section_title("Evolução mensal (desde ago/2025, não segue o filtro)")
     with st.container(border=True):
@@ -513,18 +539,17 @@ def render():
         with st.container(border=True):
             st.plotly_chart(_grafico_categorias(prod), use_container_width=True)
     with col_b:
-        st.html('<div class="c-label" style="margin:0 0 10px">Margem por produto — bruta e de contribuição</div>')
+        st.html('<div class="c-label" style="margin:0 0 10px">Margem de contribuição por produto</div>')
         st.dataframe(_tabela_produtos(prod), hide_index=True, use_container_width=True, height=380,
-                     column_config={"Produto": st.column_config.TextColumn(width=165),
+                     column_config={"Produto": st.column_config.TextColumn(width=190),
                                     "Qtd": st.column_config.NumberColumn(width=42),
                                     "Receita líq.": st.column_config.NumberColumn(format="R$ %.2f", width=88),
                                     "CMV": st.column_config.NumberColumn(format="R$ %.2f", width=78),
-                                    "Marg. bruta %": st.column_config.NumberColumn(format="percent", width=96),
-                                    "Marg. contrib. R$": st.column_config.NumberColumn(format="R$ %.2f", width=110),
-                                    "Marg. contrib. %": st.column_config.NumberColumn(format="percent", width=96)})
-    note("<strong>Marg. bruta %</strong> = (receita líq. − CMV) ÷ receita líq.; <strong>Marg. contrib.</strong> (margem de contribuição) também desconta a parte do produto "
-         "nas taxas de pagamento, no frete (pago − real), nos reembolsos e na embalagem. Brindes (ex.: Sticker) ficam fora desta seção, "
-         "mas o custo deles entra no CMV do período. Categoria vem do cadastro do Bling.")
+                                    "Margem de contrib. (R$)": st.column_config.NumberColumn(format="R$ %.2f", width=140),
+                                    "Margem de contrib. (%)": st.column_config.NumberColumn(format="percent", width=135)})
+    note("<strong>Margem de contribuição</strong> do produto = receita líq. − CMV − a parte do produto nas taxas de pagamento, no frete (pago − real), "
+         "nos reembolsos e na embalagem; % sobre a receita líq. Brindes (ex.: Sticker) ficam fora desta seção, mas o custo deles entra no CMV do período. "
+         "Categoria vem do cadastro do Bling.")
 
     # ═══ PEDIDOS ═══
     section_title("Pedidos do período")
@@ -533,13 +558,13 @@ def render():
                                 "Data": st.column_config.DateColumn(width=84),
                                 "Status": st.column_config.TextColumn(width=76),
                                 "Pagamento": st.column_config.TextColumn(width=76),
-                                "Receita líq.": st.column_config.NumberColumn(format="R$ %.2f", width=90),
+                                "Receita líq.": st.column_config.NumberColumn(format="R$ %.2f", width=86),
                                 "CMV": st.column_config.NumberColumn(format="R$ %.2f", width=70),
                                 "Taxa": st.column_config.NumberColumn(format="R$ %.2f", width=62),
                                 "Resultado frete": st.column_config.NumberColumn(format="R$ %.2f", width=95),
-                                "Marg. contrib. R$": st.column_config.NumberColumn(format="R$ %.2f", width=100),
-                                "Marg. contrib. %": st.column_config.NumberColumn(format="percent", width=92),
-                                "Dado faltante": st.column_config.TextColumn(width=110)})
+                                "Margem contrib. R$": st.column_config.NumberColumn(format="R$ %.2f", width=112),
+                                "Margem contrib. %": st.column_config.NumberColumn(format="percent", width=105),
+                                "Dado faltante": st.column_config.TextColumn(width=100)})
     note("Pedido = <strong>código da Nuvemshop</strong> (o mesmo do painel da loja); \"Bling nnnn\" aparece só quando o pedido não tem correspondente na Nuvemshop. "
-         "Uma linha por pedido, sem dados do cliente. Marg. contrib. = margem de contribuição (R$ e % da receita líquida de produtos do próprio pedido); Resultado frete = frete pago − frete real. "
+         "Uma linha por pedido, sem dados do cliente. Margem contrib. = margem de contribuição (R$ e % da receita líquida de produtos do próprio pedido); Resultado frete = frete pago − frete real. "
          "\"Dado faltante\" diz o que falta: sem custo, sem taxa de pagamento ou sem dados da Nuvemshop.")
