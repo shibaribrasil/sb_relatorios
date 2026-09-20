@@ -34,8 +34,8 @@ Reconhecido no mês do **pedido** (a API da Nuvemshop não tem data do reembolso
 ### R4 — Embalagem e imposto
 Parâmetros com vigência em `stg_parametro_operacional` (não em seed): embalagem **R$ 2,50 por pedido**; imposto **0%** (sem CNPJ). Ao mudar, adicionar linha nova com a data de início — nunca editar a antiga.
 
-### R5 — Brindes
-Sem tratamento especial: brinde com preço e custo entra como produto comum.
+### R5 — Brindes (`fg_brinde`)
+Brinde = produto da lista `stg_produto_brinde` (hoje: Sticker Shibari Brasil) num pedido com ao menos uma linha de venda. Na Nuvemshop o brinde entra com preço cheio e desconto promocional de 100% do próprio valor: o cliente **não paga nada**. Regras: (a) a linha do brinde tem receita líquida ≈ 0 (desconto = valor da linha); (b) ele fica **fora do rateio** de frete, taxa, reembolso e embalagem, que se dividem só entre as linhas de venda; (c) o **custo do brinde é real** e entra no CMV do período; (d) **relatórios de produto e categoria excluem** linhas de brinde; (e) brinde não conta como item vendido. O total do pedido e a margem do pedido não mudam.
 
 ### R6 — Mídia
 Não é por pedido. A margem por linha é **antes de mídia**. "Margem após mídia" só existe em agregado (dia/mês) subtraindo o gasto de Google Ads (`tb_gads_conta_diario`, dataset `dbt_dw_us_az`, **histórico desde 15/06/2026** — data da integração; períodos anteriores não têm mídia e não devem mostrar margem após mídia nem CAC).
@@ -62,6 +62,11 @@ Todos os componentes `*_rateio` são **aditivos por linha**.
 `vl_margem_contribuicao = vl_receita_liquida_produto + vl_resultado_frete − vl_custo_linha − vl_taxa_pedido_rateio − vl_reembolso_rateio − vl_embalagem_rateio − vl_imposto_rateio`
 
 **Faturamento** (o que o cliente pagou) = `vl_liquido_item` = `vl_receita_liquida_produto + vl_frete_pago_rateio`.
+
+### Duas margens — sempre com o nome completo
+- **Margem bruta** = receita líquida de produtos − CMV (CMV = custo dos produtos vendidos + custo dos brindes). % sobre a receita líquida de produtos.
+- **Margem de contribuição** = margem bruta + resultado de frete − taxas de pagamento − reembolsos − embalagem − imposto (antes de mídia). % sobre a receita líquida de produtos.
+- Nenhuma tela mostra "margem" sem dizer qual.
 
 ### Margem em %
 `Σ vl_margem_contribuicao ÷ Σ vl_receita_liquida_produto` (denominador = receita líquida de produtos, sem frete). **Nunca** média de percentuais de linha ou de dia; **nunca** calcular % com poucos pedidos como KPI de decisão (ver "Volume" abaixo).
@@ -111,3 +116,13 @@ Jan–Abr/26 ficam entre 57,9% e 62,6% (frete subsidiado em pedidos ≥ R$ 400 e
 - **Tabelas:** por produto e por pedido. **Sem nome de cliente** (decisão de privacidade: a URL do app é fixa; a tabela do relatório antigo expunha nome e pedido).
 - **Cache:** 15 min (`ttl=900`); os dados são atualizados de hora em hora.
 - **Desenvolvimento:** variáveis de ambiente `SB_DATASET_PEDIDO` / `SB_TABELA_PEDIDO` apontam para uma cópia de validação; em produção lê `dbt_dw_az.tb_pedido`.
+
+## Indicadores adicionais da página (v2 — 20/set/2026)
+
+- **Cancelamentos:** pedidos com `ds_status_pedido = 'CANCELADO'` no período (pela data do pedido). `% = cancelados ÷ (válidos + cancelados)`. Detalhe por tipo, a partir de `ds_status_pagamento`: `pending` = sem pagamento (PIX/boleto que expirou), `voided` = anulados, `refunded` = estornados, `paid` = cancelados após pago.
+- **Meta de faturamento** (`dbt_dw_az.tb_objetivo_faturamento`): faturamento (`vl_liquido_item`, mesma base da meta) ÷ meta acumulada até hoje (mês corrente) ou meta cheia (mês passado). Meses futuros ficam de fora. **A meta ainda precisa ser revista** (foi feita no início do ano e não foi seguida) — o atingimento é referência de ritmo. Gráficos: faturamento acumulado × meta acumulada do último mês selecionado; faturamento × meta por mês (histórico).
+- **CMV:** card próprio, com % da receita líquida e o valor de brindes incluído.
+- **Comparação com o período anterior:** com um único mês selecionado; mês corrente compara com o **mesmo intervalo de dias** do mês anterior (ex.: 01–20/09 × 01–20/08). O card mostra o valor do período anterior entre parênteses para poder ser conferido. Conferência com o painel da Nuvemshop: a soma de `total` de pedidos pagos em 01–20/09 bate com o faturamento do relatório (R$ 8.289); a variação depende do corte de dias e de quais status a Nuvemshop conta, então compare sempre com o intervalo indicado no card.
+- **Código do pedido:** `cd_pedido_nuvemshop` (orders.number, o mesmo do painel da loja). `cd_pedido` é o número interno do Bling e **não** deve ser exibido.
+- **Dado faltante:** `ds_incompletude` diz o tipo (`sem custo`, `sem taxa de pagamento`, `sem dados da Nuvemshop`, ou combinação). Na visão por pedido, une os tipos das linhas.
+- **Embalagem:** estimativa fixa (R$ 2,50 por pedido); o card e a cascata sempre dizem "estimada".
