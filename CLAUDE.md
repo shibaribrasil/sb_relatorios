@@ -8,25 +8,27 @@ Um único link fixo do Streamlit, com várias páginas internas — uma por rela
 
 ```
 sb_relatorios/
-  streamlit_app.py       # entrypoint: registra as páginas via st.navigation()
+  app.py                 # entrypoint ("Main file path" do Streamlit Cloud): registra as páginas via st.navigation(), agrupadas por cadência
   common/
-    design.py            # tema, CSS, cards, section_title, note, style_color — compartilhado por todo relatório
+    theme.py             # design system de dados (cores, template Plotly) — fonte única de cor; separado da identidade da marca
+    design.py            # CSS e componentes (card, section_title, note, brl, pct) sobre o theme.py — compartilhado por todo relatório
     bigquery.py           # client BigQuery e helpers de query compartilhados
   reports/
     google_ads.py         # lógica e layout do relatório de Google Ads
-    (futuro) vendas.py, financeiro.py, estoque.py
+    vendas_margem.py      # Vendas & Margem de Contribuição (lê dbt_dw_az.tb_pedido; sem tabela rpt)
+    estoque.py
+    (futuro) pulso do dia, clientes, produtos, marketing
   specs/
     google-ads.md          # regras de negócio e especificação de indicadores do relatório
   content/
     acoes-google-ads.md    # log manual de ações tomadas na conta — editado pelo usuário, formatado por IA
-  MIGRACAO-RELATORIOS.md   # histórico e checklist da migração
 ```
 
 ## Log de ações tomadas (`content/`)
 
 Cada relatório pode ter um `content/acoes-<relatorio>.md` — log manual de ações tomadas na conta (ex.: "pausei campanha X", "ajustei orçamento de Y"), editado pelo usuário. Fluxo: o usuário passa notas informais sobre uma ação e pede pra formatar como entrada nova, seguindo o template documentado no topo do próprio arquivo. Esse log alimenta seções do relatório que mostram as últimas ações e avaliam se surtiram resultado — ver `specs/<relatorio>.md` para os detalhes de cada relatório.
 
-Cada novo relatório é uma página nova em `reports/`, registrada em `streamlit_app.py`. Código de tema/estilo/conexão BigQuery deve morar em `common/`, nunca duplicado por relatório.
+Cada novo relatório é uma página nova em `reports/`, registrada em `app.py`. Regra de negócio mora na camada `az` do `sb_dw_dbt` (validada, com teste); o Streamlit só filtra, soma e apresenta — nunca recalcula margem, lucro ou taxa. Cores só vêm de `common/theme.py`. Código de tema/estilo/conexão BigQuery deve morar em `common/`, nunca duplicado por relatório.
 
 ## Regra: especificação de negócio antes de código
 

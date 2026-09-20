@@ -1,0 +1,16 @@
+# Coloque este arquivo em .streamlit/config.toml na raiz do projeto
+[theme]
+base = "light"
+primaryColor = "#2B4C7E"              # azul-marinho da marca: botões, sliders, destaques
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6F9"  # sidebar, cards, inputs
+textColor = "#1E293B"
+font = "sans serif"
+
+# As chaves abaixo exigem versões recentes do Streamlit (1.46+).
+# Se der erro na sua versão, remova-as — o tema básico acima continua funcionando.
+borderColor = "#E2E8F0"
+linkColor = "#2B4C7E"
+baseRadius = "medium"
+chartCategoricalColors = ["#2B4C7E", "#F28C28", "#3BA99C", "#8E6BBF", "#E4577A", "#7CA84F", "#D4A72C", "#5B8DB8"]
+chartSequentialColors = ["#F4F8FD", "#EAF1FB", "#D0E0F4", "#AFC8E8", "#8AAED9", "#6592C6", "#4677B0", "#2B4C7E", "#1B3558", "#122540"]
