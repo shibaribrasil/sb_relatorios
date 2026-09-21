@@ -493,16 +493,26 @@ def render():
     custo_ads = float(ads_sel["vl_custo"].sum())
     if custo_ads > 0:
         margem_pos = s["vl_margem_contribuicao"] - custo_ads
+        g = sel[(sel["origem"] == "google") & (sel["midia"] == "cpc")]
+        rec_g, marg_g = float(g["vl_receita_liquida_produto"].sum()), float(g["vl_margem_contribuicao"].sum())
+        ped_g = int(g["cd_codigo_interno"].nunique())
+        x = lambda v: f"{v:.1f}×".replace(".", ",")
         render_cards([
             card("Investimento Google Ads", brl(custo_ads), f"{pct(custo_ads / rec) if rec else '—'} da receita líq. · {int(ads_sel['qt_cliques'].sum())} cliques"),
             card("Margem após mídia (R$)", brl(margem_pos), "margem de contribuição − investimento Google Ads",
                  variant="ok" if margem_pos > 0 else "bad"),
             card("Margem após mídia (%)", pct(margem_pos / rec) if rec else "—", "÷ receita líq. de produtos"),
-            card("ROAS", f"{s['vl_liquido_item'] / custo_ads:.1f}×".replace(".", ","), "faturamento total ÷ investimento (todas as origens)"),
-            card("Custo por pedido", brl(custo_ads / s["pedidos"]) if s["pedidos"] else "—", "investimento ÷ pedidos totais"),
+            card("ROAS atribuído ao Google", x(rec_g / custo_ads), f"receita líq. de {ped_g} pedidos Google (cpc) ÷ investimento",
+                 ref="piso: só clique identificável na URL"),
+            card("Retorno sobre a margem", x(marg_g / custo_ads), "margem de contribuição dos pedidos Google ÷ investimento",
+                 variant="ok" if marg_g / custo_ads >= 1 else "bad", ref="abaixo de 1× o anúncio perde dinheiro"),
+            card("Investimento por pedido", brl(custo_ads / s["pedidos"]) if s["pedidos"] else "—", "investimento ÷ pedidos de todas as origens"),
         ])
-        note("Inclui <strong>só o Google Ads</strong> (não há outras mídias pagas na base). Os pedidos e a receita são de <strong>todas as origens</strong>, "
-             "então ROAS e custo por pedido são do negócio, não do canal. O histórico do Ads começa em 15/06/2026 — meses anteriores ficam sem esse dado.")
+        note("Inclui <strong>só o Google Ads</strong>. <strong>ROAS atribuído</strong> e <strong>retorno sobre a margem</strong> usam apenas os pedidos que a "
+             "classificação de origem (tb_atribuicao_pedido) liga ao Google pago (cpc), detectado pela URL de entrada — é um <strong>piso</strong>, pois vendas "
+             "influenciadas pelo anúncio sem clique identificável ficam de fora. O <strong>retorno sobre a margem</strong> é o que diz se o anúncio se paga "
+             f"(o ROAS de receita ignora CMV, frete e taxas). Contexto: o Google pago responde por {pct(rec_g / rec) if rec else '—'} da receita líquida do período. "
+             "O histórico do Ads começa em 15/06/2026.")
     else:
         note("Sem custo de Google Ads no período (o histórico do Ads começa em 15/06/2026).")
 
