@@ -338,6 +338,39 @@ def _juntar_incompletude(serie):
     return " + ".join(sorted(tipos))
 
 
+def _detalhe_pedido(sel, cd, linha):
+    """Drill: produtos (linhas) de um pedido, com a margem de contribuição de cada um."""
+    itens = sel[sel["cd_codigo_interno"] == cd].sort_values("vl_receita_liquida_produto", ascending=False)
+    section_title(f"Produtos do pedido {linha['Pedido']} — {linha['Cliente']}")
+    det = pd.DataFrame({
+        "Produto": itens["nm_produto"].fillna("—") + itens["fg_brinde"].map({True: " (brinde)", False: ""}),
+        "Qtd": itens["qt_item"],
+        "Receita líq.": itens["vl_receita_liquida_produto"],
+        "CMV": itens["vl_custo_linha"],
+        "Taxa": itens["vl_taxa_pedido_rateio"],
+        "Resultado frete": itens["vl_resultado_frete"],
+        "Reembolso": itens["vl_reembolso_rateio"],
+        "Embalagem": itens["vl_embalagem_rateio"],
+        "Contrib. R$": itens["vl_margem_contribuicao"],
+        "Contrib. %": (itens["vl_margem_contribuicao"] / itens["vl_receita_liquida_produto"]).where(itens["vl_receita_liquida_produto"] != 0),
+        "Dado faltante": itens["ds_incompletude"].fillna("—"),
+    })
+    st.dataframe(det, hide_index=True, use_container_width=True,
+                 column_config={"Produto": st.column_config.TextColumn(width=180),
+                                "Qtd": st.column_config.NumberColumn(width=40),
+                                "Receita líq.": st.column_config.NumberColumn(format="R$ %.2f", width=80),
+                                "CMV": st.column_config.NumberColumn(format="R$ %.2f", width=68),
+                                "Taxa": st.column_config.NumberColumn(format="R$ %.2f", width=60),
+                                "Resultado frete": st.column_config.NumberColumn(format="R$ %.2f", width=90),
+                                "Reembolso": st.column_config.NumberColumn(format="R$ %.2f", width=72),
+                                "Embalagem": st.column_config.NumberColumn(format="R$ %.2f", width=72),
+                                "Contrib. R$": st.column_config.NumberColumn(format="R$ %.2f", width=80),
+                                "Contrib. %": st.column_config.NumberColumn(format="percent", width=68),
+                                "Dado faltante": st.column_config.TextColumn(width=80)})
+    note("Frete, taxa, reembolso e embalagem do pedido são rateados entre os produtos (pelo valor de cada um); brindes ficam fora do rateio, mas o custo deles aparece. "
+         "A soma das linhas fecha com a linha do pedido na tabela acima.")
+
+
 def _tabela_pedidos(sel):
     sel = sel.copy()
     sel["codigo"] = sel["cd_pedido_nuvemshop"].where(sel["cd_pedido_nuvemshop"].notna(), "Bling " + sel["cd_pedido"].astype(str))
@@ -347,7 +380,8 @@ def _tabela_pedidos(sel):
         marg=("vl_margem_contribuicao", "sum"), incompletude=("ds_incompletude", _juntar_incompletude),
     ).sort_values(["dt_pedido", "codigo"], ascending=[False, False])
     g["pct"] = g["marg"] / g["rec"]
-    return pd.DataFrame({
+    ids = g["cd_codigo_interno"].tolist()  # mesma ordem das linhas exibidas (para o drill)
+    return ids, pd.DataFrame({
         "Pedido": g["codigo"].astype(str), "Cliente": g["nm_contato"].fillna("—"), "Data": g["dt_pedido"].dt.date, "Status": g["ds_status_pedido"].str.title(),
         "Pagamento": g["ds_meio_pagamento_nuvemshop"].fillna("—"),
         "Receita líq.": g["rec"], "CMV": g["custo"], "Taxa": g["taxa"],
@@ -596,19 +630,27 @@ def render():
 
     # ═══ PEDIDOS ═══
     section_title("Pedidos do período")
-    st.dataframe(_tabela_pedidos(sel), hide_index=True, use_container_width=True,
+    ids_pedidos, tab_pedidos = _tabela_pedidos(sel)
+    evento = st.dataframe(tab_pedidos, hide_index=True, use_container_width=True,
+                 on_select="rerun", selection_mode="single-row", key="tab_pedidos",
                  column_config={"Pedido": st.column_config.TextColumn(width=58),
-                                "Cliente": st.column_config.TextColumn(width=120),
+                                "Cliente": st.column_config.TextColumn(width=104),
                                 "Data": st.column_config.DateColumn(width=78),
                                 "Status": st.column_config.TextColumn(width=70),
-                                "Pagamento": st.column_config.TextColumn(width=66),
+                                "Pagamento": st.column_config.TextColumn(width=62),
                                 "Receita líq.": st.column_config.NumberColumn(format="R$ %.2f", width=80),
                                 "CMV": st.column_config.NumberColumn(format="R$ %.2f", width=62),
                                 "Taxa": st.column_config.NumberColumn(format="R$ %.2f", width=56),
                                 "Resultado frete": st.column_config.NumberColumn(format="R$ %.2f", width=86),
                                 "Contrib. R$": st.column_config.NumberColumn(format="R$ %.2f", width=90),
                                 "Contrib. %": st.column_config.NumberColumn(format="percent", width=80),
-                                "Dado faltante": st.column_config.TextColumn(width=84)})
+                                "Dado faltante": st.column_config.TextColumn(width=70)})
     note("Pedido = <strong>código da Nuvemshop</strong> (o mesmo do painel da loja); \"Bling nnnn\" aparece só quando o pedido não tem correspondente na Nuvemshop. "
          "Uma linha por pedido. Contrib. R$ / % = margem de contribuição (R$ e % da receita líquida de produtos do próprio pedido); Resultado frete = frete pago − frete real. "
          "\"Dado faltante\" diz o que falta: sem custo, sem taxa de pagamento ou sem dados da Nuvemshop.")
+
+    linhas_sel = evento.selection.rows if evento is not None else []
+    if linhas_sel:
+        _detalhe_pedido(sel, ids_pedidos[linhas_sel[0]], tab_pedidos.iloc[linhas_sel[0]])
+    else:
+        st.caption("Clique no início de uma linha da tabela para ver os produtos daquele pedido.")
