@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from common import bigquery as bq
+from common.logistica import carregar_logistica
 from common.design import (
     COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout,
     kpi_delta_color, brl, pct,
@@ -24,6 +25,7 @@ TABELA = os.environ.get("SB_TABELA_PEDIDO", "tb_pedido")
 BRT = timezone(timedelta(hours=-3))
 
 DIAS_UTEIS_ATRASO = 2  # pedido pago e ainda não postado há mais que isso é "atrasado" (alinhado ao B048)
+DIAS_PARADO = 10  # em trânsito sem nenhum evento de rastreio há tantos dias = "parado" (entra na lista de entregas em risco)
 DIAS_SEMANA = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
 
 
@@ -122,6 +124,53 @@ def _grafico_semana(ped, hoje):
     return fig
 
 
+def _secao_entregas(logi):
+    section_title("Entregas em risco")
+    em_transito = logi[logi["ds_situacao_logistica"] == "em_transito"]
+    parados = em_transito[em_transito["qt_dias_sem_movimento"] >= DIAS_PARADO]
+    risco = logi[logi["fg_atrasado_em_aberto"] | logi["fg_problema_entrega_ativo"] | logi.index.isin(parados.index)].copy()
+    fila_sac = logi[logi["fg_acao_sac"]]
+    sem_rastreio = logi[(logi["ds_situacao_logistica"] == "entregue") & logi["dt_expedicao"].isna() & ~logi["fg_entrega_confirmada"]]
+    render_cards([
+        card("Em trânsito", f"{len(em_transito)}", "postados, ainda não entregues"),
+        card("Atrasados", f"{int(logi['fg_atrasado_em_aberto'].sum())}", "em trânsito além da data estimada de entrega",
+             variant="bad" if logi["fg_atrasado_em_aberto"].any() else "ok"),
+        card("Problema de entrega", f"{int(logi['fg_problema_entrega_ativo'].sum())}", "devolução ou tentativa falha, ainda ativos",
+             variant="bad" if logi["fg_problema_entrega_ativo"].any() else "ok"),
+        card("Parados", f"{len(parados)}", f"em trânsito sem evento de rastreio há {DIAS_PARADO}+ dias", variant="bad" if len(parados) else "ok"),
+        card("Fila do SAC", f"{len(fila_sac)}", "problema ativo ainda sem tratativa registrada", variant="bad" if len(fila_sac) else "ok"),
+        card("Enviados sem rastreio", f"{len(sem_rastreio)}", "marcados como enviados no Bling, sem dado de rastreio ainda", variant="warn" if len(sem_rastreio) else "ok"),
+    ])
+    if risco.empty:
+        note("Nenhuma entrega em risco no momento.")
+        return
+    def motivo(r):
+        m = []
+        if r["fg_problema_entrega_ativo"]:
+            m.append("problema de entrega")
+        if r["fg_atrasado_em_aberto"]:
+            m.append("atrasado")
+        if r["ds_situacao_logistica"] == "em_transito" and r["qt_dias_sem_movimento"] >= DIAS_PARADO:
+            m.append("parado")
+        return " + ".join(m)
+    risco["codigo"] = risco["cd_pedido_nuvemshop"].where(risco["cd_pedido_nuvemshop"].notna(), "Bling " + risco["cd_pedido"].astype(str))
+    risco = risco.sort_values("qt_dias_sem_movimento", ascending=False)
+    tab = pd.DataFrame({
+        "Pedido": risco["codigo"].astype(str), "Cliente": risco["nm_cliente"].fillna("—"), "Enviado em": risco["dt_expedicao"].dt.date,
+        "Dias sem evento": risco["qt_dias_sem_movimento"], "Último evento": risco["ds_ultimo_evento"].fillna("—"),
+        "Motivo": risco.apply(motivo, axis=1), "SAC": risco["fg_tratado_sac"].map({True: "tratado", False: "sem tratativa"}),
+    })
+    st.dataframe(tab, hide_index=True, use_container_width=True,
+                 column_config={"Pedido": st.column_config.TextColumn(width=110), "Cliente": st.column_config.TextColumn(width=200),
+                                "Enviado em": st.column_config.DateColumn(width=100), "Dias sem evento": st.column_config.NumberColumn(width=110),
+                                "Último evento": st.column_config.TextColumn(width=130), "Motivo": st.column_config.TextColumn(width=170),
+                                "SAC": st.column_config.TextColumn(width=100)})
+    note("Flags de atraso, problema de entrega e fila do SAC vêm prontas do dbt (<code>tb_logistica_pedido</code>). \"Parado\" = em trânsito sem nenhum evento de "
+         f"rastreio há {DIAS_PARADO}+ dias (limite desta página; pega o que a transportadora deixou de atualizar). "
+         "<strong>Pontos cegos:</strong> pedidos enviados nos últimos ~10–14 dias ainda não têm dado de rastreio carregado (card \"Enviados sem rastreio\"); "
+         "problemas neles só aparecem quando o rastreio chegar.")
+
+
 def render():
     inject_css()
     with st.spinner("Carregando dados do BigQuery..."):
@@ -131,6 +180,11 @@ def render():
             st.error(f"Erro ao carregar dados do BigQuery: {e}")
             return
     ped, tempo, metas, ads = dados["pedidos"], dados["tempo"], dados["metas"], dados["ads"]
+    try:
+        logi = carregar_logistica()
+    except Exception as e:
+        logi = None
+        st.warning(f"Logística indisponível: {e}")
     hoje = _hoje_brt()
     if ped.empty:
         st.info("Sem pedidos válidos no período.")
@@ -154,11 +208,13 @@ def render():
     # ═══ HOJE E ONTEM ═══
     section_title("Hoje e ontem")
     h, o = _dia(ped, hoje), _dia(ped, ontem)
+    m7 = _periodo(ped, ontem - timedelta(days=6), ontem)
     render_cards([
         card("Faturamento hoje", brl(h["fat"]), f"{h['ped']} pedidos · dia em andamento"),
         card("Faturamento ontem", brl(o["fat"]), f"{o['ped']} pedidos · {int(o['itens'])} itens"),
         card("Ticket médio hoje", brl(h["fat"] / h["ped"]) if h["ped"] else "—", "faturamento ÷ pedidos"),
         card("Ticket médio ontem", brl(o["fat"] / o["ped"]) if o["ped"] else "—", "faturamento ÷ pedidos"),
+        card("Média por dia (7 dias)", brl(m7["fat"] / 7), f"{m7['ped'] / 7:.1f} pedidos/dia · 7 dias fechados até ontem".replace(".", ",")),
     ])
     note("O dia de hoje está em andamento e os dados atualizam de hora em hora (7h–23h); não compare hoje com um dia fechado.")
 
@@ -190,6 +246,10 @@ def render():
         note("Nenhum pedido aguardando postagem.")
     note("A postar = pedido válido com status EM ABERTO no Bling (pago, aguardando postagem). Dias úteis contados a partir da data de pagamento na "
          "Nuvemshop (ou do pedido, se não houver) pelo calendário <code>tb_tempo</code>; sábados, domingos e feriados não contam.")
+
+    # ═══ ENTREGAS EM RISCO ═══
+    if logi is not None:
+        _secao_entregas(logi)
 
     # ═══ RITMO DO MÊS ═══
     section_title("Ritmo do mês")

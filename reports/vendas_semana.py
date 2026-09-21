@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from common.logistica import carregar_logistica
 from common.design import (
     COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct,
 )
@@ -21,6 +22,7 @@ from reports.vendas_margem import (
 
 DIAS_SEMANA = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
 SEMANAS_TENDENCIA = 12
+COBERTURA_MIN = 0.8  # semana só entra na análise de logística se ≥ 80% dos pedidos enviados já têm data de expedição (o rastreio chega com defasagem)
 
 
 def _segunda(serie):
@@ -70,6 +72,46 @@ def _grafico_dias(sel, ant, seg, ate):
         fig.add_bar(x=DIAS_SEMANA, y=ys, name=nome, marker_color=cor, hovertemplate="%{x}<br>R$ %{y:,.0f}<extra>" + nome + "</extra>")
     plotly_layout(fig, height=300, barmode="group", xaxis=dict(tickmode="array", tickvals=DIAS_SEMANA),
                   yaxis=dict(tickprefix="R$ ", gridcolor=COLORS["grid"]))
+    return fig
+
+
+def _metricas_logistica(lg):
+    """Médias = Σ dias ÷ nº de pedidos com o dado; % no prazo = entregues no prazo ÷ entregues com estimativa."""
+    exp = lg["qt_dias_ate_expedicao"].dropna()
+    tra = lg["qt_dias_transito"].dropna()
+    pz = lg["fg_entregue_no_prazo"].dropna()
+    enviados = lg[lg["ds_situacao_logistica"] != "aguardando_expedicao"]
+    return {
+        "pedidos": len(lg), "expedidos": int(lg["dt_expedicao"].notna().sum()), "enviados": len(enviados),
+        "cobertura": (float(enviados["dt_expedicao"].notna().mean()) if len(enviados) else None),
+        "d_exp": float(exp.mean()) if len(exp) else None, "d_tra": float(tra.mean()) if len(tra) else None,
+        "n_prazo": len(pz), "no_prazo": float(pz.astype(bool).mean()) if len(pz) else None,
+        "entregues": int(lg["fg_entrega_confirmada"].sum()),
+    }
+
+
+def _grafico_logistica(lg, seg_sel):
+    lg = lg.copy()
+    lg["semana"] = _segunda(lg["dt_pedido"])
+    g = lg.groupby("semana").apply(lambda x: pd.Series({
+        "cob": x.loc[x["ds_situacao_logistica"] != "aguardando_expedicao", "dt_expedicao"].notna().mean(),
+        "d_exp": x["qt_dias_ate_expedicao"].mean(),
+        "n_pz": x["fg_entregue_no_prazo"].notna().sum(),
+        "ok_pz": x["fg_entregue_no_prazo"].dropna().astype(bool).sum(),
+    })).reset_index()
+    g = g[(g["semana"] <= seg_sel) & (g["cob"] >= COBERTURA_MIN)].sort_values("semana").tail(SEMANAS_TENDENCIA)  # só semanas com rastreio já carregado
+    g["pct_pz"] = g["ok_pz"] / g["n_pz"].where(g["n_pz"] > 0)
+    g["pct_pz_4"] = g["ok_pz"].rolling(4, min_periods=1).sum() / g["n_pz"].rolling(4, min_periods=1).sum().where(lambda v: v > 0)
+    x = [pd.Timestamp(v).strftime("%d/%m") for v in g["semana"]]
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_bar(x=x, y=g["d_exp"], name="Dias do pedido até a expedição (média)", marker_color=METRIC_COLORS["receita"],
+                hovertemplate="semana de %{x}<br>%{y:.1f} dias<extra></extra>", secondary_y=False)
+    fig.add_trace(go.Scatter(x=x, y=g["pct_pz_4"], name="Entregues no prazo (%, janela de 4 semanas)", mode="lines+markers",
+                             line=dict(color=METRIC_COLORS["margem_pct"], width=2),
+                             hovertemplate="semana de %{x}<br>%{y:.0%}<extra></extra>"), secondary_y=True)
+    plotly_layout(fig, height=300, hovermode="x unified", xaxis=dict(type="category", dtick=1, gridcolor=COLORS["grid"]))
+    fig.update_yaxes(title_text="dias", gridcolor=COLORS["grid"], secondary_y=False)
+    fig.update_yaxes(tickformat=".0%", range=[0, 1], showgrid=False, secondary_y=True)
     return fig
 
 
@@ -181,6 +223,47 @@ def render():
             card("Margem contrib. (%) — novos", pct(mp(nn)), "", variant=_variant_margem(mp(nn))),
             card("Margem contrib. (%) — recorrentes", pct(mp(rr)), "", variant=_variant_margem(mp(rr))),
         ])
+
+    # ═══ LOGÍSTICA ═══
+    try:
+        logi = carregar_logistica()
+    except Exception as e:
+        logi = None
+        st.warning(f"Logística indisponível: {e}")
+    if logi is not None:
+        section_title("Logística dos pedidos da semana")
+        ls = logi[(logi["dt_pedido"] >= seg) & (logi["dt_pedido"] <= ate)]
+        la = logi[(logi["dt_pedido"] >= ant_ini) & (logi["dt_pedido"] <= ate - pd.Timedelta(days=7))]
+        m, ma = _metricas_logistica(ls), _metricas_logistica(la)
+        fd = lambda v: f"{v:.1f} dias".replace(".", ",") if v is not None else "—"
+        def dl(chave, menor_melhor=True):
+            if m[chave] is None or ma[chave] is None or ma[chave] == 0:
+                return "", ""
+            t, _ = _delta(m[chave], ma[chave], rot_ant, "rel", fd)
+            dif = m[chave] - ma[chave]
+            return t, ("up" if (dif <= 0) == menor_melhor else "down")
+        sem_dado = m["cobertura"] is not None and m["cobertura"] < COBERTURA_MIN
+        if sem_dado:
+            m.update({"d_exp": None, "d_tra": None, "no_prazo": None, "n_prazo": 0})
+        t_e, c_e = dl("d_exp")
+        t_t, c_t = dl("d_tra")
+        render_cards([
+            card("Com data de expedição", f"{m['expedidos']} de {m['enviados']}", "pedidos enviados com rastreio já carregado",
+                 variant="warn" if sem_dado else "neutral"),
+            card("Do pedido à expedição", fd(m["d_exp"]), "média de dias corridos (tempo da loja)", delta=t_e, delta_color=c_e),
+            card("Trânsito", fd(m["d_tra"]), "média de dias da expedição à entrega (transportadora)", delta=t_t, delta_color=c_t),
+            card("Entregues no prazo", pct(m["no_prazo"], 0) if m["no_prazo"] is not None else "—",
+                 f"{m['n_prazo']} entregas com prazo estimado" if m["n_prazo"] else "sem entregas ainda"),
+        ])
+        if sem_dado:
+            note("<strong>Rastreio ainda não carregado para esta semana:</strong> só "
+                 f"{pct(m['cobertura'], 0)} dos pedidos enviados têm data de expedição (o dado de rastreio chega com defasagem de ~1–2 semanas). "
+                 "Os indicadores ficam em branco até completar; escolha uma semana mais antiga.", variant="warn")
+        with st.container(border=True):
+            st.plotly_chart(_grafico_logistica(logi, seg), use_container_width=True)
+        note("Semana do <strong>pedido</strong> (não da entrega): as semanas mais recentes têm poucas entregas concluídas e o \"no prazo\" só amadurece depois. "
+             f"O gráfico só inclui semanas com ≥ {COBERTURA_MIN:.0%} de cobertura de rastreio. Média de dias = soma dos dias ÷ pedidos com o dado. \"No prazo\" = entregue até a data máxima estimada pela transportadora, entre as entregas com estimativa. "
+             "Fonte: <code>tb_logistica_pedido</code>.")
 
     # ═══ ORIGEM ═══
     section_title("Origem das vendas na semana")

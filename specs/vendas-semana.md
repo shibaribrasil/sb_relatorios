@@ -10,3 +10,7 @@ Fechamento semanal de vendas: quanto vendemos, com que margem, vindo de onde, de
 - **Tendência:** últimas 12 semanas até a selecionada (receita líquida, margem R$, margem %). Volume pequeno (~10 pedidos/semana): ler tendência, não semana isolada.
 - **Clientes:** `fg_cliente_recorrente` (dbt) → pedidos de novos × recorrentes e margem % de cada grupo.
 - **Origem/Produtos:** mesmas tabelas da página mensal, filtradas na semana; brindes fora dos produtos (custo no CMV).
+
+## v2 — 21/set/2026: logística
+- Seção "Logística dos pedidos da semana" (semana do **pedido**): pedidos com data de expedição ÷ enviados, média de dias do pedido à expedição, média de trânsito e % entregues no prazo (entre entregas com estimativa), com delta contra a semana anterior (menos dias = melhor). Tendência de 12 semanas: dias até a expedição (barras) e % no prazo em janela de 4 semanas.
+- **Cobertura mínima:** semana só entra nas métricas/gráfico se ≥ 80% dos pedidos enviados têm `dt_expedicao` (o rastreio chega com defasagem; hoje o extrator está parado desde 10/09 — B054). Abaixo disso os indicadores ficam em branco com aviso.

@@ -16,3 +16,8 @@ Página operacional: responde "como está hoje, o que está parado e se o mês v
 - **Origem** = `ds_origem_venda`/`ds_midia_venda` (URL de entrada); "(sem parametro)" agrega sem UTM/clique e sem landing_url. Últimos 7 dias.
 - **Google Ads** chega com 1–2 dias de atraso: o investimento por pedido usa só os pedidos até o último dia com custo.
 - Aggregations no Streamlit são só somas/filtros; o único cálculo de regra (dias úteis desde o pagamento, limite de 2) está aqui por ser de apresentação/alerta; se virar métrica oficial, mover para o dbt.
+
+## v2 — 21/set/2026: logística e média de 7 dias
+- **Média por dia (7 dias):** faturamento e pedidos dos 7 dias fechados até ontem ÷ 7.
+- **Entregas em risco** (`common/logistica.py` → `tb_logistica_pedido`): cards de Em trânsito, Atrasados (`fg_atrasado_em_aberto`), Problema de entrega (`fg_problema_entrega_ativo`), Parados (em trânsito sem evento há ≥ 10 dias — limite da página), Fila do SAC (`fg_acao_sac`) e Enviados sem rastreio (situação "entregue" sem `dt_expedicao` nem entrega confirmada = rastreio ainda não carregado). Tabela dos pedidos em risco (atrasado, problema ou parado), com dias sem evento, último evento e situação no SAC.
+- **Ponto cego conhecido:** o extrator de fulfillments/rastreio da Nuvemshop parou em 10/09/2026; pedidos enviados depois não têm rastreio, então problemas neles não aparecem até a carga voltar (ver B054).
