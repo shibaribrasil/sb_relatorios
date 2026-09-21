@@ -39,7 +39,7 @@ MARGEM_OK = 0.50     # >= 50%: verde
 MARGEM_MIN = 0.40    # >= 40% (mínimo institucional): âmbar; abaixo: vermelho
 
 COLUNAS = """
-    cd_codigo_interno, cd_pedido, cd_pedido_nuvemshop, dt_pedido, ds_status_pedido, nm_produto,
+    cd_codigo_interno, cd_pedido, cd_pedido_nuvemshop, nm_contato, dt_pedido, ds_status_pedido, nm_produto,
     ds_categoria, ds_meio_pagamento_nuvemshop, qt_item, fg_brinde, ds_incompletude,
     vl_receita_bruta_produto, vl_desconto_venda_rateio, vl_receita_liquida_produto, vl_liquido_item,
     vl_frete_pago_rateio, vl_frete_real_rateio, vl_resultado_frete, vl_custo_linha,
@@ -90,6 +90,11 @@ def carregar_dados():
           FROM `{bq.PROJECT}.dbt_dw_az.tb_objetivo_faturamento`
          WHERE dt_prim_dia_mes >= DATE '{INICIO_HISTORICO}'
     """)
+    ads = bq.query_df(client, f"""
+        SELECT dt_data, SUM(vl_custo) AS vl_custo, SUM(qt_cliques) AS qt_cliques
+          FROM `{bq.PROJECT}.dbt_dw_us_az.tb_gads_conta_diario`
+         WHERE dt_data >= DATE '{INICIO_HISTORICO}' GROUP BY dt_data
+    """)
     vendas = vendas.merge(origem, on="cd_codigo_interno", how="left")
     vendas[["origem", "midia"]] = vendas[["origem", "midia"]].fillna("(sem atribuição)")
     vendas["dt_pedido"] = pd.to_datetime(vendas["dt_pedido"])
@@ -101,7 +106,10 @@ def carregar_dados():
     cancel["mes"] = cancel["dt_pedido"].dt.to_period("M").dt.to_timestamp()
     metas["dt_data"] = pd.to_datetime(metas["dt_data"])
     metas["mes"] = pd.to_datetime(metas["dt_prim_dia_mes"])
-    return {"vendas": vendas, "cancel": cancel, "metas": metas}
+    ads["dt_data"] = pd.to_datetime(ads["dt_data"])
+    ads["mes"] = ads["dt_data"].dt.to_period("M").dt.to_timestamp()
+    ads["vl_custo"] = pd.to_numeric(ads["vl_custo"]).fillna(0.0)
+    return {"vendas": vendas, "cancel": cancel, "metas": metas, "ads": ads}
 
 
 def _hoje_brt():
@@ -328,18 +336,18 @@ def _juntar_incompletude(serie):
 def _tabela_pedidos(sel):
     sel = sel.copy()
     sel["codigo"] = sel["cd_pedido_nuvemshop"].where(sel["cd_pedido_nuvemshop"].notna(), "Bling " + sel["cd_pedido"].astype(str))
-    g = sel.groupby(["cd_codigo_interno", "codigo", "dt_pedido", "ds_status_pedido", "ds_meio_pagamento_nuvemshop"], dropna=False, as_index=False).agg(
+    g = sel.groupby(["cd_codigo_interno", "codigo", "nm_contato", "dt_pedido", "ds_status_pedido", "ds_meio_pagamento_nuvemshop"], dropna=False, as_index=False).agg(
         itens=("qt_item", "sum"), rec=("vl_receita_liquida_produto", "sum"), custo=("vl_custo_linha", "sum"),
         taxa=("vl_taxa_pedido_rateio", "sum"), frete_pago=("vl_frete_pago_rateio", "sum"), frete_real=("vl_frete_real_rateio", "sum"),
         marg=("vl_margem_contribuicao", "sum"), incompletude=("ds_incompletude", _juntar_incompletude),
     ).sort_values(["dt_pedido", "codigo"], ascending=[False, False])
     g["pct"] = g["marg"] / g["rec"]
     return pd.DataFrame({
-        "Pedido": g["codigo"].astype(str), "Data": g["dt_pedido"].dt.date, "Status": g["ds_status_pedido"].str.title(),
+        "Pedido": g["codigo"].astype(str), "Cliente": g["nm_contato"].fillna("—"), "Data": g["dt_pedido"].dt.date, "Status": g["ds_status_pedido"].str.title(),
         "Pagamento": g["ds_meio_pagamento_nuvemshop"].fillna("—"),
         "Receita líq.": g["rec"], "CMV": g["custo"], "Taxa": g["taxa"],
         "Resultado frete": g["frete_pago"] - g["frete_real"],
-        "Margem contrib. R$": g["marg"], "Margem contrib. %": g["pct"],
+        "Contrib. R$": g["marg"], "Contrib. %": g["pct"],
         "Dado faltante": g["incompletude"].replace("", "—"),
     })
 
@@ -382,7 +390,7 @@ def render():
             st.error(f"Erro ao carregar dados do BigQuery: {e}")
             return
 
-    df, cancel, metas = dados["vendas"], dados["cancel"], dados["metas"]
+    df, cancel, metas, ads = dados["vendas"], dados["cancel"], dados["metas"], dados["ads"]
     hoje = _hoje_brt()
     if df.empty:
         st.info("Sem pedidos válidos no período de histórico.")
@@ -437,7 +445,7 @@ def render():
     t_ped, c_ped = d("pedidos", fmt=lambda v: f"{int(v)}")
     t_tk, c_tk = d("ticket", "rel", "r")
     render_cards([
-        card("Faturamento", brl(s["vl_liquido_item"]), "produtos líquidos + frete pago pelo cliente", delta=t_fat, delta_color=c_fat),
+        card("Faturamento", brl(s["vl_liquido_item"]), "produtos já com desconto + frete pago pelo cliente", delta=t_fat, delta_color=c_fat),
         card("Pedidos", f"{s['pedidos']}", f"{int(s['itens'])} itens vendidos (sem brindes)", delta=t_ped, delta_color=c_ped),
         card("Ticket médio", brl(r["ticket"]), "faturamento ÷ pedidos", delta=t_tk, delta_color=c_tk),
         card("Cancelamentos", f"{canc['qtd']} · {pct(canc['pct'])}", canc["detalhe"] or "nenhum no período",
@@ -460,9 +468,9 @@ def render():
     t_mc, c_mc = d("vl_margem_contribuicao")
     t_mcp, c_mcp = d("margem_pct", "pp", "r")
     render_cards([
-        card("Receita bruta de produtos", brl(s["vl_receita_bruta_produto"]), "preço × quantidade, sem brindes"),
+        card("Receita bruta de produtos", brl(s["vl_receita_bruta_produto"]), "preço × quantidade, antes dos descontos · sem frete e sem brindes"),
         card("(−) Descontos", brl(s["vl_desconto_venda_rateio"]), sobre_rec(s["vl_desconto_venda_rateio"]) + " · cupom, PIX e promoção"),
-        card("Receita líquida de produtos", brl(rec), "bruta − descontos, sem frete", delta=t_rec, delta_color=c_rec),
+        card("Receita líquida de produtos", brl(rec), "bruta − descontos · frete fica de fora (já debitado do faturamento)", delta=t_rec, delta_color=c_rec),
         card("(−) CMV", brl(s["vl_custo_linha"]), f"{sobre_rec(s['vl_custo_linha'])} · inclui {brl(s['custo_brinde'])} de brindes"),
         card("(−) Taxas de pagamento", brl(s["vl_taxa_pedido_rateio"]), sobre_rec(s["vl_taxa_pedido_rateio"])),
         card("Resultado de frete", brl(s["vl_resultado_frete"]), f"pago {brl(s['vl_frete_pago_rateio'])} − real {brl(s['vl_frete_real_rateio'])}"),
@@ -478,6 +486,25 @@ def render():
         cob = 1 - s["linhas_incompletas"] / s["linhas"]
         note(f"<strong>Cobertura dos dados: {pct(cob)}.</strong> {s['linhas_incompletas']} de {s['linhas']} linhas do período têm dado faltante "
              f"({tipos}) — a margem dessas linhas está superestimada.", variant="warn")
+
+    # ═══ DEPOIS DA MÍDIA ═══
+    section_title("Depois da mídia (Google Ads)")
+    ads_sel = ads[ads["mes"].isin(meses_sel)]
+    custo_ads = float(ads_sel["vl_custo"].sum())
+    if custo_ads > 0:
+        margem_pos = s["vl_margem_contribuicao"] - custo_ads
+        render_cards([
+            card("Investimento Google Ads", brl(custo_ads), f"{pct(custo_ads / rec) if rec else '—'} da receita líq. · {int(ads_sel['qt_cliques'].sum())} cliques"),
+            card("Margem após mídia (R$)", brl(margem_pos), "margem de contribuição − investimento Google Ads",
+                 variant="ok" if margem_pos > 0 else "bad"),
+            card("Margem após mídia (%)", pct(margem_pos / rec) if rec else "—", "÷ receita líq. de produtos"),
+            card("ROAS", f"{s['vl_liquido_item'] / custo_ads:.1f}×".replace(".", ","), "faturamento total ÷ investimento (todas as origens)"),
+            card("Custo por pedido", brl(custo_ads / s["pedidos"]) if s["pedidos"] else "—", "investimento ÷ pedidos totais"),
+        ])
+        note("Inclui <strong>só o Google Ads</strong> (não há outras mídias pagas na base). Os pedidos e a receita são de <strong>todas as origens</strong>, "
+             "então ROAS e custo por pedido são do negócio, não do canal. O histórico do Ads começa em 15/06/2026 — meses anteriores ficam sem esse dado.")
+    else:
+        note("Sem custo de Google Ads no período (o histórico do Ads começa em 15/06/2026).")
 
     # ═══ CASCATA ═══
     section_title("Da receita bruta à margem de contribuição")
@@ -554,17 +581,18 @@ def render():
     # ═══ PEDIDOS ═══
     section_title("Pedidos do período")
     st.dataframe(_tabela_pedidos(sel), hide_index=True, use_container_width=True,
-                 column_config={"Pedido": st.column_config.TextColumn(width=62),
-                                "Data": st.column_config.DateColumn(width=84),
-                                "Status": st.column_config.TextColumn(width=76),
-                                "Pagamento": st.column_config.TextColumn(width=76),
-                                "Receita líq.": st.column_config.NumberColumn(format="R$ %.2f", width=86),
-                                "CMV": st.column_config.NumberColumn(format="R$ %.2f", width=70),
-                                "Taxa": st.column_config.NumberColumn(format="R$ %.2f", width=62),
-                                "Resultado frete": st.column_config.NumberColumn(format="R$ %.2f", width=95),
-                                "Margem contrib. R$": st.column_config.NumberColumn(format="R$ %.2f", width=112),
-                                "Margem contrib. %": st.column_config.NumberColumn(format="percent", width=105),
-                                "Dado faltante": st.column_config.TextColumn(width=100)})
+                 column_config={"Pedido": st.column_config.TextColumn(width=58),
+                                "Cliente": st.column_config.TextColumn(width=120),
+                                "Data": st.column_config.DateColumn(width=78),
+                                "Status": st.column_config.TextColumn(width=70),
+                                "Pagamento": st.column_config.TextColumn(width=66),
+                                "Receita líq.": st.column_config.NumberColumn(format="R$ %.2f", width=80),
+                                "CMV": st.column_config.NumberColumn(format="R$ %.2f", width=62),
+                                "Taxa": st.column_config.NumberColumn(format="R$ %.2f", width=56),
+                                "Resultado frete": st.column_config.NumberColumn(format="R$ %.2f", width=86),
+                                "Contrib. R$": st.column_config.NumberColumn(format="R$ %.2f", width=90),
+                                "Contrib. %": st.column_config.NumberColumn(format="percent", width=80),
+                                "Dado faltante": st.column_config.TextColumn(width=84)})
     note("Pedido = <strong>código da Nuvemshop</strong> (o mesmo do painel da loja); \"Bling nnnn\" aparece só quando o pedido não tem correspondente na Nuvemshop. "
-         "Uma linha por pedido, sem dados do cliente. Margem contrib. = margem de contribuição (R$ e % da receita líquida de produtos do próprio pedido); Resultado frete = frete pago − frete real. "
+         "Uma linha por pedido. Contrib. R$ / % = margem de contribuição (R$ e % da receita líquida de produtos do próprio pedido); Resultado frete = frete pago − frete real. "
          "\"Dado faltante\" diz o que falta: sem custo, sem taxa de pagamento ou sem dados da Nuvemshop.")
