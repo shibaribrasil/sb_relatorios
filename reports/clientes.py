@@ -182,6 +182,34 @@ def render():
     note("Valor do cliente = margem de contribuição acumulada dos pedidos válidos, antes de mídia (embalagem estimada; reembolso no pedido). Antes de ago/2025 "
          "a taxa e o frete reais da Nuvemshop não existem, então o valor dos clientes antigos é aproximado. Quem comprou antes de nov/2023 aparece com a 1ª compra a partir dessa data.")
 
+    # ═══ GEOGRAFIA ═══
+    section_title("Onde estão os clientes")
+    uf = cli.assign(uf=cli["ds_endereco_uf"].fillna("(sem UF)").replace("", "(sem UF)")).groupby("uf", as_index=False).agg(
+        clientes=("cd_contato", "size"), marg=("vl_margem_contribuicao", "sum"), rec=("fg_recorrente", "sum")).sort_values("marg", ascending=False)
+    uf["pct_cli"] = uf["clientes"] / uf["clientes"].sum()
+    uf["pct_marg"] = uf["marg"] / uf["marg"].sum()
+    uf["cum"] = uf["pct_marg"].cumsum()
+    top = uf.head(10)
+    col_a, col_b = st.columns([3, 2])
+    with col_a:
+        st.dataframe(pd.DataFrame({"UF": top["uf"], "Clientes": top["clientes"], "% clientes": top["pct_cli"], "Margem contrib. (R$)": top["marg"],
+                                   "% da margem": top["pct_marg"], "Recorrentes": top["rec"]}),
+                     hide_index=True, use_container_width=True,
+                     column_config={"UF": st.column_config.TextColumn(width=70), "Clientes": st.column_config.NumberColumn(width=80),
+                                    "% clientes": st.column_config.NumberColumn(format="percent", width=90),
+                                    "Margem contrib. (R$)": st.column_config.NumberColumn(format="R$ %.0f", width=140),
+                                    "% da margem": st.column_config.NumberColumn(format="percent", width=100),
+                                    "Recorrentes": st.column_config.NumberColumn(width=100)})
+    with col_b:
+        top1 = float(uf.iloc[0]["pct_marg"])
+        top3 = float(uf.head(3)["pct_marg"].sum())
+        render_cards([
+            card("Maior praça", f"{uf.iloc[0]['uf']} · {pct(top1, 0)}", "da margem de contribuição dos clientes"),
+            card("Três maiores praças", pct(top3, 0), " + ".join(uf.head(3)["uf"]) , variant="warn" if top3 > 0.8 else "neutral"),
+        ])
+    note("UF do cadastro do cliente no Bling; % sobre a margem de contribuição acumulada dos clientes (valor do cliente). "
+         "Concentração alta em poucas praças = dependência de frete e de anúncios geolocalizados: teste de expansão de praça é a ação. Mostra as 10 maiores.")
+
     # ═══ CURVA DE RECOMPRA ═══
     section_title("Em quanto tempo o cliente volta")
     cr = _curva_recompra(cli, hoje)

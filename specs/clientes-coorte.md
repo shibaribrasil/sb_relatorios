@@ -15,3 +15,6 @@ Pergunta: **os clientes voltam a comprar, quando, quem vale mais e de que canal 
 - **Origem do 1º pedido:** `tb_atribuicao_pedido` do 1º pedido válido; "(sem parametro)" agrega direto/orgânico/sem marcação.
 - **Reativar:** recorrente sem comprar há ≥ 180 dias (limite da página), ordenado por valor, 25 maiores.
 - Razões sempre Σnumerador ÷ Σdenominador; nenhuma média de percentuais.
+
+## v2 — 21/set/2026: concentração geográfica
+- Seção "Onde estão os clientes": UF do cadastro do cliente (Bling), 10 maiores por margem de contribuição acumulada (clientes, % clientes, margem, % da margem, recorrentes) + cards da maior praça e das três maiores (aviso se > 80%).

@@ -21,6 +21,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from common import bigquery as bq
+from common.ga4 import carregar_ga4, sessoes as ga4_sessoes, INICIO_GA4
 from common.design import (
     COLORS, METRIC_COLORS, CATEGORICAL, inject_css, card, render_cards,
     section_title, note, plotly_layout, kpi_delta_color, brl, pct,
@@ -641,6 +642,26 @@ def render():
         note(f"Variações comparam com {rot}, com o valor daquele período entre parênteses. Só aparecem com um único mês selecionado.")
     if meta["sem_meta"]:
         note(f"Sem meta cadastrada para: {', '.join(meta['sem_meta'])}. A meta de faturamento ainda precisa ser revista — trate o atingimento como referência.", variant="warn")
+
+    # ═══ CONVERSÃO DO SITE (GA4) ═══
+    try:
+        ga = carregar_ga4()["canal"]
+    except Exception as e:
+        ga = None
+        st.warning(f"GA4 indisponível: {e}")
+    if ga is not None:
+        ini_p = min(pd.Timestamp(m) for m in meses_sel)
+        fim_p = max(pd.Timestamp(m) + pd.offsets.MonthEnd(0) for m in meses_sel)
+        sess = ga4_sessoes(ga, max(ini_p, INICIO_GA4), min(fim_p, pd.Timestamp(hoje)))
+        if sess and ini_p >= INICIO_GA4.replace(day=1) and all(pd.Timestamp(m) >= INICIO_GA4.replace(day=1) for m in meses_sel):
+            render_cards([
+                card("Sessões no site", f"{int(sess):,}".replace(",", "."), "GA4 · todas as origens"),
+                card("Taxa de conversão", pct(s["pedidos"] / sess, 2), "pedidos válidos ÷ sessões",
+                     ref="referência: 2,5–3,0% (piso de loja nova ~1,4%)", variant="bad" if s["pedidos"] / sess < 0.014 else "ok"),
+                card("Receita por visitante (RPV)", brl(s["vl_liquido_item"] / sess), "faturamento ÷ sessões (conversão × ticket)"),
+            ])
+            note("Sessões vêm do GA4 (histórico só desde 01/07/2026; meses anteriores ficam sem esse bloco). Conversão e RPV usam os pedidos da Nuvemshop/Bling, não as "
+                 "conversões do GA4. Pontos de atenção: bots e tráfego sem intenção de compra derrubam a conversão; veja Site & Funil para o detalhe por canal.")
 
     # ═══ DA RECEITA À MARGEM ═══
     section_title("Da receita à margem")
