@@ -210,7 +210,7 @@ def _meta(metas, meses_sel, hoje, faturamento):
     }
 
 
-def _grafico_cascata(s, r):
+def _grafico_cascata(s, r, custo_ads=0.0):
     passos = [
         ("Receita bruta de produtos", s["vl_receita_bruta_produto"], "absolute"),
         ("− Descontos", -s["vl_desconto_venda_rateio"], "relative"),
@@ -223,12 +223,17 @@ def _grafico_cascata(s, r):
         ("− Embalagem (estimada)", -s["vl_embalagem_rateio"], "relative"),
         ("− Imposto", -s["vl_imposto_rateio"], "relative"),
         ("= Margem de contribuição", None, "total"),
+        ("− Mídia paga (Google Ads)", -custo_ads, "relative"),
+        ("= Margem após mídia", None, "total"),
     ]
     # passos zerados só poluem a cascata (ex.: imposto 0% sem CNPJ, meses sem reembolso)
     passos = [p for p in passos if p[2] == "total" or abs(p[1]) >= 0.005]
+    if custo_ads <= 0:  # sem mídia no período: a cascata termina na margem de contribuição
+        passos = [p for p in passos if p[0] != "= Margem após mídia"]
     subtotais = {
         "= Receita líquida de produtos": s["vl_receita_liquida_produto"],
         "= Margem de contribuição": s["vl_margem_contribuicao"],
+        "= Margem após mídia": s["vl_margem_contribuicao"] - custo_ads,
     }
     nomes = [p[0] for p in passos]
     valores = [subtotais[p[0]] if p[1] is None else p[1] for p in passos]
@@ -241,9 +246,9 @@ def _grafico_cascata(s, r):
         totals=dict(marker=dict(color=METRIC_COLORS["receita"])),
         hovertemplate="%{x}<br>%{text}<extra></extra>",
     ))
-    plotly_layout(fig, height=400, showlegend=False,
+    plotly_layout(fig, height=440, showlegend=False,
                   yaxis=dict(tickprefix="R$ ", gridcolor=COLORS["grid"]),
-                  xaxis=dict(tickangle=-25, automargin=True))
+                  xaxis=dict(tickangle=-35, automargin=True, dtick=1, tickfont=dict(size=11)))
     return fig
 
 
@@ -517,15 +522,16 @@ def render():
         note("Sem custo de Google Ads no período (o histórico do Ads começa em 15/06/2026).")
 
     # ═══ CASCATA ═══
-    section_title("Da receita bruta à margem de contribuição")
+    section_title("Da receita bruta à margem de contribuição e à margem após mídia")
     with st.container(border=True):
-        st.plotly_chart(_grafico_cascata(s, r), use_container_width=True)
+        st.plotly_chart(_grafico_cascata(s, r, custo_ads), use_container_width=True)
     note("<strong>De onde vem cada barra:</strong> receita, descontos e frete pago — pedido do Bling conferido com a Nuvemshop · "
          "CMV — custo do produto vigente na data do pedido (histórico de compras do Bling) · "
          "frete real — custo da etiqueta (Nuvem Envio, via Nuvemshop) · taxas de pagamento — tarifa cobrada por transação (Nuvem Pago/Mercado Pago, via Nuvemshop) · "
          "reembolsos — valor estornado na transação (Nuvemshop) · "
          "<strong>embalagem — estimativa fixa de R$ 2,50 por pedido (parâmetro, não é medido)</strong> · imposto — 0% enquanto a loja não tem CNPJ. "
-         "Passos zerados não aparecem. Margem <strong>antes de mídia</strong>; ver specs/vendas-margem.md.")
+         "mídia paga — investimento no Google Ads no período (única mídia paga na base). "
+         "Passos zerados não aparecem. A <strong>margem de contribuição</strong> é <strong>antes de mídia</strong>; a última barra, <strong>margem após mídia</strong>, já desconta o Google Ads. Ver specs/vendas-margem.md.")
 
     # ═══ META ═══
     section_title("Atingimento da meta")
