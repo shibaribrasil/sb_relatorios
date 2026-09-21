@@ -39,7 +39,8 @@ MARGEM_OK = 0.50     # >= 50%: verde
 MARGEM_MIN = 0.40    # >= 40% (mínimo institucional): âmbar; abaixo: vermelho
 
 COLUNAS = """
-    cd_codigo_interno, cd_pedido, cd_pedido_nuvemshop, nm_contato, dt_pedido, ds_status_pedido, nm_produto,
+    cd_codigo_interno, cd_pedido, cd_pedido_nuvemshop, cd_contato, nm_contato, dt_pedido, dt_reembolso,
+    fg_cliente_recorrente, dt_proxima_compra_cliente, ds_status_pedido, nm_produto,
     ds_categoria, ds_meio_pagamento_nuvemshop, qt_item, fg_brinde, ds_incompletude,
     vl_receita_bruta_produto, vl_desconto_venda_rateio, vl_receita_liquida_produto, vl_liquido_item,
     vl_frete_pago_rateio, vl_frete_real_rateio, vl_resultado_frete, vl_custo_linha,
@@ -95,6 +96,17 @@ def carregar_dados():
           FROM `{bq.PROJECT}.dbt_dw_us_az.tb_gads_conta_diario`
          WHERE dt_data >= DATE '{INICIO_HISTORICO}' GROUP BY dt_data
     """)
+    # série de clientes: histórico completo do DW (nov/2023 em diante), 1 linha por pedido válido, só contagens
+    hist = bq.query_df(client, f"""
+        SELECT cd_codigo_interno, ANY_VALUE(dt_pedido) AS dt_pedido, ANY_VALUE(cd_contato) AS cd_contato,
+               ANY_VALUE(fg_cliente_recorrente) AS fg_cliente_recorrente,
+               ANY_VALUE(dt_proxima_compra_cliente) AS dt_proxima_compra_cliente
+          FROM {base} WHERE fg_pedido_valido GROUP BY cd_codigo_interno
+    """)
+    hist["dt_pedido"] = pd.to_datetime(hist["dt_pedido"])
+    hist["mes"] = hist["dt_pedido"].dt.to_period("M").dt.to_timestamp()
+    hist["fg_cliente_recorrente"] = hist["fg_cliente_recorrente"].fillna(False).astype(bool)
+    hist["dt_proxima_compra_cliente"] = pd.to_datetime(hist["dt_proxima_compra_cliente"])
     vendas = vendas.merge(origem, on="cd_codigo_interno", how="left")
     vendas[["origem", "midia"]] = vendas[["origem", "midia"]].fillna("(sem atribuição)")
     vendas["dt_pedido"] = pd.to_datetime(vendas["dt_pedido"])
@@ -102,6 +114,14 @@ def carregar_dados():
     vendas["ds_categoria"] = vendas["ds_categoria"].fillna("Sem categoria")
     for c in SOMAVEIS:
         vendas[c] = pd.to_numeric(vendas[c]).fillna(0.0)
+    # reembolso no mês em que aconteceu (data aproximada: última atualização do pedido na Nuvemshop).
+    # A margem "pré-reembolso" é a da linha sem o reembolso do pedido; o reembolso volta pela data dele.
+    vendas["dt_reembolso"] = pd.to_datetime(vendas["dt_reembolso"]).fillna(vendas["dt_pedido"])
+    vendas["vl_margem_pre_reembolso"] = vendas["vl_margem_contribuicao"] + vendas["vl_reembolso_rateio"]
+    refs = vendas.loc[vendas["vl_reembolso_rateio"] != 0, ["dt_reembolso", "vl_reembolso_rateio"]].copy()
+    refs["mes"] = refs["dt_reembolso"].dt.to_period("M").dt.to_timestamp()
+    vendas["fg_cliente_recorrente"] = vendas["fg_cliente_recorrente"].fillna(False).astype(bool)
+    vendas["dt_proxima_compra_cliente"] = pd.to_datetime(vendas["dt_proxima_compra_cliente"])
     cancel["dt_pedido"] = pd.to_datetime(cancel["dt_pedido"])
     cancel["mes"] = cancel["dt_pedido"].dt.to_period("M").dt.to_timestamp()
     metas["dt_data"] = pd.to_datetime(metas["dt_data"])
@@ -109,7 +129,7 @@ def carregar_dados():
     ads["dt_data"] = pd.to_datetime(ads["dt_data"])
     ads["mes"] = ads["dt_data"].dt.to_period("M").dt.to_timestamp()
     ads["vl_custo"] = pd.to_numeric(ads["vl_custo"]).fillna(0.0)
-    return {"vendas": vendas, "cancel": cancel, "metas": metas, "ads": ads}
+    return {"vendas": vendas, "cancel": cancel, "metas": metas, "ads": ads, "refs": refs, "hist": hist}
 
 
 def _hoje_brt():
@@ -120,8 +140,13 @@ def _fmt_mes(ts):
     return pd.Timestamp(ts).strftime("%m/%Y")
 
 
-def _somas(df):
+def _somas(df, refs=None):
+    """Somas do período. Com `refs`, o reembolso vem pelo mês em que aconteceu (não pelo do pedido)
+    e a margem de contribuição do período é a pré-reembolso das vendas − esses reembolsos."""
     s = {c: float(df[c].sum()) for c in SOMAVEIS}
+    if refs is not None:
+        s["vl_reembolso_rateio"] = float(refs["vl_reembolso_rateio"].sum())
+        s["vl_margem_contribuicao"] = float(df["vl_margem_pre_reembolso"].sum()) - s["vl_reembolso_rateio"]
     s["itens"] = float(df.loc[~df["fg_brinde"], "qt_item"].sum())  # brinde não conta como item vendido
     s["custo_brinde"] = float(df.loc[df["fg_brinde"], "vl_custo_linha"].sum())
     s["pedidos"] = int(df["cd_codigo_interno"].nunique())
@@ -139,21 +164,23 @@ def _razoes(s):
     }
 
 
-def _periodo_anterior(df, meses_sel, hoje):
+def _periodo_anterior(df, refs, meses_sel, hoje):
     """Só existe comparação quando UM mês está selecionado. Mês corrente (parcial)
     compara com o mesmo intervalo de dias do mês anterior; mês fechado, com o mês
-    anterior inteiro. Devolve (df_anterior, rótulo) ou (None, None)."""
+    anterior inteiro. Devolve (df_anterior, reembolsos_anterior, rótulo) ou (None, None, None)."""
     if len(meses_sel) != 1:
-        return None, None
+        return None, None, None
     mes = pd.Timestamp(meses_sel[0])
     ant = mes - pd.offsets.MonthBegin(1)
     d = df[df["mes"] == ant]
+    rf = refs[refs["mes"] == ant]
     if d.empty:
-        return None, None
+        return None, None, None
     if mes.date() == hoje.replace(day=1):
         d = d[d["dt_pedido"].dt.day <= hoje.day]
-        return d, f"01–{hoje.day:02d}/{ant.month:02d}"
-    return d, _fmt_mes(ant)
+        rf = rf[rf["dt_reembolso"].dt.day <= hoje.day]
+        return d, rf, f"01–{hoje.day:02d}/{ant.month:02d}"
+    return d, rf, _fmt_mes(ant)
 
 
 def _delta(cur, prev, rotulo, tipo="rel", fmt=None):
@@ -293,8 +320,9 @@ def _grafico_meta_mensal(df, metas):
     return fig
 
 
-def _grafico_evolucao(df):
-    m = df.groupby("mes").agg(rec=("vl_receita_liquida_produto", "sum"), marg=("vl_margem_contribuicao", "sum")).reset_index()
+def _grafico_evolucao(df, refs):
+    m = df.groupby("mes").agg(rec=("vl_receita_liquida_produto", "sum"), marg_pre=("vl_margem_pre_reembolso", "sum")).reset_index()
+    m["marg"] = m["marg_pre"] - m["mes"].map(refs.groupby("mes")["vl_reembolso_rateio"].sum()).fillna(0.0)
     m["pct"] = m["marg"] / m["rec"]
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_bar(x=m["mes"], y=m["rec"], name="Receita líquida de produtos", marker_color=METRIC_COLORS["receita"],
@@ -329,6 +357,118 @@ def _grafico_categorias(sel, top_n=7):
                   xaxis=dict(showticklabels=False, showgrid=False, range=[0, max(float(g["marg"].max()), 1.0) * 1.3]),
                   yaxis=dict(automargin=True))
     return fig
+
+
+RECOMPRA_DIAS = 90
+CLIENTES_DESDE = pd.Timestamp("2024-01-01")  # histórico do DW começa em nov/2023: antes disso "novo" é superestimado
+
+
+def _pedidos_cliente(df):
+    """Uma linha por pedido válido, com o que interessa para a análise de recompra."""
+    return df.groupby("cd_codigo_interno").agg(
+        mes=("mes", "first"), dt=("dt_pedido", "first"), contato=("cd_contato", "first"),
+        recorrente=("fg_cliente_recorrente", "first"), proxima=("dt_proxima_compra_cliente", "first"),
+        rec=("vl_receita_liquida_produto", "sum"), marg=("vl_margem_contribuicao", "sum"),
+    ).reset_index()
+
+
+def _serie_recorrencia(ped):
+    g = ped[ped["mes"] >= CLIENTES_DESDE].groupby("mes").agg(n=("recorrente", "size"), recor=("recorrente", "sum")).reset_index()
+    g["novos"] = g["n"] - g["recor"]
+    g["pct"] = g["recor"] / g["n"]
+    g["pct_6m"] = g["recor"].rolling(6).sum() / g["n"].rolling(6).sum()
+    return g
+
+
+def _serie_coorte(ped, hoje):
+    """Coorte = clientes cuja 1ª compra válida foi no mês; recompra = 2ª compra em até 90 dias.
+    Só entra cliente com 90 dias completos desde a 1ª compra (senão a taxa sairia artificialmente baixa)."""
+    novos = ped[~ped["recorrente"]].copy()
+    novos = novos[novos["dt"] + pd.Timedelta(days=RECOMPRA_DIAS) <= pd.Timestamp(hoje)]
+    novos["voltou"] = novos["proxima"].notna() & ((novos["proxima"] - novos["dt"]).dt.days <= RECOMPRA_DIAS)
+    c = novos[novos["mes"] >= CLIENTES_DESDE].groupby("mes").agg(n=("voltou", "size"), voltaram=("voltou", "sum")).reset_index()
+    c["pct"] = c["voltaram"] / c["n"]
+    c["pct_6m"] = c["voltaram"].rolling(6).sum() / c["n"].rolling(6).sum()
+    return c
+
+
+def _grafico_recorrencia(g):
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_bar(x=g["mes"], y=g["novos"], name="Pedidos de clientes novos", marker_color=METRIC_COLORS["receita"],
+                hovertemplate="%{x|%m/%Y}<br>%{y} pedidos novos<extra></extra>", secondary_y=False)
+    fig.add_bar(x=g["mes"], y=g["recor"], name="Pedidos de clientes recorrentes", marker_color=METRIC_COLORS["margem_contribuicao"],
+                hovertemplate="%{x|%m/%Y}<br>%{y} pedidos recorrentes<extra></extra>", secondary_y=False)
+    fig.add_trace(go.Scatter(x=g["mes"], y=g["pct"], name="% recorrentes (mês)", mode="markers",
+                             marker=dict(color=METRIC_COLORS["margem_pct"], size=6),
+                             hovertemplate="%{x|%m/%Y}<br>%{y:.1%}<extra></extra>"), secondary_y=True)
+    fig.add_trace(go.Scatter(x=g["mes"], y=g["pct_6m"], name="% recorrentes (média 6 meses)", mode="lines",
+                             line=dict(color=METRIC_COLORS["margem_pct"], width=3),
+                             hovertemplate="%{x|%m/%Y}<br>%{y:.1%} (6 meses)<extra></extra>"), secondary_y=True)
+    plotly_layout(fig, height=320, barmode="stack", hovermode="x unified",
+                  xaxis=dict(tickformat="%m/%y", gridcolor=COLORS["grid"]))
+    fig.update_yaxes(title_text="pedidos", gridcolor=COLORS["grid"], secondary_y=False)
+    fig.update_yaxes(tickformat=".0%", rangemode="tozero", showgrid=False, secondary_y=True)
+    return fig
+
+
+def _grafico_coorte(c):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=c["mes"], y=c["pct"], name="Recompra em 90 dias (coorte do mês)", mode="markers",
+                             marker=dict(color=METRIC_COLORS["margem_pct"], size=7), customdata=c[["voltaram", "n"]].to_numpy(),
+                             hovertemplate="Coorte %{x|%m/%Y}<br>%{y:.1%} (%{customdata[0]} de %{customdata[1]} clientes)<extra></extra>"))
+    fig.add_trace(go.Scatter(x=c["mes"], y=c["pct_6m"], name="Média de 6 coortes", mode="lines",
+                             line=dict(color=METRIC_COLORS["margem_contribuicao"], width=3),
+                             hovertemplate="Coorte %{x|%m/%Y}<br>%{y:.1%} (6 coortes)<extra></extra>"))
+    plotly_layout(fig, height=320, hovermode="x unified", xaxis=dict(tickformat="%m/%y", gridcolor=COLORS["grid"]))
+    fig.update_yaxes(tickformat=".0%", rangemode="tozero", gridcolor=COLORS["grid"])
+    return fig
+
+
+def _secao_clientes(df, hist, meses_sel, hoje):
+    section_title("Clientes novos e recorrentes")
+    ped = _pedidos_cliente(df)
+    p = ped[ped["mes"].isin(meses_sel)]
+    n = len(p)
+    if n == 0:
+        return
+    rec_p, nov_p = p[p["recorrente"]], p[~p["recorrente"]]
+    receita = float(p["rec"].sum())
+
+    def mpct(x):
+        r = float(x["rec"].sum())
+        return (float(x["marg"].sum()) / r) if r else None
+
+    render_cards([
+        card("Clientes no período", f"{p['contato'].nunique()}", "clientes distintos com pedido válido"),
+        card("Pedidos de recorrentes", f"{len(rec_p)} · {pct(len(rec_p) / n)}", f"de {n} pedidos · recorrente = já comprou antes"),
+        card("Receita líq. de recorrentes", brl(float(rec_p["rec"].sum())),
+             f"{pct(float(rec_p['rec'].sum()) / receita) if receita else '—'} da receita líq. de produtos"),
+        card("Margem contrib. (%) — novos", pct(mpct(nov_p)), f"{len(nov_p)} pedidos de 1ª compra", variant=_variant_margem(mpct(nov_p))),
+        card("Margem contrib. (%) — recorrentes", pct(mpct(rec_p)), f"{len(rec_p)} pedidos de recompra", variant=_variant_margem(mpct(rec_p))),
+    ])
+    hp = hist.rename(columns={"dt_pedido": "dt", "cd_contato": "contato", "fg_cliente_recorrente": "recorrente", "dt_proxima_compra_cliente": "proxima"})
+    g, c = _serie_recorrencia(hp), _serie_coorte(hp, hoje)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.html('<div class="c-label" style="margin:0 0 10px">Pedidos de novos × recorrentes por mês (não segue o filtro)</div>')
+        with st.container(border=True):
+            st.plotly_chart(_grafico_recorrencia(g), use_container_width=True)
+    with col2:
+        st.html(f'<div class="c-label" style="margin:0 0 10px">Clientes novos que recompraram em até {RECOMPRA_DIAS} dias, por mês da 1ª compra</div>')
+        with st.container(border=True):
+            st.plotly_chart(_grafico_coorte(c), use_container_width=True)
+    veredito = ""
+    if len(c) >= 12:
+        atual, anterior = c.tail(6), c.iloc[-12:-6]
+        ra = atual["voltaram"].sum() / atual["n"].sum()
+        rb = anterior["voltaram"].sum() / anterior["n"].sum()
+        veredito = (f" Últimas 6 coortes com 90 dias completos: <strong>{pct(ra)}</strong> recompraram, "
+                    f"contra <strong>{pct(rb)}</strong> nas 6 anteriores.")
+    note("<strong>Recorrente</strong> = pedido de cliente (contato do Bling) que já tinha uma compra válida anterior. A recompra por coorte só conta clientes com "
+         f"{RECOMPRA_DIAS} dias completos desde a 1ª compra, por isso as coortes mais recentes não aparecem." + veredito +
+         " O volume é pequeno (dezenas de clientes novos por mês): olhe a <strong>linha de média de 6 meses</strong>, não os pontos isolados. "
+         f"Séries a partir de {CLIENTES_DESDE.strftime('%m/%Y')}; o histórico do DW começa em nov/2023, então clientes antigos no início da série aparecem como novos. "
+         "A margem dos cards é a do pedido (reembolso no mês do pedido).")
 
 
 def _juntar_incompletude(serie):
@@ -429,7 +569,7 @@ def render():
             st.error(f"Erro ao carregar dados do BigQuery: {e}")
             return
 
-    df, cancel, metas, ads = dados["vendas"], dados["cancel"], dados["metas"], dados["ads"]
+    df, cancel, metas, ads, refs, hist = dados["vendas"], dados["cancel"], dados["metas"], dados["ads"], dados["refs"], dados["hist"]
     hoje = _hoje_brt()
     if df.empty:
         st.info("Sem pedidos válidos no período de histórico.")
@@ -459,10 +599,11 @@ def render():
         return
 
     sel = df[df["mes"].isin(meses_sel)]
-    s = _somas(sel)
+    refs_sel = refs[refs["mes"].isin(meses_sel)]
+    s = _somas(sel, refs_sel)
     r = _razoes(s)
-    ant, rot = _periodo_anterior(df, meses_sel, hoje)
-    sa = _somas(ant) if ant is not None else None
+    ant, refs_ant, rot = _periodo_anterior(df, refs, meses_sel, hoje)
+    sa = _somas(ant, refs_ant) if ant is not None else None
     ra = _razoes(sa) if sa else None
     canc = _cancelamentos(cancel, meses_sel, s["pedidos"])
     meta = _meta(metas, meses_sel, hoje, s["vl_liquido_item"])
@@ -540,7 +681,8 @@ def render():
             card("Investimento Google Ads", brl(custo_ads), f"{pct(custo_ads / rec) if rec else '—'} da receita líq. · {int(ads_sel['qt_cliques'].sum())} cliques"),
             card("Margem após mídia (R$)", brl(margem_pos), "margem de contribuição − investimento Google Ads",
                  variant="ok" if margem_pos > 0 else "bad"),
-            card("Margem após mídia (%)", pct(margem_pos / rec) if rec else "—", "÷ receita líq. de produtos"),
+            card("Margem após mídia (%)", pct(margem_pos / rec) if rec else "—", "margem após mídia ÷ receita líq. de produtos",
+                 variant=_variant_margem(margem_pos / rec if rec else None), ref=f"verde ≥ {MARGEM_OK:.0%} · âmbar ≥ {MARGEM_MIN:.0%}"),
             card("ROAS atribuído ao Google", x(rec_g / custo_ads), f"receita líq. de {ped_g} pedidos Google (cpc) ÷ investimento",
                  ref="piso: só clique identificável na URL"),
             card("Retorno sobre a margem", x(marg_g / custo_ads), "margem de contribuição dos pedidos Google ÷ investimento",
@@ -562,7 +704,7 @@ def render():
     note("<strong>De onde vem cada barra:</strong> receita, descontos e frete pago — pedido do Bling conferido com a Nuvemshop · "
          "CMV — custo do produto vigente na data do pedido (histórico de compras do Bling) · "
          "frete real — custo da etiqueta (Nuvem Envio, via Nuvemshop) · taxas de pagamento — tarifa cobrada por transação (Nuvem Pago/Mercado Pago, via Nuvemshop) · "
-         "reembolsos — valor estornado na transação (Nuvemshop) · "
+         "reembolsos — valor estornado na transação (Nuvemshop), lançado no <strong>mês em que aconteceu</strong> (data aproximada: última atualização do pedido; pedidos totalmente reembolsados saem das vendas e aparecem em Cancelamentos como \"estornados\") · "
          "<strong>embalagem — estimativa fixa de R$ 2,50 por pedido (parâmetro, não é medido)</strong> · imposto — 0% enquanto a loja não tem CNPJ. "
          "mídia paga — investimento no Google Ads no período (única mídia paga na base). "
          "Passos zerados não aparecem. A <strong>margem de contribuição</strong> é <strong>antes de mídia</strong>; a última barra, <strong>margem após mídia</strong>, já desconta o Google Ads. Ver specs/vendas-margem.md.")
@@ -597,12 +739,15 @@ def render():
     note("Origem detectada pela <strong>URL de entrada</strong> do pedido (UTM e clique de anúncio), classificada no dbt (tb_atribuicao_pedido). "
          "\"(sem parâmetro)\" = entrou sem UTM nem clique de anúncio identificável (direto, orgânico ou link sem marcação); "
          "\"(sem landing_url)\" = pedido sem sessão rastreável. Os parâmetros UTM crus (<code>ds_utm_*</code>) cobrem só ~7% dos pedidos, por isso o Google Ads "
-         "aparece pela detecção de clique. Variações de nome como \"ig\" e \"instagram\" ainda não estão unificadas na classificação.")
+         "aparece pela detecção de clique. Nomes unificados no dbt: \"ig\", \"igshopping\" e \"instagram\" viram <strong>instagram</strong>.")
+
+    # ═══ CLIENTES ═══
+    _secao_clientes(df, hist, meses_sel, hoje)
 
     # ═══ EVOLUÇÃO ═══
     section_title("Evolução mensal (desde ago/2025, não segue o filtro)")
     with st.container(border=True):
-        st.plotly_chart(_grafico_evolucao(df), use_container_width=True)
+        st.plotly_chart(_grafico_evolucao(df, refs), use_container_width=True)
     note("Barras: receita líquida de produtos e margem de contribuição (R$). Linha: margem de contribuição (%, eixo direito). "
          "Antes de ago/2025 a taxa e o frete reais da Nuvemshop não estão disponíveis. "
          "Com ~1 pedido por dia, variações de poucos pontos percentuais entre meses não são sinal.")

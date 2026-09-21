@@ -135,3 +135,11 @@ Jan–Abr/26 ficam entre 57,9% e 62,6% (frete subsidiado em pedidos ≥ R$ 400 e
 - **Cascata com mídia:** depois do subtotal "= Margem de contribuição" (antes de mídia) entram "− Mídia paga (Google Ads)" e "= Margem após mídia". Sem custo de Ads no período, a cascata termina na margem de contribuição.
 
 - **Drill do pedido:** ao selecionar uma linha da tabela "Pedidos do período" (single-row), abre "Produtos do pedido" com as linhas do pedido em `tb_pedido` (produto, qtd, receita líq., CMV, taxa, resultado de frete, reembolso, embalagem, margem de contribuição R$/%, dado faltante). Sem regra nova: só filtra as linhas do pedido; rateios vêm prontos da az e somam o valor do pedido.
+
+## v4 — 20/set/2026 (clientes, reembolso realizado, origem unificada)
+
+- **Origem unificada (dbt, `tb_atribuicao_pedido`):** `ig`, `igshopping`, `instagram` (e `.com`) → `instagram`; `fb`/`facebook*` → `facebook`; mídia `paid` de origem Meta → `paid_social`.
+- **Reembolso no mês realizado:** `tb_pedido.dt_reembolso` (aproximação: última atualização do pedido na Nuvemshop; a API não tem timestamp de reembolso). Nos cards, na cascata, na comparação e na evolução mensal, o reembolso entra no mês de `dt_reembolso` e a margem do período = Σ margem pré-reembolso das vendas do período − reembolsos realizados no período. Tabelas de pedido, produto, categoria e origem continuam com o reembolso no pedido (visão por pedido). Pedido totalmente reembolsado não é venda válida (aparece em Cancelamentos como "estornados"); só reembolso parcial entra como reembolso.
+- **Clientes novos × recorrentes (dbt, `tb_pedido`):** `nr_pedido_cliente` (ordem entre pedidos VÁLIDOS do `cd_contato`), `fg_cliente_recorrente` (nr > 1), `dt_proxima_compra_cliente`. Histórico do DW começa em nov/2023 (quem comprou antes aparece como novo → séries a partir de 01/2024).
+- **Seção "Clientes novos e recorrentes":** cards do período (clientes, pedidos e receita de recorrentes, margem % de novos e de recorrentes) + gráfico mensal de pedidos novos × recorrentes com % recorrentes (mês e média de 6 meses) + coorte de recompra em 90 dias (só clientes com 90 dias completos; média de 6 coortes; comparativo das últimas 6 vs 6 anteriores). Volume pequeno: ler a média móvel.
+- **Cards "Margem após mídia (%)":** mesmo semáforo da margem de contribuição (verde ≥ 50%, âmbar ≥ 40%).
