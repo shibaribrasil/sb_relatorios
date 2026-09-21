@@ -79,8 +79,8 @@ def carregar_dados():
     """)
     origem = bq.query_df(client, f"""
         SELECT p.cd_codigo_interno,
-               COALESCE(a.ds_origem_venda, '(sem atribuição)') AS origem,
-               COALESCE(a.ds_midia_venda, '(sem atribuição)') AS midia
+               COALESCE(a.ds_origem_venda, '(sem parametro)') AS origem,
+               COALESCE(a.ds_midia_venda, '(sem parametro)') AS midia
           FROM (SELECT DISTINCT cd_codigo_interno, cd_pedido FROM {base}
                  WHERE fg_pedido_valido AND dt_pedido >= DATE '{INICIO_HISTORICO}') AS p
      LEFT JOIN (SELECT cd_pedido, ANY_VALUE(ds_origem_venda) AS ds_origem_venda, ANY_VALUE(ds_midia_venda) AS ds_midia_venda
@@ -108,7 +108,7 @@ def carregar_dados():
     hist["fg_cliente_recorrente"] = hist["fg_cliente_recorrente"].fillna(False).astype(bool)
     hist["dt_proxima_compra_cliente"] = pd.to_datetime(hist["dt_proxima_compra_cliente"])
     vendas = vendas.merge(origem, on="cd_codigo_interno", how="left")
-    vendas[["origem", "midia"]] = vendas[["origem", "midia"]].fillna("(sem atribuição)")
+    vendas[["origem", "midia"]] = vendas[["origem", "midia"]].fillna("(sem parametro)")
     vendas["dt_pedido"] = pd.to_datetime(vendas["dt_pedido"])
     vendas["mes"] = vendas["dt_pedido"].dt.to_period("M").dt.to_timestamp()
     vendas["ds_categoria"] = vendas["ds_categoria"].fillna("Sem categoria")
@@ -737,8 +737,8 @@ def render():
                                 "Margem de contrib. (R$)": st.column_config.NumberColumn(format="R$ %.2f", width=150),
                                 "Margem de contrib. (%)": st.column_config.NumberColumn(format="percent", width=150)})
     note("Origem detectada pela <strong>URL de entrada</strong> do pedido (UTM e clique de anúncio), classificada no dbt (tb_atribuicao_pedido). "
-         "\"(sem parâmetro)\" = entrou sem UTM nem clique de anúncio identificável (direto, orgânico ou link sem marcação); "
-         "\"(sem landing_url)\" = pedido sem sessão rastreável. Os parâmetros UTM crus (<code>ds_utm_*</code>) cobrem só ~7% dos pedidos, por isso o Google Ads "
+         "\"(sem parametro)\" = sem UTM nem clique de anúncio identificável, ou sem sessão rastreável (direto, orgânico, link sem marcação). "
+         "Os parâmetros UTM crus (<code>ds_utm_*</code>) cobrem só ~7% dos pedidos, por isso o Google Ads "
          "aparece pela detecção de clique. Nomes unificados no dbt: \"ig\", \"igshopping\" e \"instagram\" viram <strong>instagram</strong>.")
 
     # ═══ CLIENTES ═══
