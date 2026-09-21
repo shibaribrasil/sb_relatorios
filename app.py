@@ -8,7 +8,7 @@ arquivo em reports/ + entrada aqui.
 """
 import streamlit as st
 
-from reports import estoque, google_ads, vendas_margem
+from reports import estoque, google_ads, pulso_dia, vendas_margem
 
 st.set_page_config(
     page_title="Relatórios — Shibari Brasil",
@@ -19,8 +19,11 @@ st.set_page_config(
 # Menu agrupado por cadência (ver planejamento de relatórios): cada relatório
 # entra na camada em que a decisão acontece.
 pages = {
+    "Diário": [
+        st.Page(pulso_dia.render, title="Pulso do Dia", icon="⚡", url_path="dia", default=True),
+    ],
     "Mensal": [
-        st.Page(vendas_margem.render, title="Vendas & Margem", icon="🛒", url_path="vendas", default=True),
+        st.Page(vendas_margem.render, title="Vendas & Margem", icon="🛒", url_path="vendas"),
     ],
     "Semanal": [
         st.Page(estoque.render, title="Estoque", icon="📦", url_path="estoque"),
