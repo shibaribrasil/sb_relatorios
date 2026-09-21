@@ -15,7 +15,10 @@ from reports.clientes import carregar_dados as carregar_clientes, COORTE_DESDE
 from reports.vendas_margem import carregar_dados as carregar_vendas, _hoje_brt
 
 INICIO_ADS = pd.Timestamp("2026-07-01")   # o custo de Ads só existe desde 15/06/2026: junho é parcial, começamos em julho
-TETO_ADS_MES = 600.0                       # teto de investimento mensal definido após a auditoria de ago/2026
+# Orçamento diário vigente da conta (Notion: "Reestruturação do Google Ads — Plano de Ação", realocação de 21/set/2026:
+# Shopping R$ 22 + Pesquisa R$ 13 = R$ 35/dia). Não vem do dbt: atualizar aqui (e na spec) quando o orçamento mudar.
+# A meta antiga de R$ 600/mês (Backlog B008, ~R$ 20/dia) foi superada pela decisão de 18/set.
+ORCAMENTO_DIARIO = 35.0
 LTV_CAC_MIN = 3.0                          # benchmark: mínimo 3:1; saudável 4–5:1
 MESES_LTV = 12
 GOOGLE_PAGO = ("google", "cpc")
@@ -57,9 +60,11 @@ def _grafico_investimento(t):
     x = [m.strftime("%m/%Y") for m in t["m"]]
     fig = go.Figure()
     fig.add_bar(x=x, y=t["inv"], name="Investimento Google Ads", marker_color=METRIC_COLORS["receita"], hovertemplate="%{x}: R$ %{y:,.0f}<extra></extra>")
-    fig.add_hline(y=TETO_ADS_MES, line=dict(color=METRIC_COLORS["meta"], dash="dash", width=2), annotation_text=f"teto R$ {TETO_ADS_MES:,.0f}/mês".replace(",", "."),
-                  annotation_position="top left")
-    plotly_layout(fig, height=280, showlegend=False, xaxis=dict(type="category"), yaxis=dict(tickprefix="R$ ", gridcolor=COLORS["grid"]))
+    # referência mensal = orçamento diário × dias do mês (mês corrente: só dias decorridos, para comparar com o gasto até agora)
+    ref = [ORCAMENTO_DIARIO * (min(_hoje_brt().day, m.days_in_month) if m == pd.Period(_hoje_brt(), "M") else m.days_in_month) for m in t["m"]]
+    fig.add_trace(go.Scatter(x=x, y=ref, name="Orçamento diário × dias", mode="lines+markers", line=dict(color=METRIC_COLORS["meta"], dash="dash", width=2),
+                             hovertemplate="%{x}: R$ %{y:,.0f} de orçamento<extra></extra>"))
+    plotly_layout(fig, height=280, xaxis=dict(type="category"), yaxis=dict(tickprefix="R$ ", gridcolor=COLORS["grid"]))
     return fig
 
 
@@ -120,11 +125,12 @@ def render():
     be = fat / mc if mc else None
     n_meses = len(sel)
     tem_parcial = mes_atual in sel
+    orcado = sum(ORCAMENTO_DIARIO * (min(hoje.day, m.days_in_month) if m == mes_atual else m.days_in_month) for m in sel)  # orçamento diário atual × dias do período
 
     section_title("Economia de aquisição: " + ", ".join(m.strftime("%m/%Y") for m in sorted(sel)))
     render_cards([
-        card("Investimento em mídia (Google Ads)", brl(inv), f"{pct(inv / (TETO_ADS_MES * n_meses), 0)} do teto ({brl(TETO_ADS_MES * n_meses)})",
-             variant=("bad" if inv > TETO_ADS_MES * n_meses else "ok")),
+        card("Investimento em mídia (Google Ads)", brl(inv), f"{pct(inv / orcado, 0)} do orçamento atual ({brl(orcado)} = R$ {ORCAMENTO_DIARIO:.0f}/dia × dias)",
+             variant=("bad" if inv > orcado * 1.1 else "ok")),
         card("Clientes novos", f"{novos}", f"{novos_g} vindos do Google pago (origem do 1º pedido)"),
         card("CAC (todos os clientes novos)", brl(cac) if cac else "—", "investimento ÷ clientes novos", ref="referência: R$ 50–175 (mediana do setor)"),
         card("CAC do Google pago", brl(cac_g) if cac_g else "—", "investimento ÷ clientes novos atribuídos ao Google (cpc)"),
@@ -160,15 +166,16 @@ def render():
                        "Faturamento": st.column_config.NumberColumn(format="R$ %.0f", width=110), "MER": st.column_config.NumberColumn(format="%.1f×", width=80)})
     col1, col2 = st.columns(2)
     with col1:
-        st.html('<div class="c-label" style="margin:0 0 10px">Investimento × teto mensal</div>')
+        st.html('<div class="c-label" style="margin:0 0 10px">Investimento × orçamento atual</div>')
         with st.container(border=True):
             st.plotly_chart(_grafico_investimento(t), use_container_width=True)
     with col2:
         st.html('<div class="c-label" style="margin:0 0 10px">MER × break-even</div>')
         with st.container(border=True):
             st.plotly_chart(_grafico_mer(t), use_container_width=True)
-    note(f"Teto de {brl(TETO_ADS_MES)}/mês definido após a auditoria de ago/2026 (constante desta página). O histórico de Ads começa em 15/06/2026, por isso a tabela parte de julho. "
-         "Junho não entra (parcial).")
+    note(f"Orçamento de referência = R$ {ORCAMENTO_DIARIO:.0f}/dia (Shopping R$ 22 + Pesquisa R$ 13, realocação de 21/set/2026, do plano de reestruturação no Notion) × dias do mês; "
+         "antes de 18/set o orçamento era menor e antes da auditoria (ago) era ~R$ 52/dia, então meses anteriores comparam com o orçamento de hoje, não com o da época. "
+         "A meta antiga de R$ 600/mês (Backlog B008) foi superada. O histórico de Ads começa em 15/06/2026, por isso a tabela parte de julho.")
 
     # ═══ POR CANAL ═══
     section_title("De onde vêm os clientes novos")

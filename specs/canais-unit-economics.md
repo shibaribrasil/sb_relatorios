@@ -11,6 +11,6 @@ Pergunta: **cada real de mídia se paga? Quanto custa um cliente novo e quanto e
 - **LTV : CAC** = valor em 12 meses ÷ CAC. Mistura coortes antigas com CAC atual: ordem de grandeza. Mínimo 3:1; saudável 4–5:1; acima de 6:1 pode ser subinvestimento.
 - **Payback** = margem de contribuição média do 1º pedido dos clientes captados no período ÷ CAC (≥ 100% = o 1º pedido já paga a aquisição).
 - **MER** = faturamento total (todas as origens) ÷ investimento; **break-even** = faturamento ÷ margem de contribuição do período (MER abaixo disso = a mídia consome mais do que a venda deixa).
-- **Teto de investimento:** R$ 600/mês (definido após a auditoria de ago/2026), constante da página.
+- **Orçamento de referência:** R$ 35/dia (Shopping R$ 22 + Pesquisa R$ 13, realocação de 21/set/2026 — Notion, "Reestruturação do Google Ads — Plano de Ação") × dias do período; constante `ORCAMENTO_DIARIO` da página, atualizar quando o orçamento mudar. Não é um teto validado por você: é o orçamento vigente. A meta antiga de R$ 600/mês (Backlog B008, ~R$ 20/dia) foi superada pela decisão de 18/set.
 - **Por canal:** clientes novos por origem/mídia do 1º pedido, % que já recompraram, valor médio; investimento e CAC só para o Google pago.
 - Mês corrente é parcial; o custo de Ads chega com 1–2 dias de atraso.
