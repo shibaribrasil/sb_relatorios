@@ -40,7 +40,7 @@ MARGEM_OK = 0.50     # >= 50%: verde
 MARGEM_MIN = 0.40    # >= 40% (mínimo institucional): âmbar; abaixo: vermelho
 
 COLUNAS = """
-    cd_codigo_interno, cd_pedido, cd_pedido_nuvemshop, cd_contato, nm_contato, dt_pedido, dt_reembolso,
+    cd_codigo_interno, cd_pedido, cd_pedido_nuvemshop, cd_contato, nm_contato, dt_pedido, dt_reembolso, ds_frente,
     fg_cliente_recorrente, dt_proxima_compra_cliente, ds_status_pedido, nm_produto,
     ds_categoria, ds_meio_pagamento_nuvemshop, qt_item, fg_brinde, ds_incompletude,
     vl_receita_bruta_produto, vl_desconto_venda_rateio, vl_receita_liquida_produto, vl_liquido_item,
@@ -717,6 +717,45 @@ def render():
              "O histórico do Ads começa em 15/06/2026.")
     else:
         note("Sem custo de Google Ads no período (o histórico do Ads começa em 15/06/2026).")
+
+    # ═══ FRENTES ═══
+    section_title("Shibari × Curadoria")
+    fr = sel.groupby("ds_frente", as_index=False).agg(
+        rec=("vl_receita_liquida_produto", "sum"), marg=("vl_margem_contribuicao", "sum"), pedidos=("cd_codigo_interno", "nunique"))
+    fr["pct_rec"] = fr["rec"] / fr["rec"].sum() if fr["rec"].sum() else 0
+    fr["pct_marg"] = fr["marg"] / fr["marg"].sum() if fr["marg"].sum() else 0
+    fr["margem_pct"] = fr["marg"] / fr["rec"].where(fr["rec"] != 0)
+    fr = fr.set_index("ds_frente")
+    cols_fr = st.columns(2)
+    for col, nome_frente in zip(cols_fr, ["Shibari", "Curadoria"]):
+        with col:
+            if nome_frente in fr.index:
+                linha = fr.loc[nome_frente]
+                render_cards([
+                    card(nome_frente, brl(linha["rec"]), f"{pct(linha['pct_rec'], 0)} da receita líq. · {int(linha['pedidos'])} pedidos com linha nesta frente"),
+                    card("Margem de contribuição", brl(linha["marg"]), f"{pct(linha['margem_pct'])} · {pct(linha['pct_marg'], 0)} da margem total",
+                         variant=_variant_margem(linha["margem_pct"])),
+                ])
+            else:
+                st.info(f"Sem vendas de {nome_frente} no período.")
+    fig_fr = go.Figure(go.Bar(
+        y=["Receita líquida", "Margem de contribuição"],
+        x=[fr.loc["Shibari", "rec"] if "Shibari" in fr.index else 0, fr.loc["Shibari", "marg"] if "Shibari" in fr.index else 0],
+        name="Shibari", orientation="h", marker_color=METRIC_COLORS["receita"],
+        text=[brl(fr.loc["Shibari", "rec"], 0) if "Shibari" in fr.index else "R$ 0", brl(fr.loc["Shibari", "marg"], 0) if "Shibari" in fr.index else "R$ 0"],
+        textposition="inside", hovertemplate="Shibari %{y}: %{x:,.0f}<extra></extra>"))
+    fig_fr.add_trace(go.Bar(
+        y=["Receita líquida", "Margem de contribuição"],
+        x=[fr.loc["Curadoria", "rec"] if "Curadoria" in fr.index else 0, fr.loc["Curadoria", "marg"] if "Curadoria" in fr.index else 0],
+        name="Curadoria", orientation="h", marker_color=METRIC_COLORS["margem_contribuicao"],
+        text=[brl(fr.loc["Curadoria", "rec"], 0) if "Curadoria" in fr.index else "R$ 0", brl(fr.loc["Curadoria", "marg"], 0) if "Curadoria" in fr.index else "R$ 0"],
+        textposition="inside", hovertemplate="Curadoria %{y}: %{x:,.0f}<extra></extra>"))
+    plotly_layout(fig_fr, height=200, barmode="stack", xaxis=dict(tickprefix="R$ ", gridcolor=COLORS["grid"]))
+    with st.container(border=True):
+        st.plotly_chart(fig_fr, use_container_width=True)
+    note("<strong>Shibari</strong> = produção própria (categoria \"Shibari\"). <strong>Curadoria</strong> = revenda fetichista (demais categorias). Divisão pela categoria "
+         "do produto (linha do pedido), não pelo pedido inteiro: um pedido com itens das duas frentes soma em ambas, sem dupla contagem na receita e na margem do período. "
+         "Brindes ficam fora (custo entra no CMV total, não em nenhuma frente). Classificação vive no dbt (<code>stg_frente_categoria</code>) — atualizar lá se uma categoria mudar de frente.")
 
     # ═══ CASCATA ═══
     section_title("Da receita bruta à margem de contribuição e à margem após mídia")

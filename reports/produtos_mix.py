@@ -123,10 +123,16 @@ def render():
     </div>
     """)
 
-    nome = st.selectbox("Período", options=list(PERIODOS), index=1)
+    col_p, col_f = st.columns([2, 1])
+    with col_p:
+        nome = st.selectbox("Período", options=list(PERIODOS), index=1)
+    with col_f:
+        frente = st.selectbox("Frente", options=["Todas", "Shibari", "Curadoria"])
     ini, fim, p_ini, p_fim = _janela(hoje, PERIODOS[nome])
     cur = df[(df["dt_pedido"] >= ini) & (df["dt_pedido"] <= fim)]
     ant = df[(df["dt_pedido"] >= p_ini) & (df["dt_pedido"] <= p_fim)]
+    if frente != "Todas":
+        cur, ant = cur[cur["ds_frente"] == frente], ant[ant["ds_frente"] == frente]
     if cur.empty:
         st.info("Sem vendas no período escolhido.")
         return
@@ -152,6 +158,21 @@ def render():
         card("Top 5 produtos", pct(top5), "da margem de contribuição do período"),
     ])
     note("Comparação com o período anterior de mesmo tamanho em dias (" + rot + ")." if tem_ant else "Sem período anterior completo para comparar.")
+
+    if frente == "Todas":
+        gf = cur.groupby("ds_frente", as_index=False).agg(rec=("vl_receita_liquida_produto", "sum"), marg=("vl_margem_contribuicao", "sum"))
+        gf["pct_rec"] = gf["rec"] / gf["rec"].sum() if gf["rec"].sum() else 0
+        gf["margem_pct"] = gf["marg"] / gf["rec"].where(gf["rec"] != 0)
+        cols_fr = st.columns(2)
+        for col, nf in zip(cols_fr, ["Shibari", "Curadoria"]):
+            with col:
+                lin = gf[gf["ds_frente"] == nf]
+                if not lin.empty:
+                    r = lin.iloc[0]
+                    render_cards([card(nf, brl(r["rec"]), f"{pct(r['pct_rec'], 0)} da receita líq. · margem {pct(r['margem_pct'])}", variant=None)])
+                else:
+                    st.info(f"Sem vendas de {nf} no período.")
+        note("Use o seletor \"Frente\" acima para ver a curva ABC, a dispersão e a tabela só de Shibari ou só de Curadoria.")
 
     # ═══ PARETO ═══
     section_title("Curva ABC — o que sustenta a margem")

@@ -13,3 +13,6 @@ Mesma base de `vendas_margem` (`carregar_dados()` → `dbt_dw_az.tb_pedido`, ped
 - **Mix por categoria:** participação na receita líquida por mês do período; tabela com % da receita e margem % por categoria.
 - **Δ receita:** (receita − receita anterior) ÷ receita anterior; vazio quando o produto não vendeu no período anterior.
 - **Limite conhecido:** com ~40 pedidos/mês, produtos individuais oscilam muito; usar 3+ meses. Cruzamento com estoque (classe A sem estoque) depende da página de Estoque refeita. Os modelos `tb_venda_produto_*` (com regra própria, cancelados fora só por status) seguem alimentando o estoque e serão consolidados junto com o Estoque; esta página **não** os usa.
+
+## v2 — 22/set/2026: filtro por frente
+- Seletor **Frente** (Todas / Shibari / Curadoria), ao lado do período. Filtra toda a página (ABC, dispersão, mix por categoria, tabela). Com "Todas", mostra também um resumo rápido (receita e margem % de cada frente) antes da curva ABC.

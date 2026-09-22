@@ -146,3 +146,6 @@ Jan–Abr/26 ficam entre 57,9% e 62,6% (frete subsidiado em pedidos ≥ R$ 400 e
 
 ## v5 — 21/set/2026 (5.1: conversão e RPV)
 - **Bloco "Conversão do site"** (abaixo de Vendas e meta): sessões do GA4, **taxa de conversão** = pedidos válidos ÷ sessões e **RPV** = faturamento ÷ sessões, para os meses selecionados (até hoje no mês corrente). Só aparece quando todos os meses selecionados estão dentro do histórico do GA4 (desde 01/07/2026). Detalhe por canal e funil: página Site & Funil.
+
+## v6 — 22/set/2026 (Shibari × Curadoria)
+- **Seção "Shibari × Curadoria"** (depois de "Da receita à margem"): receita líquida, % da receita, margem de contribuição (R$ e %) e % da margem total de cada frente, com semáforo por frente, mais um gráfico de barras empilhadas comparando as duas. `ds_frente` vem do dbt (`stg_frente_categoria`, hoje: categoria "Shibari" = frente Shibari; demais categorias = Curadoria), aditivo por linha do pedido — um pedido com itens das duas frentes soma em ambas, sem dupla contagem. Brindes ficam fora (custo no CMV total).
