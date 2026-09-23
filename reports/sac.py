@@ -17,20 +17,6 @@ TIPO_ENTREGA_PROBLEMA = "entrega_problema"
 DIAS_PARADO = 10  # mesmo limite usado no Pulso do Dia (common/logistica não define isso, é decisão de apresentação)
 
 
-def _quem_esta_marcando():
-    """Prioriza o login do Streamlit Cloud (viewer restrito por e-mail); sem isso, pede o nome uma vez por sessão."""
-    try:
-        if st.user.is_logged_in and st.user.email:
-            return st.user.email
-    except Exception:
-        pass
-    if "sac_nome" not in st.session_state:
-        st.session_state["sac_nome"] = ""
-    nome = st.text_input("Seu nome (para registrar quem tratou cada item)", value=st.session_state["sac_nome"], key="sac_nome_input")
-    st.session_state["sac_nome"] = nome
-    return nome
-
-
 def _lista_entregas_problema(logi):
     em_transito = logi[logi["ds_situacao_logistica"] == "em_transito"]
     parado = em_transito["qt_dias_sem_movimento"] >= DIAS_PARADO
@@ -52,7 +38,7 @@ def _lista_entregas_problema(logi):
     return risco.sort_values("qt_dias_sem_movimento", ascending=False)
 
 
-def _secao_checklist(titulo, tipo_tarefa, itens, colunas_extra, responsavel, nota):
+def _secao_checklist(titulo, tipo_tarefa, itens, colunas_extra, nota):
     """`itens` já vem com uma coluna `chave` (str) e as colunas citadas em `colunas_extra` (dict nome exibido → coluna
     em `itens`). Renderiza um data_editor com checkbox "Já tratei"; ao mudar, grava no BigQuery e reexecuta."""
     section_title(titulo)
@@ -84,12 +70,9 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas_extra, responsavel, not
     # comparação por posição (não por índice): data_editor mantém a ordem das linhas, não reordena/filtra sozinho
     mudou = editado["Já tratei"].to_numpy() != tabela["Já tratei"].to_numpy()
     if mudou.any():
-        if not responsavel:
-            st.warning("Preencha seu nome acima antes de marcar um item — assim dá para saber quem tratou.")
-        else:
-            for chave, novo_valor in zip(chaves[mudou], editado["Já tratei"].to_numpy()[mudou]):
-                marcar_tarefa(tipo_tarefa, chave, bool(novo_valor), responsavel=responsavel)
-            st.rerun()
+        for chave, novo_valor in zip(chaves[mudou], editado["Já tratei"].to_numpy()[mudou]):
+            marcar_tarefa(tipo_tarefa, chave, bool(novo_valor))
+        st.rerun()
     note(nota)
 
 
@@ -104,7 +87,6 @@ def render():
       </div>
     </div>
     """)
-    responsavel = _quem_esta_marcando()
 
     with st.spinner("Carregando dados..."):
         try:
@@ -116,7 +98,7 @@ def render():
     entregas = _lista_entregas_problema(logi)
     _secao_checklist(
         "Entregas com problema — falar com o cliente",
-        TIPO_ENTREGA_PROBLEMA, entregas, responsavel=responsavel,
+        TIPO_ENTREGA_PROBLEMA, entregas,
         colunas_extra={
             "Pedido": "codigo", "Rastreio": "cd_rastreio", "Cliente": "nm_cliente",
             "Dias sem evento": "qt_dias_sem_movimento", "Motivo": "motivo",

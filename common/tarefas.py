@@ -21,10 +21,10 @@ TABELA = f"{bq.PROJECT}.raw_control.sac_tarefas"
 
 @st.cache_data(ttl=60)
 def carregar_tarefas(tipo_tarefa: str) -> pd.DataFrame:
-    """1 linha por item já marcado/desmarcado desse tipo (chave, fg_feito, nm_responsavel, dt_atualizacao)."""
+    """1 linha por item já marcado/desmarcado desse tipo (chave, fg_feito, dt_atualizacao)."""
     client = bq.get_client()
     job = client.query(
-        f"SELECT chave, fg_feito, nm_responsavel, ds_observacao, dt_atualizacao FROM `{TABELA}` WHERE tipo_tarefa = @tipo",
+        f"SELECT chave, fg_feito, ds_observacao, dt_atualizacao FROM `{TABELA}` WHERE tipo_tarefa = @tipo",
         job_config=bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("tipo", "STRING", tipo_tarefa)]),
     )
     df = job.result().to_dataframe()
@@ -33,9 +33,10 @@ def carregar_tarefas(tipo_tarefa: str) -> pd.DataFrame:
     return df
 
 
-def marcar_tarefa(tipo_tarefa: str, chave: str, fg_feito: bool, responsavel: str = "", observacao: str = ""):
-    """Grava (upsert) o estado de um item. Chama st.cache_data.clear() na função de leitura depois,
-    por conta do autor, para a página já mostrar o valor novo no mesmo rerun."""
+def marcar_tarefa(tipo_tarefa: str, chave: str, fg_feito: bool, observacao: str = ""):
+    """Grava (upsert) o estado de um item. Não identifica quem marcou (decisão do Hugo, 23/set/2026) —
+    `nm_responsavel` fica na tabela para uso futuro, mas sempre vazio. Chama carregar_tarefas.clear()
+    depois, para a página já mostrar o valor novo no mesmo rerun."""
     client = bq.get_client()
     job = client.query(
         f"""
@@ -43,16 +44,15 @@ def marcar_tarefa(tipo_tarefa: str, chave: str, fg_feito: bool, responsavel: str
         USING (SELECT @tipo AS tipo_tarefa, @chave AS chave) S
            ON T.tipo_tarefa = S.tipo_tarefa AND T.chave = S.chave
          WHEN MATCHED THEN UPDATE SET
-              fg_feito = @feito, nm_responsavel = @resp, ds_observacao = @obs, dt_atualizacao = @agora
+              fg_feito = @feito, ds_observacao = @obs, dt_atualizacao = @agora
          WHEN NOT MATCHED THEN
-           INSERT (tipo_tarefa, chave, fg_feito, nm_responsavel, ds_observacao, dt_criacao, dt_atualizacao)
-           VALUES (@tipo, @chave, @feito, @resp, @obs, @agora, @agora)
+           INSERT (tipo_tarefa, chave, fg_feito, ds_observacao, dt_criacao, dt_atualizacao)
+           VALUES (@tipo, @chave, @feito, @obs, @agora, @agora)
         """,
         job_config=bigquery.QueryJobConfig(query_parameters=[
             bigquery.ScalarQueryParameter("tipo", "STRING", tipo_tarefa),
             bigquery.ScalarQueryParameter("chave", "STRING", str(chave)),
             bigquery.ScalarQueryParameter("feito", "BOOL", bool(fg_feito)),
-            bigquery.ScalarQueryParameter("resp", "STRING", responsavel or ""),
             bigquery.ScalarQueryParameter("obs", "STRING", observacao or ""),
             bigquery.ScalarQueryParameter("agora", "TIMESTAMP", datetime.now(timezone.utc)),
         ]),

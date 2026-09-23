@@ -18,17 +18,17 @@ Cada carga da página faz um `LEFT JOIN`, pela chave estável do item (hoje `cd_
 | `tipo_tarefa` | STRING | Qual lista (hoje só `entrega_problema`). Novas listas usam um novo valor aqui — mesma tabela, sem migração. |
 | `chave` | STRING | Identificador estável do item dentro do tipo (hoje: `cd_codigo_interno`, como texto). |
 | `fg_feito` | BOOL | Marcado como concluído. |
-| `nm_responsavel` | STRING | Quem marcou/desmarcou por último — e-mail do login do Streamlit Cloud quando disponível (`st.user`), senão o nome digitado na página. |
+| `nm_responsavel` | STRING | Existe no schema, mas não é usada — decisão do Hugo (23/set/2026): a página não identifica quem marcou. Fica vazia. |
 | `ds_observacao` | STRING | Livre, hoje não usado na tela (campo pronto para o futuro). |
 | `dt_criacao` / `dt_atualizacao` | TIMESTAMP | Quando a linha nasceu / foi tocada pela última vez. |
 
-Leitura e escrita: `common/tarefas.py` (`carregar_tarefas(tipo)`, `marcar_tarefa(tipo, chave, feito, responsavel)` — grava via `MERGE`, parametrizado).
+Leitura e escrita: `common/tarefas.py` (`carregar_tarefas(tipo)`, `marcar_tarefa(tipo, chave, feito)` — grava via `MERGE`, parametrizado).
 
 ## Seção "Entregas com problema — falar com o cliente"
 
 - **Fonte:** `common/logistica.py` (`tb_logistica_pedido`), o mesmo critério de risco do Pulso do Dia — atrasado (`fg_atrasado_em_aberto`), problema de entrega ativo (`fg_problema_entrega_ativo`) ou parado (em trânsito, sem evento de rastreio há 10+ dias — mesmo limite do Pulso do Dia, `DIAS_PARADO`).
 - **Tabela editável** (`st.data_editor`): Pedido, Rastreio, Cliente, Dias sem evento, Motivo e a coluna **Já tratei** (checkbox). Só essa coluna é editável.
-- **Quem marca:** o campo "Seu nome" no topo da página é obrigatório para marcar (se estiver vazio, a página avisa e não grava). Prioriza `st.user.email` quando a Cloud loga o viewer; senão pede o nome uma vez por sessão.
+- **Sem identificação de quem marca** — não pede nome nem usa login do Streamlit Cloud.
 - **Toggle "Mostrar também os já tratados"**: por padrão a lista só mostra pendentes, para o SAC ver o que falta, não o que já foi feito.
 - Ao marcar/desmarcar, a página grava no BigQuery e recarrega (`st.rerun()`) para mostrar os contadores atualizados.
 
