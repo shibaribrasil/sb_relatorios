@@ -147,7 +147,9 @@ def render():
          "mas sem custo — o CAC de todos os novos clientes fica <strong>subestimado</strong>. <strong>Valor em 12 meses</strong> = margem de contribuição acumulada em até 12 meses "
          "por cliente de coortes antigas (com 12 meses completos, desde 2024; margem de pedidos anteriores a ago/2025 é aproximada) — por isso não há LTV de coortes recentes. "
          "<strong>LTV:CAC</strong> mistura coortes antigas com o CAC atual: use como ordem de grandeza. <strong>Payback</strong> = margem de contribuição do 1º pedido ÷ CAC (≥ 100% = o 1º pedido já paga a aquisição). "
-         "<strong>MER</strong> = faturamento de <em>todas</em> as origens ÷ investimento; o break-even é faturamento ÷ margem de contribuição (abaixo disso, a mídia consome mais do que a venda deixa)."
+         "<strong>MER</strong> = faturamento de <em>todas</em> as origens ÷ investimento; o break-even é faturamento ÷ margem de contribuição (abaixo disso, a mídia consome mais do que a venda deixa). "
+         "O custo do Google Ads vem da transferência nativa do Google pro BigQuery (atualiza 1× por dia) — pode ficar um pouco diferente do painel do Google Ads em "
+         "tempo real, principalmente nos últimos dias (correção de cliques inválidos que o Google credita de volta depois que o dia fecha)."
          + (" O mês corrente está parcial (e o custo de Ads chega com 1–2 dias de atraso)." if tem_parcial else ""))
 
     # ═══ MÊS A MÊS ═══

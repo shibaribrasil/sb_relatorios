@@ -323,7 +323,10 @@ def render():
         ped_ate = int(((ped["mes"] == mes) & (ped["dt_pedido"] <= ult)).sum()) if pd.notna(ult) else 0
         render_cards([
             card("Google Ads no mês", brl(ads_mes), f"até {ult.strftime('%d/%m')} (último dia disponível)" if pd.notna(ult) else "sem dados"),
-            card("Investimento por pedido", brl(ads_mes / ped_ate) if ped_ate else "—", "investimento ÷ pedidos do mesmo período"),
+            card("Investimento por pedido", brl(ads_mes / ped_ate) if ped_ate else "—", "investimento ÷ pedidos de todas as origens no mesmo período (não só os do Google)"),
         ])
-    note("Origem detectada pela URL de entrada (classificação <code>tb_atribuicao_pedido</code>). O custo do Google Ads chega com 1–2 dias de atraso; "
-         "o investimento por pedido usa só os pedidos até o último dia com custo disponível.")
+    note("Origem detectada pela URL de entrada (classificação <code>tb_atribuicao_pedido</code>). \"Investimento por pedido\" é o custo do Google Ads dividido pelos "
+         "pedidos de <strong>todas as origens</strong> (direto, orgânico, Instagram etc.) até o último dia com custo disponível — é uma referência do negócio, não o "
+         "CAC do canal. O custo do Google Ads vem da transferência nativa do Google pro BigQuery, que atualiza 1× por dia (chega com 1–2 dias de atraso) — por isso "
+         "pode ficar um pouco diferente do painel do Google Ads em tempo real, principalmente nos últimos dias (o Google credita de volta o custo de cliques "
+         "inválidos depois que o dia fecha, e essa correção pode não chegar até aqui).")

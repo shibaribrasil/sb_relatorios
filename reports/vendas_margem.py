@@ -705,7 +705,9 @@ def render():
              "classificação de origem (tb_atribuicao_pedido) liga ao Google pago (cpc), detectado pela URL de entrada — é um <strong>piso</strong>, pois vendas "
              "influenciadas pelo anúncio sem clique identificável ficam de fora. O <strong>retorno sobre a margem</strong> é o que diz se o anúncio se paga "
              f"(o ROAS de receita ignora CMV, frete e taxas). Contexto: o Google pago responde por {pct(rec_g / rec) if rec else '—'} da receita líquida do período. "
-             "O histórico do Ads começa em 15/06/2026.")
+             "O histórico do Ads começa em 15/06/2026. O custo vem da transferência nativa do Google pro BigQuery (atualiza 1× por dia, 1–2 dias de atraso) — pode "
+             "ficar um pouco diferente do painel do Google Ads em tempo real, principalmente nos últimos dias (correção de cliques inválidos que o Google credita "
+             "de volta depois que o dia fecha).")
     else:
         note("Sem custo de Google Ads no período (o histórico do Ads começa em 15/06/2026).")
 
