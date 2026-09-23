@@ -10,7 +10,7 @@ from common import bigquery as bq
 
 COLUNAS = """
     cd_codigo_interno, cd_pedido_nuvemshop, cd_pedido, nm_cliente, dt_pedido, dt_pagamento, dt_expedicao, dt_entrega,
-    ds_situacao_logistica, ds_ultimo_evento, qt_dias_sem_movimento, nm_transportadora,
+    ds_situacao_logistica, ds_ultimo_evento, qt_dias_sem_movimento, nm_transportadora, cd_rastreio, ds_url_rastreio,
     qt_dias_ate_expedicao, qt_dias_transito, qt_dias_pedido_a_entrega, fg_entregue_no_prazo, qt_dias_atraso_entrega,
     fg_entrega_confirmada, fg_atrasado_em_aberto, fg_problema_entrega_ativo, fg_acao_sac, fg_tratado_sac, fg_cancelado
 """

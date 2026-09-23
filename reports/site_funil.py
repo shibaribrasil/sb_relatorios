@@ -1,4 +1,4 @@
-"""Relatório Site & Funil — Shibari Brasil (camada semanal).
+"""Relatório Site & Funil — Shibari Brasil (camada mensal).
 
 Regras e definição de cada indicador: ver specs/site-funil.md. Sessões e funil vêm do GA4 (histórico desde 01/07/2026);
 pedidos e faturamento vêm da `tb_pedido` (pedidos válidos). Conversão e RPV usam os pedidos reais, não as conversões do GA4.
@@ -107,7 +107,7 @@ def render():
     st.html(f"""
     <div class="report-header">
       <div>
-        <div class="report-brand">shibari brasil · camada semanal</div>
+        <div class="report-brand">shibari brasil · camada mensal</div>
         <div class="report-title">Site <span>&amp;</span> Funil</div>
         <div class="report-meta">Sessões e funil do GA4 (desde 01/07/2026) · pedidos válidos da tb_pedido · dias fechados (até ontem)</div>
       </div>

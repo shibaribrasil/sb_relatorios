@@ -312,8 +312,8 @@ def _grafico_meta_mensal(df, metas):
     fig = go.Figure()
     fig.add_bar(x=m["mes"], y=m["vl_liquido_item"], name="Faturamento", marker_color=METRIC_COLORS["receita"],
                 hovertemplate="%{x|%m/%Y}<br>Faturado R$ %{y:,.0f}<extra></extra>")
-    fig.add_trace(go.Scatter(x=m["mes"], y=m["vl_objetivo_total"], name="Meta do mês", mode="markers",
-                             marker=dict(color=METRIC_COLORS["meta"], size=11, symbol="diamond"),
+    fig.add_trace(go.Scatter(x=m["mes"], y=m["vl_objetivo_total"], name="Meta do mês", mode="lines+markers",
+                             line=dict(color=METRIC_COLORS["meta"], width=2, dash="dash"), marker=dict(color=METRIC_COLORS["meta"], size=7),
                              hovertemplate="%{x|%m/%Y}<br>Meta R$ %{y:,.0f}<extra></extra>"))
     plotly_layout(fig, height=320, hovermode="x unified",
                   xaxis=dict(tickformat="%m/%Y", dtick="M1", gridcolor=COLORS["grid"]),
@@ -394,33 +394,23 @@ def _serie_coorte(ped, hoje):
 
 
 def _grafico_recorrencia(g):
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    """Só a contagem de pedidos (novos × recorrentes). O % recorrentes já está nos cards; aqui um só gráfico, sem eixo duplo."""
+    fig = go.Figure()
     fig.add_bar(x=g["mes"], y=g["novos"], name="Pedidos de clientes novos", marker_color=METRIC_COLORS["receita"],
-                hovertemplate="%{x|%m/%Y}<br>%{y} pedidos novos<extra></extra>", secondary_y=False)
+                hovertemplate="%{x|%m/%Y}<br>%{y} pedidos novos<extra></extra>")
     fig.add_bar(x=g["mes"], y=g["recor"], name="Pedidos de clientes recorrentes", marker_color=METRIC_COLORS["margem_contribuicao"],
-                hovertemplate="%{x|%m/%Y}<br>%{y} pedidos recorrentes<extra></extra>", secondary_y=False)
-    fig.add_trace(go.Scatter(x=g["mes"], y=g["pct"], name="% recorrentes (mês)", mode="markers",
-                             marker=dict(color=METRIC_COLORS["margem_pct"], size=6),
-                             hovertemplate="%{x|%m/%Y}<br>%{y:.1%}<extra></extra>"), secondary_y=True)
-    fig.add_trace(go.Scatter(x=g["mes"], y=g["pct_6m"], name="% recorrentes (média 6 meses)", mode="lines",
-                             line=dict(color=METRIC_COLORS["margem_pct"], width=3),
-                             hovertemplate="%{x|%m/%Y}<br>%{y:.1%} (6 meses)<extra></extra>"), secondary_y=True)
-    plotly_layout(fig, height=320, barmode="stack", hovermode="x unified",
-                  xaxis=dict(tickformat="%m/%y", gridcolor=COLORS["grid"]))
-    fig.update_yaxes(title_text="pedidos", gridcolor=COLORS["grid"], secondary_y=False)
-    fig.update_yaxes(tickformat=".0%", rangemode="tozero", showgrid=False, secondary_y=True)
+                hovertemplate="%{x|%m/%Y}<br>%{y} pedidos recorrentes<extra></extra>")
+    plotly_layout(fig, height=300, barmode="stack", hovermode="x unified",
+                  xaxis=dict(tickformat="%m/%y", gridcolor=COLORS["grid"]), yaxis=dict(title="pedidos", gridcolor=COLORS["grid"]))
     return fig
 
 
 def _grafico_coorte(c):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=c["mes"], y=c["pct"], name="Recompra em 90 dias (coorte do mês)", mode="markers",
-                             marker=dict(color=METRIC_COLORS["margem_pct"], size=7), customdata=c[["voltaram", "n"]].to_numpy(),
-                             hovertemplate="Coorte %{x|%m/%Y}<br>%{y:.1%} (%{customdata[0]} de %{customdata[1]} clientes)<extra></extra>"))
-    fig.add_trace(go.Scatter(x=c["mes"], y=c["pct_6m"], name="Média de 6 coortes", mode="lines",
-                             line=dict(color=METRIC_COLORS["margem_contribuicao"], width=3),
-                             hovertemplate="Coorte %{x|%m/%Y}<br>%{y:.1%} (6 coortes)<extra></extra>"))
-    plotly_layout(fig, height=320, hovermode="x unified", xaxis=dict(tickformat="%m/%y", gridcolor=COLORS["grid"]))
+    """Só a média móvel de 6 coortes (uma linha), para não misturar pontos ruidosos com a tendência."""
+    fig = go.Figure(go.Scatter(x=c["mes"], y=c["pct_6m"], name="Recompra em 90 dias (média de 6 coortes)", mode="lines+markers",
+                               line=dict(color=METRIC_COLORS["margem_contribuicao"], width=3), marker=dict(size=5),
+                               hovertemplate="Coorte %{x|%m/%Y}<br>%{y:.1%} (média de 6 coortes)<extra></extra>"))
+    plotly_layout(fig, height=300, hovermode="x unified", showlegend=False, xaxis=dict(tickformat="%m/%y", gridcolor=COLORS["grid"]))
     fig.update_yaxes(tickformat=".0%", rangemode="tozero", gridcolor=COLORS["grid"])
     return fig
 
@@ -455,7 +445,7 @@ def _secao_clientes(df, hist, meses_sel, hoje):
         with st.container(border=True):
             st.plotly_chart(_grafico_recorrencia(g), use_container_width=True)
     with col2:
-        st.html(f'<div class="c-label" style="margin:0 0 10px">Clientes novos que recompraram em até {RECOMPRA_DIAS} dias, por mês da 1ª compra</div>')
+        st.html(f'<div class="c-label" style="margin:0 0 10px">% de clientes novos que recompraram em até {RECOMPRA_DIAS} dias (média móvel de 6 coortes)</div>')
         with st.container(border=True):
             st.plotly_chart(_grafico_coorte(c), use_container_width=True)
     veredito = ""
@@ -467,7 +457,8 @@ def _secao_clientes(df, hist, meses_sel, hoje):
                     f"contra <strong>{pct(rb)}</strong> nas 6 anteriores.")
     note("<strong>Recorrente</strong> = pedido de cliente (contato do Bling) que já tinha uma compra válida anterior. A recompra por coorte só conta clientes com "
          f"{RECOMPRA_DIAS} dias completos desde a 1ª compra, por isso as coortes mais recentes não aparecem." + veredito +
-         " O volume é pequeno (dezenas de clientes novos por mês): olhe a <strong>linha de média de 6 meses</strong>, não os pontos isolados. "
+         " O volume é pequeno (dezenas de clientes novos por mês): o gráfico já mostra a <strong>média móvel de 6 coortes</strong>, não o dado do mês isolado, "
+         "que oscila demais para ler sozinho. "
          f"Séries a partir de {CLIENTES_DESDE.strftime('%m/%Y')}; o histórico do DW começa em nov/2023, então clientes antigos no início da série aparecem como novos. "
          "A margem dos cards é a do pedido (reembolso no mês do pedido).")
 

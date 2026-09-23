@@ -156,15 +156,17 @@ def _secao_entregas(logi):
     risco["codigo"] = risco["cd_pedido_nuvemshop"].where(risco["cd_pedido_nuvemshop"].notna(), "Bling " + risco["cd_pedido"].astype(str))
     risco = risco.sort_values("qt_dias_sem_movimento", ascending=False)
     tab = pd.DataFrame({
-        "Pedido": risco["codigo"].astype(str), "Cliente": risco["nm_cliente"].fillna("—"), "Enviado em": risco["dt_expedicao"].dt.date,
-        "Dias sem evento": risco["qt_dias_sem_movimento"], "Último evento": risco["ds_ultimo_evento"].fillna("—"),
-        "Motivo": risco.apply(motivo, axis=1), "SAC": risco["fg_tratado_sac"].map({True: "tratado", False: "sem tratativa"}),
+        "Pedido": risco["codigo"].astype(str), "Rastreio": risco["cd_rastreio"].fillna("—"), "Cliente": risco["nm_cliente"].fillna("—"),
+        "Dias sem evento": risco["qt_dias_sem_movimento"], "Motivo": risco.apply(motivo, axis=1),
+        "SAC": risco["fg_tratado_sac"].map({True: "tratado", False: "sem tratativa"}),
+        "Enviado em": risco["dt_expedicao"].dt.date, "Último evento": risco["ds_ultimo_evento"].fillna("—"), "Link": risco["ds_url_rastreio"],
     })
     st.dataframe(tab, hide_index=True, use_container_width=True,
-                 column_config={"Pedido": st.column_config.TextColumn(width=110), "Cliente": st.column_config.TextColumn(width=200),
-                                "Enviado em": st.column_config.DateColumn(width=100), "Dias sem evento": st.column_config.NumberColumn(width=110),
-                                "Último evento": st.column_config.TextColumn(width=130), "Motivo": st.column_config.TextColumn(width=170),
-                                "SAC": st.column_config.TextColumn(width=100)})
+                 column_config={"Pedido": st.column_config.TextColumn(width=90), "Rastreio": st.column_config.TextColumn(width=130),
+                                "Cliente": st.column_config.TextColumn(width=130), "Dias sem evento": st.column_config.NumberColumn(width=90),
+                                "Motivo": st.column_config.TextColumn(width=140), "SAC": st.column_config.TextColumn(width=90),
+                                "Enviado em": st.column_config.DateColumn(width=90), "Último evento": st.column_config.TextColumn(width=110),
+                                "Link": st.column_config.LinkColumn(width=60, display_text="abrir")})
     note("Flags de atraso, problema de entrega e fila do SAC vêm prontas do dbt (<code>tb_logistica_pedido</code>). \"Parado\" = em trânsito sem nenhum evento de "
          f"rastreio há {DIAS_PARADO}+ dias (limite desta página; pega o que a transportadora deixou de atualizar). "
          "<strong>Pontos cegos:</strong> pedidos enviados nos últimos ~10–14 dias ainda não têm dado de rastreio carregado (card \"Enviados sem rastreio\"); "

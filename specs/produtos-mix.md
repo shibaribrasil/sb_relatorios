@@ -16,3 +16,7 @@ Mesma base de `vendas_margem` (`carregar_dados()` → `dbt_dw_az.tb_pedido`, ped
 
 ## v2 — 22/set/2026: filtro por frente
 - Seletor **Frente** (Todas / Shibari / Curadoria), ao lado do período. Filtra toda a página (ABC, dispersão, mix por categoria, tabela). Com "Todas", mostra também um resumo rápido (receita e margem % de cada frente) antes da curva ABC.
+
+## v3 — 22/set/2026: correção de bug e novo gráfico de volume
+- **Bug corrigido na Curva ABC**: o eixo X usava o nome truncado do produto como categoria; dois produtos com o mesmo nome truncado (ex.: duas cordas "Corda de Juta Tratada -…") caíam na mesma posição do eixo e a linha de % acumulado "voltava" nesse ponto. Trocado para eixo posicional (0..n-1) com rótulos por `tickvals`/`ticktext` — cada produto tem sua própria posição, a linha é monotônica.
+- **"Volume × margem" virou "Quem vende muito, com que margem"**: trocado o gráfico de dispersão/bolha (log, difícil de ler) por barras horizontais dos 15 produtos mais vendidos em unidades, cor = margem (verde ≥ 50%, âmbar 40–50%, vermelho < 40%) — mais direto para achar o "vende muito, deixa pouco".

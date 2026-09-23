@@ -149,3 +149,7 @@ Jan–Abr/26 ficam entre 57,9% e 62,6% (frete subsidiado em pedidos ≥ R$ 400 e
 
 ## v6 — 22/set/2026 (Shibari × Curadoria)
 - **Seção "Shibari × Curadoria"** (depois de "Da receita à margem"): receita líquida, % da receita, margem de contribuição (R$ e %) e % da margem total de cada frente, com semáforo por frente, mais um gráfico de barras empilhadas comparando as duas. `ds_frente` vem do dbt (`stg_frente_categoria`, hoje: categoria "Shibari" = frente Shibari; demais categorias = Curadoria), aditivo por linha do pedido — um pedido com itens das duas frentes soma em ambas, sem dupla contagem. Brindes ficam fora (custo no CMV total).
+
+## v7 — 22/set/2026: ajustes de leitura
+- **Meta do mês** (gráfico "Faturamento × meta por mês"): trocado de marcador losango solto para linha tracejada com pontos, no mesmo padrão visual da meta acumulada.
+- **Gráficos de clientes simplificados**: "Pedidos de novos × recorrentes" perdeu as duas linhas de % (eixo duplo) — vira só as barras empilhadas, sem eixo secundário (o % já está nos cards). "Recompra em 90 dias" perdeu os pontos mensais ruidosos — mostra só a média móvel de 6 coortes, uma linha.

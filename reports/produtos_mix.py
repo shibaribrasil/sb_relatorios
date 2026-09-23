@@ -57,29 +57,42 @@ def _curto(nome, n=26):
 
 def _grafico_pareto(g):
     top = g.head(TOP_PARETO)
+    # x posicional (0..n-1), não o nome truncado: dois produtos com o mesmo nome encurtado (ex.: dois "Kit Shibari…")
+    # viravam a MESMA categoria no eixo, e a linha do % acumulado voltava para trás nesse ponto — daí o "bug" na linha.
+    x = list(range(len(top)))
+    rotulos = [_curto(n) for n in top["nm_produto"]]
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_trace(go.Bar(x=[_curto(n) for n in top["nm_produto"]], y=top["marg"], marker_color=[CORES_CLASSE[c] for c in top["classe"]],
+    fig.add_trace(go.Bar(x=x, y=top["marg"], marker_color=[CORES_CLASSE[c] for c in top["classe"]],
                          customdata=np.stack([top["nm_produto"], top["classe"]], axis=-1), name="Margem de contribuição (R$)",
                          hovertemplate="%{customdata[0]}<br>Classe %{customdata[1]}<br>R$ %{y:,.0f}<extra></extra>"), secondary_y=False)
-    fig.add_trace(go.Scatter(x=[_curto(n) for n in top["nm_produto"]], y=top["cum"], mode="lines+markers", name="% acumulado da margem",
-                             line=dict(color=METRIC_COLORS["margem_pct"], width=2), hovertemplate="%{y:.0%} acumulado<extra></extra>"), secondary_y=True)
-    plotly_layout(fig, height=380, showlegend=False, xaxis=dict(tickangle=-45, automargin=True, dtick=1, tickfont=dict(size=10)),
+    fig.add_trace(go.Scatter(x=x, y=top["cum"], mode="lines+markers", name="% acumulado da margem", customdata=top["nm_produto"],
+                             line=dict(color=METRIC_COLORS["margem_pct"], width=2), hovertemplate="%{customdata}<br>%{y:.0%} acumulado<extra></extra>"), secondary_y=True)
+    plotly_layout(fig, height=380, showlegend=False,
+                  xaxis=dict(tickmode="array", tickvals=x, ticktext=rotulos, tickangle=-45, automargin=True, tickfont=dict(size=10)),
                   yaxis=dict(tickprefix="R$ ", gridcolor=COLORS["grid"]))
     fig.update_yaxes(tickformat=".0%", range=[0, 1.02], showgrid=False, secondary_y=True)
     return fig
 
 
-def _grafico_dispersao(g):
-    d = g[(g["rec"] > 0) & g["pct_marg"].notna()]
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=d["qtd"], y=d["pct_marg"], mode="markers", customdata=np.stack([d["nm_produto"], d["rec"], d["marg"]], axis=-1),
-        marker=dict(size=np.clip(d["rec"] ** 0.5 / 3, 6, 40), color=[CORES_CLASSE[c] for c in d["classe"]], opacity=0.75, line=dict(width=1, color="white")),
-        hovertemplate="%{customdata[0]}<br>%{x:.0f} un · margem %{y:.0%}<br>receita R$ %{customdata[1]:,.0f}<br>margem R$ %{customdata[2]:,.0f}<extra></extra>"))
-    fig.add_hline(y=MARGEM_MIN, line=dict(color=COLORS["text_muted"], dash="dash", width=1),
-                  annotation_text=f"mínimo institucional {MARGEM_MIN:.0%}", annotation_position="bottom right")
-    plotly_layout(fig, height=340, showlegend=False, xaxis=dict(title="unidades vendidas", type="log", gridcolor=COLORS["grid"]),
-                  yaxis=dict(title="margem de contribuição (%)", tickformat=".0%", gridcolor=COLORS["grid"]))
+TOP_VOLUME = 15
+
+
+def _grafico_volume_margem(g):
+    """Os mais vendidos (em unidades), com a margem de cada um — em vez de dispersão/bolha, barra horizontal:
+    mais direto para ver "vende muito e a margem é baixa" (barra longa em quantidade, cor vermelha/âmbar na margem)."""
+    d = g[g["rec"] > 0].sort_values("qtd", ascending=False).head(TOP_VOLUME).iloc[::-1].reset_index(drop=True)  # inverte p/ o maior ficar no topo
+    y = list(range(len(d)))
+    rotulos = [_curto(n, 30) for n in d["nm_produto"]]
+    cor = np.where(d["pct_marg"] < MARGEM_MIN, COLORS["danger"],
+           np.where(d["pct_marg"] < MARGEM_OK, COLORS["warning"], COLORS["success"]))
+    fig = go.Figure(go.Bar(
+        x=d["qtd"], y=y, orientation="h", marker_color=cor, customdata=np.stack([d["nm_produto"], d["pct_marg"], d["rec"]], axis=-1),
+        text=[f"{p:.0%} de margem".replace(".0%", "%") for p in d["pct_marg"]], textposition="outside", cliponaxis=False,
+        hovertemplate="%{customdata[0]}<br>%{x:.0f} unidades · margem %{customdata[1]:.0%}<br>receita R$ %{customdata[2]:,.0f}<extra></extra>",
+    ))
+    plotly_layout(fig, height=max(320, 28 * len(d) + 60), showlegend=False,
+                  xaxis=dict(title="unidades vendidas", gridcolor=COLORS["grid"]),
+                  yaxis=dict(tickmode="array", tickvals=y, ticktext=rotulos))
     return fig
 
 
@@ -182,14 +195,16 @@ def render():
          f"{CLASSE_A:.0%} da margem; <strong>B</strong> = até {CLASSE_B:.0%}; <strong>C</strong> = o restante (cauda longa). A linha é a % acumulada. "
          "Produto de classe A sem estoque é venda perdida: cruzar com o estoque virá com a página de Estoque refeita.")
 
-    # ═══ DISPERSÃO ═══
-    section_title("Volume × margem — quem vende muito com margem baixa")
+    # ═══ VOLUME × MARGEM ═══
+    section_title("Quem vende muito, com que margem")
     with st.container(border=True):
-        st.plotly_chart(_grafico_dispersao(g), use_container_width=True)
+        st.plotly_chart(_grafico_volume_margem(g), use_container_width=True)
     baixos = g[(g["rec"] > 0) & (g["pct_marg"] < MARGEM_MIN)].sort_values("rec", ascending=False)
     nomes_baixos = ", ".join(f"{_curto(r.nm_produto, 34)} ({pct(r.pct_marg, 0)})" for r in baixos.head(5).itertuples()) or "nenhum"
-    note(f"Cada bolha é um produto (tamanho = receita; cor = classe ABC; eixo horizontal em escala logarítmica). Abaixo da linha tracejada a margem de contribuição está "
-         f"abaixo do mínimo institucional de {MARGEM_MIN:.0%}. Produtos abaixo do mínimo no período: <strong>{nomes_baixos}</strong>.")
+    note(f"Os {TOP_VOLUME} produtos mais vendidos em unidades no período, do maior para o menor. A cor da barra é a margem de contribuição: "
+         f"<strong style='color:{COLORS['success']}'>verde</strong> ≥ {MARGEM_OK:.0%}, <strong style='color:{COLORS['warning']}'>âmbar</strong> entre "
+         f"{MARGEM_MIN:.0%} e {MARGEM_OK:.0%}, <strong style='color:{COLORS['danger']}'>vermelho</strong> abaixo de {MARGEM_MIN:.0%} — o produto que mais vende "
+         f"vermelho é o que mais pesa no caixa sem devolver margem. Abaixo do mínimo no período: <strong>{nomes_baixos}</strong>.")
 
     # ═══ MIX POR CATEGORIA ═══
     section_title("Mix por categoria")

@@ -11,7 +11,7 @@ Pergunta: **os clientes voltam a comprar, quando, quem vale mais e de que canal 
 - **Histórico** do DW desde nov/2023: quem comprou antes aparece com a 1ª compra a partir dessa data. Coortes e recompra a partir de 01/2024; mapa de coorte mostra as últimas 24.
 - **Curva de recompra:** % dos clientes com 2ª compra em até N dias (30/60/90/180/365) da 1ª, só entre quem já teve N dias completos.
 - **Mapa de coorte:** linha = mês da 1ª compra; coluna k = nº de clientes da coorte que compraram k meses depois ÷ tamanho da coorte (cor); células de meses futuros vazias. Volume pequeno → ler padrão, não célula.
-- **LTV por coorte:** coorte trimestral; margem acumulada por cliente até k meses depois, só k completo para toda a coorte.
+- **Valor por safra (22/set/2026, v3):** coorte por SEMESTRE da 1ª compra (não mais trimestre — menos barras, mais fácil de ler); barras de margem de contribuição acumulada por cliente em 3, 6 e 12 meses desde a 1ª compra; um checkpoint só aparece quando já passou para toda a safra.
 - **Origem do 1º pedido:** `tb_atribuicao_pedido` do 1º pedido válido; "(sem parametro)" agrega direto/orgânico/sem marcação.
 - **Reativar:** recorrente sem comprar há ≥ 180 dias (limite da página), ordenado por valor, 25 maiores.
 - Razões sempre Σnumerador ÷ Σdenominador; nenhuma média de percentuais.

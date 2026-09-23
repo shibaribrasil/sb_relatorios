@@ -101,25 +101,35 @@ def _grafico_heatmap(coortes, tam, z, txt):
     return fig
 
 
-def _grafico_ltv(ped, hoje):
-    """Margem de contribuição acumulada por cliente, por coorte trimestral (só meses já completos para toda a coorte)."""
+VALOR_CHECKPOINTS = [3, 6, 12]  # meses desde a 1ª compra em que comparamos o valor acumulado por cliente
+
+
+def _valor_por_semestre(ped, hoje):
+    """Margem de contribuição acumulada por cliente até 3/6/12 meses da 1ª compra, por semestre da 1ª compra.
+    Um checkpoint só entra se já passou para TODA a safra (última coorte do semestre)."""
     mes_hoje = pd.Period(hoje, "M")
     p = ped[ped["mes_coorte"].apply(lambda m: m.to_timestamp() >= COORTE_DESDE)].copy()
-    p["tri"] = p["mes_coorte"].apply(lambda m: f"{m.year}T{(m.month - 1) // 3 + 1}")
-    tam = p[p["nr"] == 1].groupby("tri")["cd_contato"].nunique()
-    ult_mes = p.groupby("tri")["mes_coorte"].max()
+    p["sem"] = p["mes_coorte"].apply(lambda m: f"{m.year} S{1 if m.month <= 6 else 2}")
+    tam = p[p["nr"] == 1].groupby("sem")["cd_contato"].nunique()
+    ult_mes = p.groupby("sem")["mes_coorte"].max()
+    linhas = []
+    for sem in sorted(tam.index):
+        sub = p[p["sem"] == sem]
+        for k in VALOR_CHECKPOINTS:
+            if (ult_mes[sem] + k) > mes_hoje:  # esse checkpoint ainda não completou para toda a safra
+                continue
+            linhas.append({"sem": sem, "checkpoint": k, "valor": sub.loc[sub["k"] <= k, "marg"].sum() / tam[sem], "n": int(tam[sem])})
+    return pd.DataFrame(linhas)
+
+
+def _grafico_valor_semestre(v):
     fig = go.Figure()
-    for i, tri in enumerate(sorted(tam.index)):
-        sub = p[p["tri"] == tri]
-        max_k = (mes_hoje - ult_mes[tri]).n  # último k completo para todos da coorte
-        if max_k < 1:
-            continue
-        ks = list(range(0, min(max_k, 24) + 1))
-        y = [sub.loc[sub["k"] <= k, "marg"].sum() / tam[tri] for k in ks]
-        fig.add_trace(go.Scatter(x=ks, y=y, mode="lines", name=f"{tri} ({int(tam[tri])} clientes)",
-                                 line=dict(color=CATEGORICAL[i % len(CATEGORICAL)], width=2),
-                                 hovertemplate=f"{tri}<br>+%{{x}} meses: R$ %{{y:,.0f}} por cliente<extra></extra>"))
-    plotly_layout(fig, height=340, hovermode="x unified", xaxis=dict(title="meses depois da 1ª compra", dtick=3, gridcolor=COLORS["grid"]),
+    cores = {3: METRIC_COLORS["receita"], 6: METRIC_COLORS["margem_contribuicao"], 12: METRIC_COLORS["margem_pct"]}
+    for k in VALOR_CHECKPOINTS:
+        sub = v[v["checkpoint"] == k]
+        fig.add_bar(x=sub["sem"], y=sub["valor"], name=f"{k} meses", marker_color=cores[k], customdata=sub["n"],
+                    hovertemplate=f"%{{x}} · +{k} meses<br>R$ %{{y:,.0f}} por cliente (%{{customdata}} clientes)<extra></extra>")
+    plotly_layout(fig, height=320, barmode="group", xaxis=dict(type="category", gridcolor=COLORS["grid"]),
                   yaxis=dict(tickprefix="R$ ", gridcolor=COLORS["grid"]))
     return fig
 
@@ -244,11 +254,16 @@ def render():
          "compraram <em>naquele mês</em> e a cor mostra a % da coorte (escala até 15%). \"·\" = ninguém; célula vazia = mês ainda não aconteceu. "
          "Volume pequeno: leia o padrão geral, não uma célula.")
 
-    section_title("Valor acumulado por cliente, por coorte")
-    with st.container(border=True):
-        st.plotly_chart(_grafico_ltv(ped, hoje), use_container_width=True)
-    note("Margem de contribuição acumulada por cliente da coorte (trimestre da 1ª compra), a cada mês depois da 1ª compra — só meses já completos para toda a coorte. "
-         "Uma coorte mais alta que as anteriores no mesmo ponto = clientes mais valiosos; a distância entre 0 e +3 meses mostra o quanto vem de recompra.")
+    section_title("Quanto o cliente já valeu, por safra de entrada")
+    v = _valor_por_semestre(ped, hoje)
+    if v.empty:
+        st.info("Nenhuma safra com 3 meses completos ainda.")
+    else:
+        with st.container(border=True):
+            st.plotly_chart(_grafico_valor_semestre(v), use_container_width=True)
+    note("Para cada <strong>safra</strong> (semestre da 1ª compra), a margem de contribuição que o cliente médio já gerou em 3, 6 e 12 meses desde a 1ª compra. "
+         "Uma barra só aparece quando aquele prazo já passou para <em>toda</em> a safra — por isso as mais recentes têm menos barras. "
+         "Serve para comparar: se a barra de 3 meses está subindo de safra pra safra, os clientes novos estão valendo mais cedo do que os antigos valiam.")
 
     # ═══ ORIGEM DO 1º PEDIDO ═══
     section_title("De onde vêm os clientes que ficam")

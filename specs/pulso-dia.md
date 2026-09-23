@@ -21,3 +21,6 @@ Página operacional: responde "como está hoje, o que está parado e se o mês v
 - **Média por dia (7 dias):** faturamento e pedidos dos 7 dias fechados até ontem ÷ 7.
 - **Entregas em risco** (`common/logistica.py` → `tb_logistica_pedido`): cards de Em trânsito, Atrasados (`fg_atrasado_em_aberto`), Problema de entrega (`fg_problema_entrega_ativo`), Parados (em trânsito sem evento há ≥ 10 dias — limite da página), Fila do SAC (`fg_acao_sac`) e Enviados sem rastreio (situação "entregue" sem `dt_expedicao` nem entrega confirmada = rastreio ainda não carregado). Tabela dos pedidos em risco (atrasado, problema ou parado), com dias sem evento, último evento e situação no SAC.
 - **Ponto cego conhecido:** o extrator de fulfillments/rastreio da Nuvemshop parou em 10/09/2026; pedidos enviados depois não têm rastreio, então problemas neles não aparecem até a carga voltar (ver B054).
+
+## v3 — 22/set/2026: rastreio na lista de risco
+- Tabela de "Entregas em risco" ganhou as colunas **Rastreio** (`cd_rastreio`) e **Link** (`ds_url_rastreio`, coluna de link "abrir"), logo depois do código do pedido.
