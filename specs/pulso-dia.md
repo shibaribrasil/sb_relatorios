@@ -24,3 +24,6 @@ Página operacional: responde "como está hoje, o que está parado e se o mês v
 
 ## v3 — 22/set/2026: rastreio na lista de risco
 - Tabela de "Entregas em risco" ganhou as colunas **Rastreio** (`cd_rastreio`) e **Link** (`ds_url_rastreio`, coluna de link "abrir"), logo depois do código do pedido.
+
+## v4 — 23/set/2026: nota sobre a página SAC
+- A marcação de "já contatei o cliente" das entregas em risco passou a existir de fato na nova página **SAC — Tarefas do Dia** (`reports/sac.py`, camada Diária), com checkbox persistido em `raw_control.sac_tarefas` (fora do dbt — ver `specs/sac.md`). O Pulso do Dia continua mostrando a lista de risco só para leitura/visão geral; quem quiser marcar o contato feito usa a página SAC.
