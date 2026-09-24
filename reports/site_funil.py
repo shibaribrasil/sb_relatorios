@@ -18,8 +18,9 @@ from reports.vendas_margem import carregar_dados, _hoje_brt, _delta
 
 PERIODOS = {"Últimos 7 dias": 7, "Últimos 30 dias": 30, "Últimos 60 dias": 60, "Desde 01/07 (início do GA4)": None}
 ETAPAS = [("view_item", "Viu um produto"), ("add_to_cart", "Colocou no carrinho"), ("begin_checkout", "Iniciou o checkout"), ("purchase", "Comprou")]
-CR_PISO = 0.014     # piso de loja nova ~1,4% (benchmark do planejamento)
-CR_META = 0.025
+# Referências de conversão: NuvemCommerce 2026 (Nuvemshop, nossa plataforma) — lojas menores 0,75%, maiores 1,17%.
+CR_PISO = 0.0075
+CR_META = 0.0117
 
 
 def _janela(hoje, dias):
@@ -134,11 +135,11 @@ def render():
         card("Sessões", f"{int(t['sess']):,}".replace(",", "."), f"{pct(t['eng'], 0)} engajadas", delta=t1, delta_color=c1),
         card("Taxa de conversão", pct(t["cr"], 2), f"{t['pedidos']} pedidos ÷ sessões", delta=t2, delta_color=c2,
              variant=("ok" if t["cr"] and t["cr"] >= CR_META else "warn" if t["cr"] and t["cr"] >= CR_PISO else "bad"),
-             ref=f"referência: {pct(CR_META, 1)} geral · piso de loja nova {pct(CR_PISO, 1)}"),
+             ref="ref. Nuvemshop (NuvemCommerce 2026): lojas menores 0,75% · maiores 1,17%"),
         card("Receita por visitante (RPV)", brl(t["rpv"]), "faturamento ÷ sessões", delta=t3, delta_color=c3),
-        card("Carrinho ÷ visualização", pct(t["carrinho"], 1), "add_to_cart ÷ view_item (eventos)", ref="referência: 7,2–7,5% (add-to-cart rate)"),
+        card("Carrinho ÷ visualização", pct(t["carrinho"], 1), "add_to_cart ÷ view_item (eventos)"),
         card("Checkout concluído", pct(t["checkout"], 1), "compras ÷ inícios de checkout (eventos)"),
-        card("Abandono de carrinho", pct(t["abandono"], 0), "1 − compras ÷ add_to_cart (eventos)", ref="referência: ~70% no setor"),
+        card("Abandono de carrinho", pct(t["abandono"], 0), "1 − compras ÷ add_to_cart (eventos)", ref="ref. Nuvemshop (NuvemCommerce 2025): ~40% em lojas em expansão · definição a confirmar"),
     ])
     note("Conversão e RPV usam os <strong>pedidos válidos</strong> da tb_pedido (Nuvemshop/Bling) ÷ sessões do GA4. Taxas do funil usam <strong>contagem de eventos</strong> do GA4 "
          "(não sessões distintas), então servem para acompanhar tendência, não como valor exato. Sem tráfego = sem conversão: bots e visitas sem intenção derrubam a taxa.")
