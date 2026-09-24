@@ -19,18 +19,15 @@ def pedidos_de_linhas(df):
     cols = ["vl_liquido", "vl_produtos", "vl_bruto", "vl_desconto", "vl_frete", "fg_recorrente", "qt_item", "qt_skus", "fg_shibari", "fg_curadoria"]
     if df is None or df.empty:
         return pd.DataFrame(columns=cols)
-    g = df.groupby("cd_codigo_interno").agg(
-        vl_liquido=("vl_liquido_item", "sum"), vl_produtos=("vl_receita_liquida_produto", "sum"),
-        vl_bruto=("vl_receita_bruta_produto", "sum"), vl_desconto=("vl_desconto_venda_rateio", "sum"),
-        vl_frete=("vl_frete_pago_rateio", "sum"), fg_recorrente=("fg_cliente_recorrente", "first"))
     v = df[~df["fg_brinde"]]
-    h = v.groupby("cd_codigo_interno").agg(
-        qt_item=("qt_item", "sum"), qt_skus=("nm_produto", "nunique"),
+    g = v.groupby("cd_codigo_interno").agg(
+        vl_produtos=("vl_receita_liquida_produto", "sum"), vl_bruto=("vl_receita_bruta_produto", "sum"),
+        vl_desconto=("vl_desconto_venda_rateio", "sum"), vl_frete=("vl_frete_pago_rateio", "sum"),
+        fg_recorrente=("fg_cliente_recorrente", "first"), qt_item=("qt_item", "sum"), qt_skus=("nm_produto", "nunique"),
         fg_shibari=("ds_frente", lambda s: bool((s == "Shibari").any())),
         fg_curadoria=("ds_frente", lambda s: bool((s != "Shibari").any())))
-    out = g.join(h)
-    out[["qt_item", "qt_skus"]] = out[["qt_item", "qt_skus"]].fillna(0)
-    out[["fg_shibari", "fg_curadoria"]] = out[["fg_shibari", "fg_curadoria"]].fillna(False).astype(bool)
+    g["vl_liquido"] = g["vl_produtos"] + g["vl_frete"]
+    out = g
     out["fg_recorrente"] = out["fg_recorrente"].fillna(False).astype(bool)
     return out
 
@@ -44,17 +41,18 @@ def _tipo(p):
 
 
 def resumo(p):
+    p = p[p["qt_item"] > 0]  # pedido só com brinde não é venda
     n = len(p)
     if not n:
         return None
-    com_prod = p[p["qt_item"] > 0]
+    com_prod = p
     itens = float(com_prod["qt_item"].sum())
     tipo = _tipo(p)
     mix = {}
     for t in TIPOS:
         x = p[tipo == t]
         mix[t] = {"n": len(x), "share": len(x) / len(com_prod) if len(com_prod) else 0,
-                  "ticket": float(x["vl_liquido"].mean()) if len(x) else None,
+                  "ticket": float((x["vl_produtos"] + x["vl_frete"]).mean()) if len(x) else None,
                   "itens": float(x["qt_item"].mean()) if len(x) else None,
                   "receita": float(x["vl_produtos"].sum())}
     rec_total = sum(m["receita"] for m in mix.values())
@@ -63,7 +61,7 @@ def resumo(p):
     bruto = float(p["vl_bruto"].sum())
     return {
         "n": n,
-        "ticket": float(p["vl_liquido"].sum()) / n,
+        "ticket": float((p["vl_produtos"] + p["vl_frete"]).sum()) / n,
         "ticket_prod": float(p["vl_produtos"].sum()) / n,
         "preco_item": float(com_prod["vl_produtos"].sum()) / itens if itens else None,
         "itens_pedido": itens / len(com_prod) if len(com_prod) else None,
@@ -97,6 +95,7 @@ def _grafico_faixas(serie, faixas, titulo, cor):
 
 def secao_perfil(p, ant=None, rot_ant="", titulo="Perfil dos pedidos", contexto=""):
     """p e ant: DataFrames de pedidos (1 linha por pedido; ver pedidos_de_linhas). ant é opcional (comparação)."""
+    p = p[p["qt_item"] > 0]
     from reports.vendas_margem import _delta  # import tardio: vendas_margem importa este módulo
 
     section_title(titulo)
@@ -144,7 +143,7 @@ def secao_perfil(p, ant=None, rot_ant="", titulo="Perfil dos pedidos", contexto=
     with col2:
         st.html('<div class="c-label" style="margin:0 0 10px">Pedidos por faixa de ticket (faturamento do pedido)</div>')
         with st.container(border=True):
-            st.plotly_chart(_grafico_faixas(p["vl_liquido"], FAIXAS_TICKET, "ticket", METRIC_COLORS["margem_contribuicao"]), use_container_width=True)
+            st.plotly_chart(_grafico_faixas(p["vl_produtos"] + p["vl_frete"], FAIXAS_TICKET, "ticket", METRIC_COLORS["margem_contribuicao"]), use_container_width=True)
 
     tab = pd.DataFrame([{
         "Tipo de pedido": t, "Pedidos": mix[t]["n"], "% dos pedidos": mix[t]["share"],
@@ -157,6 +156,6 @@ def secao_perfil(p, ant=None, rot_ant="", titulo="Perfil dos pedidos", contexto=
         "Itens por pedido": st.column_config.NumberColumn(format="%.1f", width=110),
         "% da receita líq.": st.column_config.NumberColumn(format="percent", width=120)})
     note((contexto + " " if contexto else "") +
-         "<strong>Só Shibari / Só Curadoria / Misto</strong> classificam o pedido pelas frentes dos itens comprados (brindes ficam de fora; frente definida pela categoria no dbt, "
+         "<strong>Só Shibari / Só Curadoria / Misto</strong> classificam o pedido pelas frentes dos itens comprados (brindes ficam de fora de todas as contas: itens, valores, frente e frete; frente definida pela categoria no dbt, "
          "<code>stg_frente_categoria</code>) — aqui cada pedido cai em um único grupo, ao contrário da seção Shibari × Curadoria, que divide a receita por linha. "
          "Ticket médio inclui o frete pago; ticket de produtos e valor por item, não. Com poucos pedidos, os percentuais oscilam bastante — use como tendência.")

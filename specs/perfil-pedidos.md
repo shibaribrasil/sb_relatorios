@@ -3,7 +3,7 @@
 Bloco único, reutilizado nas três camadas de vendas: **Pulso do Dia** (últimos 7 dias fechados vs 7 anteriores), **Vendas da Semana** (semana vs anterior) e **Vendas & Margem** (mês vs anterior, só com 1 mês selecionado). Sem regra de negócio nova: agrega colunas que a `tb_pedido` já entrega.
 
 ## Unidade
-1 linha por pedido válido (`pedidos_de_linhas` converte as linhas da `tb_pedido`). Brinde não conta como item nem como frente.
+1 linha por pedido válido (`pedidos_de_linhas` converte as linhas da `tb_pedido`). Brinde fica fora de todas as contas do perfil (itens, valores, frete, desconto e frente); pedido só com brinde não entra.
 
 ## Indicadores
 | Indicador | Definição |
