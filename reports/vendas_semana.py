@@ -15,9 +15,10 @@ from common.logistica import carregar_logistica
 from common.design import (
     COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct,
 )
+from reports.origem_campanha import drill_campanhas
 from reports.perfil_pedidos import secao_perfil, pedidos_de_linhas
 from reports.vendas_margem import (
-    carregar_dados, _hoje_brt, _somas, _razoes, _delta, _variant_margem, _tabela_origem, _tabela_produtos,
+    carregar_dados, _hoje_brt, _somas, _razoes, _delta, _variant_margem, _tabela_origem, _tabela_produtos, pedidos_origem,
     MARGEM_OK, MARGEM_MIN,
 )
 
@@ -277,6 +278,7 @@ def render():
                                 "Receita líq.": st.column_config.NumberColumn(format="R$ %.2f", width=110),
                                 "Margem de contrib. (R$)": st.column_config.NumberColumn(format="R$ %.2f", width=150),
                                 "Margem de contrib. (%)": st.column_config.NumberColumn(format="percent", width=150)})
+    drill_campanhas(pedidos_origem(sel), seg, ate)
 
     # ═══ PRODUTOS ═══
     section_title("Produtos da semana")

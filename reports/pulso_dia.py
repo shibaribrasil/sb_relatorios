@@ -18,6 +18,7 @@ from common.design import (
     COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout,
     kpi_delta_color, brl, pct,
 )
+from reports.origem_campanha import drill_campanhas
 from reports.perfil_pedidos import secao_perfil
 from reports.vendas_margem import _grafico_meta_acumulada
 
@@ -54,9 +55,11 @@ def carregar_dados():
                LOGICAL_OR(NOT p.fg_brinde AND p.ds_frente != 'Shibari') AS fg_curadoria,
                COALESCE(ANY_VALUE(p.fg_cliente_recorrente), FALSE) AS fg_recorrente,
                COALESCE(ANY_VALUE(a.ds_origem_venda), '(sem parametro)') AS origem,
-               COALESCE(ANY_VALUE(a.ds_midia_venda), '(sem parametro)') AS midia
+               COALESCE(ANY_VALUE(a.ds_midia_venda), '(sem parametro)') AS midia,
+               ANY_VALUE(a.ds_gclid) AS ds_gclid, ANY_VALUE(a.ds_utm_campaign) AS ds_utm_campaign
           FROM {base} AS p
-     LEFT JOIN (SELECT cd_pedido, ANY_VALUE(ds_origem_venda) AS ds_origem_venda, ANY_VALUE(ds_midia_venda) AS ds_midia_venda
+     LEFT JOIN (SELECT cd_pedido, ANY_VALUE(ds_origem_venda) AS ds_origem_venda, ANY_VALUE(ds_midia_venda) AS ds_midia_venda,
+                       ANY_VALUE(ds_gclid) AS ds_gclid, ANY_VALUE(ds_utm_campaign) AS ds_utm_campaign
                   FROM `{bq.PROJECT}.dbt_dw_az.tb_atribuicao_pedido` GROUP BY cd_pedido) AS a USING (cd_pedido)
          WHERE p.fg_pedido_valido AND p.dt_pedido >= DATE '{inicio}'
       GROUP BY p.cd_codigo_interno
@@ -343,6 +346,9 @@ def render():
             card("Google Ads no mês", brl(ads_mes), f"até {ult.strftime('%d/%m')} (último dia disponível)" if pd.notna(ult) else "sem dados"),
             card("Investimento por pedido", brl(ads_mes / ped_ate) if ped_ate else "—", "investimento ÷ pedidos de todas as origens no mesmo período (não só os do Google)"),
         ])
+    ini7o = pd.Timestamp(hoje) - pd.Timedelta(days=6)
+    o7d = ped[ped["dt_pedido"] >= ini7o].assign(valor=lambda d: d["vl_liquido"])
+    drill_campanhas(o7d, ini7o, pd.Timestamp(hoje), valor_label="Faturamento", com_margem=False)
     note("Origem detectada pela URL de entrada (classificação <code>tb_atribuicao_pedido</code>). \"Investimento por pedido\" é o custo do Google Ads dividido pelos "
          "pedidos de <strong>todas as origens</strong> (direto, orgânico, Instagram etc.) até o último dia com custo disponível — é uma referência do negócio, não o "
          "CAC do canal. O custo do Google Ads vem da transferência nativa do Google pro BigQuery, que atualiza 1× por dia (chega com 1–2 dias de atraso) — por isso "

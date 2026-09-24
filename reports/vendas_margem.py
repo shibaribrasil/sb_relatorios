@@ -22,6 +22,7 @@ from plotly.subplots import make_subplots
 
 from common import bigquery as bq
 from common.ga4 import carregar_ga4, sessoes as ga4_sessoes, INICIO_GA4
+from reports.origem_campanha import drill_campanhas
 from reports.perfil_pedidos import secao_perfil, pedidos_de_linhas
 from common.design import (
     COLORS, METRIC_COLORS, CATEGORICAL, inject_css, card, render_cards,
@@ -82,10 +83,12 @@ def carregar_dados():
     origem = bq.query_df(client, f"""
         SELECT p.cd_codigo_interno,
                COALESCE(a.ds_origem_venda, '(sem parametro)') AS origem,
-               COALESCE(a.ds_midia_venda, '(sem parametro)') AS midia
+               COALESCE(a.ds_midia_venda, '(sem parametro)') AS midia,
+               a.ds_gclid, a.ds_utm_campaign
           FROM (SELECT DISTINCT cd_codigo_interno, cd_pedido FROM {base}
                  WHERE fg_pedido_valido AND dt_pedido >= DATE '{INICIO_HISTORICO}') AS p
-     LEFT JOIN (SELECT cd_pedido, ANY_VALUE(ds_origem_venda) AS ds_origem_venda, ANY_VALUE(ds_midia_venda) AS ds_midia_venda
+     LEFT JOIN (SELECT cd_pedido, ANY_VALUE(ds_origem_venda) AS ds_origem_venda, ANY_VALUE(ds_midia_venda) AS ds_midia_venda,
+                       ANY_VALUE(ds_gclid) AS ds_gclid, ANY_VALUE(ds_utm_campaign) AS ds_utm_campaign
                   FROM `{bq.PROJECT}.dbt_dw_az.tb_atribuicao_pedido` GROUP BY cd_pedido) AS a USING (cd_pedido)
     """)
     metas = bq.query_df(client, f"""
@@ -536,6 +539,13 @@ def _tabela_origem(sel):
     })
 
 
+def pedidos_origem(sel):
+    """1 linha por pedido (origem, mídia, gclid, utm_campaign, receita líq. e margem) para o drill por campanha."""
+    return sel.groupby("cd_codigo_interno", as_index=False).agg(
+        origem=("origem", "first"), midia=("midia", "first"), ds_gclid=("ds_gclid", "first"), ds_utm_campaign=("ds_utm_campaign", "first"),
+        valor=("vl_receita_liquida_produto", "sum"), marg=("vl_margem_contribuicao", "sum"))
+
+
 def _tabela_produtos(sel):
     g = sel.groupby("nm_produto", as_index=False).agg(
         qtd=("qt_item", "sum"), rec=("vl_receita_liquida_produto", "sum"),
@@ -793,6 +803,7 @@ def render():
                                 "Receita líq.": st.column_config.NumberColumn(format="R$ %.2f", width=110),
                                 "Margem de contrib. (R$)": st.column_config.NumberColumn(format="R$ %.2f", width=150),
                                 "Margem de contrib. (%)": st.column_config.NumberColumn(format="percent", width=150)})
+    drill_campanhas(pedidos_origem(sel), min(meses_sel), max(meses_sel) + pd.offsets.MonthEnd(0), meses=list(meses_sel))
     note("Origem detectada pela <strong>URL de entrada</strong> do pedido (UTM e clique de anúncio), classificada no dbt (tb_atribuicao_pedido). "
          "\"(sem parametro)\" = sem UTM nem clique de anúncio identificável, ou sem sessão rastreável (direto, orgânico, link sem marcação). "
          "Os parâmetros UTM crus (<code>ds_utm_*</code>) cobrem só ~7% dos pedidos, por isso o Google Ads "
