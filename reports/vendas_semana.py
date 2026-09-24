@@ -15,6 +15,7 @@ from common.logistica import carregar_logistica
 from common.design import (
     COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct,
 )
+from reports.perfil_pedidos import secao_perfil, pedidos_de_linhas
 from reports.vendas_margem import (
     carregar_dados, _hoje_brt, _somas, _razoes, _delta, _variant_margem, _tabela_origem, _tabela_produtos,
     MARGEM_OK, MARGEM_MIN,
@@ -198,6 +199,9 @@ def render():
     note("Com ~10 pedidos por semana, a margem em % oscila com o mix de produtos e frete: compare tendências de várias semanas (gráfico abaixo), "
          "não uma semana isolada. Embalagem é estimada (R$ 2,50 por pedido). Reembolsos entram no pedido de origem. "
          + ("Semana em andamento: só dias fechados, comparados com os mesmos dias da semana anterior." if parcial else "Comparação com a semana anterior inteira."))
+
+    # ═══ PERFIL DOS PEDIDOS ═══
+    secao_perfil(pedidos_de_linhas(sel), pedidos_de_linhas(ant), rot_ant)
 
     # ═══ TENDÊNCIA ═══
     section_title(f"Últimas {SEMANAS_TENDENCIA} semanas")

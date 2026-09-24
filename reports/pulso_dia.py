@@ -18,6 +18,7 @@ from common.design import (
     COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout,
     kpi_delta_color, brl, pct,
 )
+from reports.perfil_pedidos import secao_perfil
 from reports.vendas_margem import _grafico_meta_acumulada
 
 DATASET = os.environ.get("SB_DATASET_PEDIDO", "dbt_dw_az")
@@ -46,6 +47,12 @@ def carregar_dados():
                ANY_VALUE(p.dt_pagamento_nuvemshop) AS dt_pagamento, ANY_VALUE(p.ds_status_pedido) AS ds_status_pedido,
                SUM(p.vl_liquido_item) AS vl_liquido, SUM(IF(p.fg_brinde, 0, p.qt_item)) AS qt_item,
                ANY_VALUE(p.ts_load) AS ts_load,
+               SUM(p.vl_receita_liquida_produto) AS vl_produtos, SUM(p.vl_receita_bruta_produto) AS vl_bruto,
+               SUM(p.vl_desconto_venda_rateio) AS vl_desconto, SUM(p.vl_frete_pago_rateio) AS vl_frete,
+               COUNT(DISTINCT IF(p.fg_brinde, NULL, p.nm_produto)) AS qt_skus,
+               LOGICAL_OR(NOT p.fg_brinde AND p.ds_frente = 'Shibari') AS fg_shibari,
+               LOGICAL_OR(NOT p.fg_brinde AND p.ds_frente != 'Shibari') AS fg_curadoria,
+               COALESCE(ANY_VALUE(p.fg_cliente_recorrente), FALSE) AS fg_recorrente,
                COALESCE(ANY_VALUE(a.ds_origem_venda), '(sem parametro)') AS origem,
                COALESCE(ANY_VALUE(a.ds_midia_venda), '(sem parametro)') AS midia
           FROM {base} AS p
@@ -71,6 +78,10 @@ def carregar_dados():
     pedidos["dt_pagamento"] = pd.to_datetime(pedidos["dt_pagamento"])
     pedidos["vl_liquido"] = pd.to_numeric(pedidos["vl_liquido"]).fillna(0.0)
     pedidos["qt_item"] = pd.to_numeric(pedidos["qt_item"]).fillna(0.0)
+    for c in ["vl_produtos", "vl_bruto", "vl_desconto", "vl_frete"]:
+        pedidos[c] = pd.to_numeric(pedidos[c]).fillna(0.0)
+    for c in ["fg_shibari", "fg_curadoria", "fg_recorrente"]:
+        pedidos[c] = pedidos[c].fillna(False).astype(bool)
     pedidos["vl_liquido_item"] = pedidos["vl_liquido"]  # nome esperado por _grafico_meta_acumulada
     pedidos["mes"] = pedidos["dt_pedido"].dt.to_period("M").dt.to_timestamp()
     tempo["dt_data"] = pd.to_datetime(tempo["dt_data"])
@@ -305,6 +316,13 @@ def render():
     ])
     with st.container(border=True):
         st.plotly_chart(_grafico_semana(ped, hoje), use_container_width=True)
+
+    # ═══ PERFIL DOS PEDIDOS ═══
+    ini7 = pd.Timestamp(ontem) - pd.Timedelta(days=6)
+    p7 = ped[(ped["dt_pedido"] >= ini7) & (ped["dt_pedido"] <= pd.Timestamp(ontem))]
+    p7a = ped[(ped["dt_pedido"] >= ini7 - pd.Timedelta(days=7)) & (ped["dt_pedido"] < ini7)]
+    secao_perfil(p7, p7a, "7 dias anteriores", "Perfil dos pedidos — últimos 7 dias fechados",
+                 contexto="Janela de 7 dias fechados até ontem (um dia isolado tem pedidos de menos para um perfil confiável).")
 
     # ═══ ORIGEM E MÍDIA ═══
     section_title("Origem e mídia")
