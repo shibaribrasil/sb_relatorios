@@ -27,3 +27,7 @@ Página operacional: responde "como está hoje, o que está parado e se o mês v
 
 ## v4 — 23/set/2026: nota sobre a página SAC
 - A marcação de "já contatei o cliente" das entregas em risco passou a existir de fato na nova página **SAC — Tarefas do Dia** (`reports/sac.py`, camada Diária), com checkbox persistido em `raw_control.sac_tarefas` (fora do dbt — ver `specs/sac.md`). O Pulso do Dia continua mostrando a lista de risco só para leitura/visão geral; quem quiser marcar o contato feito usa a página SAC.
+
+## v5 — 24/set/2026: Entregas em risco sai do Pulso
+- Seção **Entregas em risco** removida do Pulso do Dia (decisão do Hugo): o acompanhamento de entregas vive só na página **SAC** (`reports/sac.py`). O Pulso deixou de carregar `tb_logistica_pedido`.
+- Perfil dos pedidos (7 dias): tabela por tipo de pedido ganhou margem de contribuição R$ e %; card de frete grátis mostra "N de M pedidos" (ver `specs/perfil-pedidos.md`).

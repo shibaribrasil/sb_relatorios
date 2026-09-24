@@ -16,7 +16,7 @@ FAIXAS_TICKET = [(0, 100, "até R$ 100"), (100, 150, "R$ 100–150"), (150, 200,
 
 def pedidos_de_linhas(df):
     """1 linha por pedido a partir das linhas da tb_pedido (brinde não conta como item nem como frente)."""
-    cols = ["vl_liquido", "vl_produtos", "vl_bruto", "vl_desconto", "vl_frete", "fg_recorrente", "qt_item", "qt_skus", "fg_shibari", "fg_curadoria"]
+    cols = ["vl_liquido", "vl_produtos", "vl_bruto", "vl_desconto", "vl_frete", "vl_margem", "fg_recorrente", "qt_item", "qt_skus", "fg_shibari", "fg_curadoria"]
     if df is None or df.empty:
         return pd.DataFrame(columns=cols)
     v = df[~df["fg_brinde"]]
@@ -27,6 +27,10 @@ def pedidos_de_linhas(df):
         fg_shibari=("ds_frente", lambda s: bool((s == "Shibari").any())),
         fg_curadoria=("ds_frente", lambda s: bool((s != "Shibari").any())))
     g["vl_liquido"] = g["vl_produtos"] + g["vl_frete"]
+    # margem de contribuição da venda (antes de reembolso, que entra no período em que acontece) e com o custo
+    # do brinde, que é custo do pedido; o brinde só fica fora da classificação e das contagens
+    col_m = "vl_margem_pre_reembolso" if "vl_margem_pre_reembolso" in df.columns else "vl_margem_contribuicao"
+    g["vl_margem"] = df.groupby("cd_codigo_interno")[col_m].sum().reindex(g.index).fillna(0.0)
     out = g
     out["fg_recorrente"] = out["fg_recorrente"].fillna(False).astype(bool)
     return out
@@ -54,7 +58,9 @@ def resumo(p):
         mix[t] = {"n": len(x), "share": len(x) / len(com_prod) if len(com_prod) else 0,
                   "ticket": float((x["vl_produtos"] + x["vl_frete"]).mean()) if len(x) else None,
                   "itens": float(x["qt_item"].mean()) if len(x) else None,
-                  "receita": float(x["vl_produtos"].sum())}
+                  "receita": float(x["vl_produtos"].sum()),
+                  "margem": float(x["vl_margem"].sum()) if "vl_margem" in x else None}
+        mix[t]["margem_pct"] = (mix[t]["margem"] / mix[t]["receita"]) if mix[t]["margem"] is not None and mix[t]["receita"] else None
     rec_total = sum(m["receita"] for m in mix.values())
     for m in mix.values():
         m["pct_receita"] = m["receita"] / rec_total if rec_total else 0
@@ -71,6 +77,7 @@ def resumo(p):
         "desc_pct_bruto": abs(float(p["vl_desconto"].sum())) / bruto if bruto else None,
         "frete_medio": float(p["vl_frete"].mean()),
         "pct_frete_gratis": float((p["vl_frete"] <= 0.005).mean()),
+        "n_frete_gratis": int((p["vl_frete"] <= 0.005).sum()),
         "pct_recorrente": float(p["fg_recorrente"].mean()),
         "mix": mix,
         "tipo": tipo,
@@ -129,7 +136,7 @@ def secao_perfil(p, ant=None, rot_ant="", titulo="Perfil dos pedidos", contexto=
         card("Clientes recorrentes", pct(s["pct_recorrente"], 0), "% dos pedidos de quem já tinha comprado antes", **dl("pct_recorrente", "pp")),
     ])
     render_cards([
-        card("Pedidos com frete grátis", pct(s["pct_frete_gratis"], 0), "cliente não pagou frete", **dl("pct_frete_gratis", "pp")),
+        card("Pedidos com frete grátis", pct(s["pct_frete_gratis"], 0), f"{s['n_frete_gratis']} de {s['n']} pedidos · cliente não pagou frete", **dl("pct_frete_gratis", "pp")),
         card("Frete médio pago", brl(s["frete_medio"]), "por pedido (inclui os grátis)", **dl("frete_medio")),
         card("Pedidos com desconto", pct(s["pct_desc"], 0), "cupom, PIX ou promoção", **dl("pct_desc", "pp")),
         card("Desconto médio", pct(s["desc_pct_bruto"]) if s["desc_pct_bruto"] is not None else "—", "descontos ÷ receita bruta de produtos", **dl("desc_pct_bruto", "pp")),
@@ -148,14 +155,19 @@ def secao_perfil(p, ant=None, rot_ant="", titulo="Perfil dos pedidos", contexto=
     tab = pd.DataFrame([{
         "Tipo de pedido": t, "Pedidos": mix[t]["n"], "% dos pedidos": mix[t]["share"],
         "Ticket médio": mix[t]["ticket"], "Itens por pedido": mix[t]["itens"], "% da receita líq.": mix[t]["pct_receita"],
+        "Margem de contribuição": mix[t]["margem"], "Margem de contribuição (%)": mix[t]["margem_pct"],
     } for t in TIPOS])
     st.dataframe(tab, hide_index=True, use_container_width=True, column_config={
         "Pedidos": st.column_config.NumberColumn(width=80),
         "% dos pedidos": st.column_config.NumberColumn(format="percent", width=110),
         "Ticket médio": st.column_config.NumberColumn(format="R$ %.2f", width=110),
         "Itens por pedido": st.column_config.NumberColumn(format="%.1f", width=110),
-        "% da receita líq.": st.column_config.NumberColumn(format="percent", width=120)})
+        "% da receita líq.": st.column_config.NumberColumn(format="percent", width=120),
+        "Margem de contribuição": st.column_config.NumberColumn(format="R$ %.2f", width=150),
+        "Margem de contribuição (%)": st.column_config.NumberColumn(format="percent", width=170)})
     note((contexto + " " if contexto else "") +
          "<strong>Só Shibari / Só Curadoria / Misto</strong> classificam o pedido pelas frentes dos itens comprados (brindes ficam de fora de todas as contas: itens, valores, frente e frete; frente definida pela categoria no dbt, "
          "<code>stg_frente_categoria</code>) — aqui cada pedido cai em um único grupo, ao contrário da seção Shibari × Curadoria, que divide a receita por linha. "
-         "Ticket médio inclui o frete pago; ticket de produtos e valor por item, não. Com poucos pedidos, os percentuais oscilam bastante — use como tendência.")
+         "Ticket médio inclui o frete pago; ticket de produtos e valor por item, não. "
+         "<strong>Margem de contribuição</strong> (antes de mídia) = a da venda, antes de reembolsos (que entram no período em que acontecem) e já com o custo dos brindes do pedido; "
+         "% = margem ÷ receita líquida de produtos do grupo. Com poucos pedidos, os percentuais oscilam bastante — use como tendência.")
