@@ -1,7 +1,7 @@
 """Relatório Tráfego & Conteúdo — Shibari Brasil (camada mensal).
 
 Regras e definição de cada indicador: ver specs/trafego-conteudo.md. Aquisição, páginas e busca interna vêm do GA4
-(`dbt_dw_us_az`, histórico desde 01/07/2026); busca no Google vem da exportação em massa do Search Console.
+(`dbt_dw_us_az`, histórico desde 01/07/2026); busca no Google vem da `tb_gsc_consulta_diaria` (exportação em massa do Search Console).
 Tudo na região US: consultas separadas da `az` de us-east4.
 """
 import unicodedata
@@ -14,7 +14,7 @@ from common.design import inject_css, card, render_cards, section_title, note, p
 from common.ga4 import INICIO_GA4
 from reports.vendas_margem import _hoje_brt
 
-GSC_TABELA = "searchconsole.searchdata_site_impression"
+GSC_TABELA = "dbt_dw_us_az.tb_gsc_consulta_diaria"
 
 
 def _n(v):
@@ -57,15 +57,14 @@ def carregar_trafego():
 
 @st.cache_data(ttl=3600)
 def carregar_gsc(ini, fim):
-    """Consultas do Google no período; None se a exportação do Search Console ainda não existe."""
+    """Consultas do Google no período (tb_gsc_consulta_diaria); None se a tabela ainda não existe."""
     client = bq.get_client()
     try:
         return bq.query_df(client, f"""
-            SELECT IF(is_anonymized_query, '(consultas anonimizadas)', query) AS ds_consulta,
-                   SUM(clicks) AS qt_cliques, SUM(impressions) AS qt_impressoes, SUM(sum_top_position) AS qt_soma_posicao,
-                   MIN(data_date) AS dt_min, MAX(data_date) AS dt_max
+            SELECT ds_consulta, SUM(qt_cliques) AS qt_cliques, SUM(qt_impressoes) AS qt_impressoes,
+                   SUM(qt_soma_posicao) AS qt_soma_posicao, MIN(dt_data) AS dt_min, MAX(dt_data) AS dt_max
               FROM `{bq.PROJECT}.{GSC_TABELA}`
-             WHERE data_date BETWEEN '{ini:%Y-%m-%d}' AND '{fim:%Y-%m-%d}' AND search_type = 'WEB'
+             WHERE dt_data BETWEEN '{ini:%Y-%m-%d}' AND '{fim:%Y-%m-%d}' AND ds_tipo_busca = 'web'
              GROUP BY 1
         """)
     except Exception as e:

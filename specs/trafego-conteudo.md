@@ -12,7 +12,7 @@ Pergunta: **de onde vem o tráfego do site, o que as pessoas leem e o que elas p
 | Aquisição | `dbt_dw_us_az.tb_ga4_sessao` (1 linha por sessão; `ds_canal_fonte`, `ds_canal_meio`, `ds_canal_campanha`) + `tb_ga4_compras` (compras GA4 deduplicadas por transação) |
 | Blog e páginas | `dbt_dw_us_az.tb_ga4_pagina_sessao` (sessão × caminho normalizado; título mais frequente do caminho; `fl_blog`, `fl_blog_post`, `fl_pagina_entrada`) |
 | Busca interna | `dbt_dw_us_az.tb_ga4_busca_interna` (evento `view_search_results`; termo normalizado) |
-| Busca no Google | Exportação em massa do Search Console → dataset `searchconsole`, tabela `searchdata_site_impression` (lida direto enquanto não houver modelo dbt) |
+| Busca no Google | `dbt_dw_us_az.tb_gsc_consulta_diaria` (dia × tipo de busca × dispositivo × país × consulta), sobre a exportação em massa do Search Console (`searchconsole.searchdata_site_impression`) |
 
 ## Indicadores e regras
 - **Sessões** = contagem de sessões (`cd_sessao`) com início no período. **Usuários** = `cd_usuario_pseudo` distintos (navegador/dispositivo, não pessoa).
@@ -29,5 +29,4 @@ Pergunta: **de onde vem o tráfego do site, o que as pessoas leem e o que elas p
 - GA4 só desde 01/07/2026. Os **últimos ~2 dias** do GA4 ainda são reprocessados pelo Google (atribuição incompleta): por isso o padrão é até ontem, e a leitura de origem dos últimos 2 dias é provisória.
 - Volume baixo (~2,5 mil sessões/mês, ~190 views de blog/mês, ~70 buscas internas/mês): não tire conclusão de linha com poucas sessões; compare meses fechados.
 - ~14% das sessões chegam com origem "(not set)"; Google cpc com campanha "(not set)" = cliques sem gclid (ex.: iOS GBRAID/WBRAID).
-- Search Console: a exportação em massa só traz dados **a partir do dia em que foi ligada** (sem histórico) e tem atraso de ~2–3 dias. Enquanto o dataset não existir, a seção mostra "aguardando dados".
-- Próximo passo: quando o Search Console tiver dados, criar `tb_gsc_consulta_diaria` no dbt e trocar a leitura direta.
+- Search Console: exportação ligada em 24/09/2026; dados **desde 23/09/2026** (sem histórico anterior), com atraso de ~2 dias. A seção considera só busca **web** (imagem fica de fora).
