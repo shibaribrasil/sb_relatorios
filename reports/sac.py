@@ -218,15 +218,15 @@ def render():
             st.error(f"Erro ao carregar dados do BigQuery: {e}")
             return
 
-    aviso_link = ("O botão \"Chamar no WhatsApp\" abre a conversa com a mensagem já escrita para aquela situação — **revise antes "
-                  "de enviar**; nada sai sozinho.")
+    aviso_link = ("O botão \"Chamar no WhatsApp\" abre a conversa com a mensagem já escrita para aquela situação — <b>revise antes "
+                  "de enviar</b>; nada sai sozinho.")
 
     _secao_checklist(
         "Entregas com problema — falar com o cliente",
         TIPO_ENTREGA_PROBLEMA, _lista_entregas_problema(logi),
         colunas_extra={
-            "Pedido": "codigo", "Rastreio": "cd_rastreio", "Cliente": "nm_cliente",
-            "Dias sem evento": "qt_dias_sem_movimento", "Motivo": "motivo", "WhatsApp": "whatsapp",
+            "Pedido": "codigo", "Cliente": "nm_cliente", "Motivo": "motivo", "WhatsApp": "whatsapp",
+            "Rastreio": "cd_rastreio", "Dias sem evento": "qt_dias_sem_movimento",
         },
         column_config={"WhatsApp": COL_WHATSAPP},
         nota="Mesmo critério do Pulso do Dia (\"Entregas em risco\"): pedido atrasado, com problema de entrega ativo (devolução/tentativa "
@@ -240,8 +240,8 @@ def render():
         "Carrinhos abandonados — recuperar a venda",
         TIPO_CARRINHO, _lista_carrinhos(car),
         colunas_extra={
-            "Prioridade": "prioridade", "Abandonado há": "abandonado_ha", "Cliente": "nm_cliente",
-            "Valor": "vl_total_carrinho", "Já é cliente?": "cliente_antigo", "WhatsApp": "whatsapp", "Obs.": "obs",
+            "Prioridade": "prioridade", "Cliente": "nm_cliente", "WhatsApp": "whatsapp", "Obs.": "obs",
+            "Abandonado há": "abandonado_ha", "Valor": "vl_total_carrinho", "Já é cliente?": "cliente_antigo",
         },
         column_config={"WhatsApp": COL_WHATSAPP, "Valor": st.column_config.NumberColumn(format="R$ %.2f")},
         cards_extra=lambda pend: [card("Valor em carrinhos pendentes", brl(pend["vl_total_carrinho"].sum()), "soma dos carrinhos sem check")],
@@ -257,17 +257,17 @@ def render():
         "Pedidos cancelados — entender e recuperar",
         TIPO_CANCELADO, _lista_cancelados(canc),
         colunas_extra={
-            "Pedido": "codigo", "Cancelado em": "dt_cancelamento", "Tipo": "tipo", "Cliente": "nm_cliente",
-            "Valor": "vl_total_pedido", "Já é cliente?": "cliente_antigo", "O que fazer": "acao", "WhatsApp": "whatsapp", "Obs.": "obs",
+            "Pedido": "codigo", "Cliente": "nm_cliente", "O que fazer": "acao", "WhatsApp": "whatsapp", "Obs.": "obs",
+            "Tipo": "tipo", "Cancelado em": "dt_cancelamento", "Valor": "vl_total_pedido", "Já é cliente?": "cliente_antigo",
         },
         column_config={
             "WhatsApp": COL_WHATSAPP, "Valor": st.column_config.NumberColumn(format="R$ %.2f"),
             "Cancelado em": st.column_config.DateColumn(format="DD/MM/YYYY"),
         },
         nota=f"Pedidos da Nuvemshop cancelados nos últimos {JANELA_CANCELADO} dias. O tipo vem do motivo gravado na Nuvemshop: "
-             "**automático** = o sistema cancelou porque o pagamento não foi concluído (Pix/boleto expirado) — é a melhor chance de "
-             "recuperar a venda; os demais (\"cliente desistiu\", \"sem estoque\", \"outro motivo\") foram cancelados **por alguém "
-             "da loja**, que escolheu o motivo — o cliente não cancela sozinho pela loja virtual. \"Pago, sem estorno\" = cancelado "
+             "<b>automático</b> = o sistema cancelou porque o pagamento não foi concluído (Pix/boleto expirado) — é a melhor chance de "
+             "recuperar a venda; os demais (\"cliente desistiu\", \"sem estoque\", \"outro motivo\") foram cancelados <b>por alguém "
+             "da loja</b>, que escolheu o motivo — o cliente não cancela sozinho pela loja virtual. \"Pago, sem estorno\" = cancelado "
              "com o pagamento ainda como pago na Nuvemshop: confira se o dinheiro foi devolvido antes de chamar (aparece no topo). "
              "Sai da lista quem já voltou a comprar (exceto estorno a conferir). " + aviso_link,
     )

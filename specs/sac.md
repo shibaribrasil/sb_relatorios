@@ -27,7 +27,7 @@ Leitura e escrita: `common/tarefas.py` (`carregar_tarefas(tipo)`, `marcar_tarefa
 ## Seção "Entregas com problema — falar com o cliente"
 
 - **Fonte:** `common/logistica.py` (`tb_logistica_pedido`), o mesmo critério de risco do Pulso do Dia — atrasado (`fg_atrasado_em_aberto`), problema de entrega ativo (`fg_problema_entrega_ativo`) ou parado (em trânsito, sem evento de rastreio há 10+ dias — mesmo limite do Pulso do Dia, `DIAS_PARADO`).
-- **Tabela editável** (`st.data_editor`): Pedido (número que o cliente vê, `#cd_pedido_loja`), Rastreio, Cliente, Dias sem evento, Motivo, **WhatsApp** e a coluna **Já tratei** (checkbox). Só essa coluna é editável.
+- **Tabela editável** (`st.data_editor`): Pedido (número que o cliente vê, `#cd_pedido_loja`), Cliente, Motivo, **WhatsApp**, Rastreio, Dias sem evento e a coluna **Já tratei** (checkbox). Só essa coluna é editável.
 - **Mensagem por motivo** (prioridade: problema de entrega > atrasado > parado): problema de entrega pede confirmação de endereço/recebedor; atrasado e parado avisam que estamos acompanhando e perguntam se já recebeu. Inclui o código e o link de rastreio quando existem. Telefone: `nr_telefone_cliente` (cadastro Nuvemshop, na `tb_logistica_pedido`).
 - **Sem identificação de quem marca** — não pede nome nem usa login do Streamlit Cloud.
 - **Toggle "Mostrar também os já tratados"**: por padrão a lista só mostra pendentes, para o SAC ver o que falta, não o que já foi feito.
@@ -40,7 +40,7 @@ Coluna **WhatsApp** (`LinkColumn`, texto "Chamar no WhatsApp") com `https://wa.m
 ## Seção "Carrinhos abandonados — recuperar a venda"
 
 - **Fonte:** `dbt_dw_az.tb_carrinho_abandonado` — `NOT fg_recuperado AND NOT fg_teste AND vl_total_carrinho > 0`, abandonados nos últimos **15 dias** (`JANELA_CARRINHO`, por `ts_criacao`, horário de Brasília). `fg_teste` (macro `eh_contato_teste` no dbt) = mesma regra de teste da rotina de recuperação.
-- **Colunas:** Prioridade, Abandonado há (horas até 48 h, depois dias), Cliente, Valor, Já é cliente?, WhatsApp, Obs., Já tratei. Ordem: mais recente primeiro, depois maior valor.
+- **Colunas:** Prioridade, Cliente, WhatsApp, Obs., Abandonado há (horas até 48 h, depois dias), Valor, Já é cliente?, Já tratei. Ordem: mais recente primeiro, depois maior valor.
 - **Prioridade** (mesma régua da rotina): 🔴 abandonado há até 1 dia **ou** valor ≥ R$ 300; senão 🟡.
 - **Mensagens** = os dois textos da rotina (cliente recorrente / cliente novo), com `ds_url_recuperacao` (link que reabre o carrinho).
 - **Mesmo telefone em mais de um carrinho:** link só no mais recente; os outros aparecem com "não reenviar".
@@ -52,9 +52,9 @@ Coluna **WhatsApp** (`LinkColumn`, texto "Chamar no WhatsApp") com `https://wa.m
 
 - **Fonte:** `dbt_dw_az.tb_pedido_cancelado` (1 linha por pedido Nuvemshop cancelado), `NOT fg_teste`, cancelados nos últimos **30 dias** (`JANELA_CANCELADO`).
 - **Tipo** (`ds_tipo_cancelamento`, do `cancel_reason` da Nuvemshop): *Pagamento não concluído (automático)* / *Pagamento expirado* — o sistema cancelou; *Cliente desistiu*, *Sem estoque*, *Outro motivo*, *Reembolso* — **alguém da loja cancelou** e escolheu o motivo (o cliente não cancela sozinho pela loja virtual; "cliente desistiu" é o que a loja registrou). `ds_origem_cancelamento` agrupa em automatico / loja / sem_registro.
-- **"· pago, sem estorno"** (`fg_estorno_a_conferir`): cancelado com o pagamento ainda "paid" na Nuvemshop — possível estorno não feito. Vai para o topo, com a ação "Conferir estorno no meio de pagamento antes de chamar".
+- **"· pago, sem estorno"** (`fg_estorno_a_conferir`): cancelado com o pagamento ainda "paid" na Nuvemshop — possível estorno não feito. Vai para o topo, com a ação "Conferir estorno antes de chamar".
 - **Sai da lista:** quem voltou a comprar (`fg_recomprou`) — exceto estorno a conferir; e suspeita de fraude (não se contata).
-- **Colunas:** Pedido (#número), Cancelado em, Tipo, Cliente, Valor, Já é cliente?, O que fazer, WhatsApp, Obs., Já tratei.
+- **Colunas:** Pedido (#número), Cliente, O que fazer, WhatsApp, Obs., Tipo, Cancelado em, Valor, Já é cliente?, Já tratei.
 - **Mensagem por tipo:** automático → pergunta se teve dificuldade com o Pix/boleto/cartão e oferece refazer; cliente desistiu → pergunta o motivo; sem estoque → desculpas + alternativa; estorno → confirma se o dinheiro voltou; outros → pergunta genérica sobre pendência.
 
 ## Extensão futura

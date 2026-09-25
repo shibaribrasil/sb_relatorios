@@ -85,13 +85,13 @@ def msg_cancelado(nome, numero, valor, motivo, estorno_a_conferir: bool, meio_pa
 def acao_cancelado(motivo, estorno_a_conferir: bool) -> str:
     """O que o SAC faz com aquele cancelamento (coluna "O que fazer")."""
     if estorno_a_conferir:
-        return "Conferir estorno no meio de pagamento antes de chamar"
+        return "Conferir estorno antes de chamar"
     return {
-        "automatic": "Recuperar a venda (pagamento não concluído)",
-        "expired": "Recuperar a venda (pagamento expirado)",
-        "customer": "Entender o motivo da desistência",
-        "inventory": "Pedir desculpas e oferecer alternativa",
-    }.get(motivo, "Entender o motivo e resolver pendências")
+        "automatic": "Recuperar a venda",
+        "expired": "Recuperar a venda",
+        "customer": "Entender a desistência",
+        "inventory": "Oferecer alternativa",
+    }.get(motivo, "Entender e resolver pendência")
 
 
 # --- Entrega com problema (motivo montado em reports/sac.py a partir das flags da tb_logistica_pedido) ----------
