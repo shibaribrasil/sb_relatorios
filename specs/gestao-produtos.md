@@ -72,3 +72,6 @@ Um SKU por linha, com filtro por tipo de problema: sem custo (a margem sai super
 - Estoque de kits (composição) no Bling depende do cadastro do kit.
 - Com ~1 pedido/dia, "sem venda em 90 dias" é o sinal robusto; 30 dias oscila muito.
 - A classificação (papel, ciclo, oferta) está em preenchimento: o SKU herda do pai quando o próprio campo está vazio.
+
+## Atualização dos dados (28/09/2026)
+Cabeçalho mostra **"Atualizado em"** = horário da tabela mais antiga que a página lê (`common/frescor.py`, a partir de `dbt_dw_az.__TABLES__`), e o expansor "De quando são os dados desta página" lista a última extração com sucesso de cada fonte (`raw_control.pipeline_runs`) e a data do GA4. Todas as extrações usadas aqui rodam de hora em hora entre :20 e :45 e o dbt na hora cheia (7h–23h), então as seções saem da mesma rodada. Alerta na página se o dbt passar de 90 minutos sem rodar dentro da janela.

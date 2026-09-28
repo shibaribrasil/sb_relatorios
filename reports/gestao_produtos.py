@@ -13,7 +13,11 @@ import streamlit as st
 
 from common import bigquery as bq
 from common.design import COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl
+from common.frescor import carregar_frescor, badge_atualizacao, detalhe_atualizacao
 from reports.vendas_margem import _hoje_brt
+
+TABELAS = ("tb_produto_gestao", "tb_estoque_movimento_dia", "tb_produto_teste", "tb_produto_ciclo_monitor")
+EXTRATORES = ("bling_products", "bling_orders", "bling_purchases", "nuvemshop_products", "nuvemshop_orders")
 
 DIAS_MOVIMENTO = 7          # janela da seção "O que mudou no estoque"
 DIAS_TESTE_A_VENCER = 30    # decisão do Hugo (28/09/2026)
@@ -106,6 +110,10 @@ def render():
             st.error(f"Erro ao carregar dados do BigQuery: {e}")
             return
     hoje = _hoje_brt()
+    try:
+        fr = carregar_frescor(TABELAS, EXTRATORES, com_ga4=True)
+    except Exception:
+        fr = None
     st.html(f"""
     <div class="report-header">
       <div>
@@ -113,9 +121,11 @@ def render():
         <div class="report-title">Gestão de <span>Produtos</span></div>
         <div class="report-meta">Site × estoque, movimentos, teste, ciclo de vida, ofertas, giro e cadastro · fontes: tb_produto_gestao, GA4</div>
       </div>
-      <div class="report-badge">Hoje: <strong>{hoje.strftime("%d/%m/%Y")}</strong></div>
+      {badge_atualizacao(fr) if fr else f'<div class="report-badge">Hoje: <strong>{hoje.strftime("%d/%m/%Y")}</strong></div>'}
     </div>
     """)
+    if fr:
+        detalhe_atualizacao(fr)
 
     frente = st.selectbox("Frente", options=["Todas", "Shibari", "Curadoria"])
     g = dados["g"]

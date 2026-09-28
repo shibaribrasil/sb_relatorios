@@ -81,3 +81,6 @@ Coluna **WhatsApp** (`LinkColumn`, texto "Mensagem") com `https://wa.me/<telefon
 ## Extensão futura
 
 Para uma nova lista de tarefas do SAC: escolher um `tipo_tarefa` novo, escrever a função que monta o `DataFrame` de itens (com uma coluna `chave` estável) e chamar `_secao_checklist(...)` de novo com esses parâmetros — o resto (persistência, contadores, filtro de pendentes) é reaproveitado.
+
+## Atualização dos dados (28/09/2026)
+Cabeçalho mostra **"Atualizado em"** (tabela mais antiga entre `tb_logistica_pedido`, `tb_carrinho_abandonado`, `tb_pedido_cancelado`) e um expansor com a última extração de pedidos (Bling e Nuvemshop), rastreio e clientes/carrinhos. Todas rodam de hora em hora entre :20 e :45 (rastreio passou de 3×/dia para de hora em hora) e o dbt na hora cheia, 7h–23h. Código em `common/frescor.py`.
