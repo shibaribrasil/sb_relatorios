@@ -23,7 +23,7 @@ Cada carga da página faz um `LEFT JOIN`, pela chave estável do item (hoje `cd_
 | `ds_observacao` | STRING | Livre, hoje não usado na tela (campo pronto para o futuro). |
 | `dt_criacao` / `dt_atualizacao` | TIMESTAMP | Quando a linha nasceu / foi tocada pela última vez. |
 
-Leitura e escrita: `common/tarefas.py` (`carregar_tarefas(tipo)`, `salvar_tarefa(tipo, chave, feito, resultado)` — grava check e resultado juntos via `MERGE` parametrizado e acrescenta 1 linha em `raw_control.sac_tarefas_historico`).
+Leitura e escrita: `common/tarefas.py` (`carregar_tarefas(tipo)`, `salvar_tarefas(tipo, [(chave, feito, resultado), ...])` — grava check e resultado de vários itens de uma vez num único `MERGE` parametrizado e acrescenta 1 linha por item em `raw_control.sac_tarefas_historico`; `carregar_tarefas` mantém a linha mais recente por chave).
 
 **Histórico — `raw_control.sac_tarefas_historico`** (append-only, fora do dbt, criada em 28/09/2026): `tipo_tarefa`, `chave`, `fg_feito`, `ds_resultado`, `dt_evento` — 1 linha a cada gravação. Serve para ver a evolução de um contato (ex.: "Vai pensar" → "Comprou") e medir conversão do SAC por resultado.
 
@@ -38,7 +38,7 @@ Leitura e escrita: `common/tarefas.py` (`carregar_tarefas(tipo)`, `salvar_tarefa
 - **Mensagem por motivo** (prioridade: problema de entrega > atrasado > parado): problema de entrega pede confirmação de endereço/recebedor; atrasado e parado avisam que estamos acompanhando e perguntam se já recebeu. Inclui o código e o link de rastreio quando existem. Telefone: `nr_telefone_cliente` (cadastro Nuvemshop, na `tb_logistica_pedido`).
 - **Sem identificação de quem marca** — não pede nome nem usa login do Streamlit Cloud.
 - **Toggle "Mostrar também os já tratados"**: por padrão a lista só mostra pendentes, para o SAC ver o que falta, não o que já foi feito.
-- Ao marcar/desmarcar, a página grava no BigQuery e recarrega (`st.rerun()`) para mostrar os contadores atualizados.
+- Marcar/desmarcar e escolher a Resolução **não gravam na hora**: as trocas ficam na tela (o usuário pode mudar de ideia) e o botão **"Salvar alterações (N)"** grava tudo de uma vez e recarrega (`st.rerun()`) para atualizar os contadores. Só o estado salvo entra no histórico. Mudar o filtro "Mostrar também os já tratados" ou a recarga dos dados antes de salvar descarta as trocas não salvas. (Decisão do Hugo, 28/09/2026; também evita gravações concorrentes, que duplicaram uma chave.)
 
 ## Coluna "Resolução" (todas as listas)
 
