@@ -1,0 +1,74 @@
+# Spec — Gestão de Produtos (`reports/gestao_produtos.py`, camada Diária)
+
+Página de **trabalho** para movimentar o catálogo: cada seção termina numa ação direta no Bling ou na Nuvemshop (publicar ou ocultar, repor, trocar a oferta, dar visibilidade, corrigir o cadastro). As seções seguem a ordem em que a ação é mais urgente: primeiro o que o cliente está vendo errado hoje, depois as decisões de ciclo de vida, por último a higiene de cadastro.
+
+Criada em 28/09/2026 (pedido do Hugo). Unidade de leitura: **produto como aparece na loja** (família = produto pai do Bling, ou o próprio SKU quando simples); algumas listas descem ao SKU (variação), porque a correção é na variação.
+
+## Fontes
+
+| Fonte | Região | Uso |
+|---|---|---|
+| `dbt_dw_az.tb_produto_gestao` | us-east4 | Foto atual de cada SKU vendável: visibilidade no site, estoque Bling × Nuvemshop, classificação, giro 30/60/90 dias, custo e preço, lacunas de cadastro. **Toda regra (o que é "visível", "tem estoque", alerta de vitrine, oferta sem estoque) está nesse modelo.** |
+| `dbt_dw_az.tb_estoque_movimento_dia` | us-east4 | Zerou, voltou, subiu ou baixou, por SKU × dia (desde 02/07/2026). |
+| `dbt_dw_az.tb_produto_teste` | us-east4 | Produtos em teste: prazo, critério, status recomendado (critérios aprovados em 25/09/2026, Notion "Classificação de Produtos — Conceitos" §4.4). |
+| `dbt_dw_az.tb_produto_ciclo_monitor` | us-east4 | Em Saída e Dificuldade de Reposição. |
+| `dbt_dw_us_az.tb_ga4_pagina_diaria` | **US** | Visualizações da página do produto (`/produtos/<handle>/`) nos últimos 30 dias fechados. Cruzada no pandas pelo `ds_url_produto` (handle da Nuvemshop). |
+
+Visibilidade: a Nuvemshop tem **dois interruptores** — produto publicado (`published`) e variação visível (`variants.visible`). O produto só aparece para o cliente quando os dois estão ligados. As colunas `visible`, `stock_management` e `image_count` entraram na extração em 28/09/2026 (`sb_data_pipeline`, `extractors/nuvemshop_products.py`) e o histórico foi recarregado no mesmo dia.
+
+## Filtro
+
+**Frente** (Todas, Shibari, Curadoria). Vale para todas as seções que partem da `tb_produto_gestao`. Teste e ciclo de vida (seções 3 e 4) valem só para a Curadoria, onde a classificação foi definida.
+
+## Seções
+
+### 0. Onde agir hoje (cards)
+Contagens de cada fila das seções abaixo: famílias visíveis sem estoque, SKUs com estoque fora do site, ofertas sem estoque, testes a decidir, SKUs que zeraram nos últimos 7 dias e produtos com estoque sem custo.
+
+### 1. Site × estoque
+- **Visível sem nenhum estoque** (família visível e estoque da família = 0): ocultar ou repor. Mostra compra pendente, visitas em 30 dias e peças vendidas em 90 dias, para decidir entre ocultar e repor rápido.
+- **Com estoque e fora do site** (SKU com estoque no Bling e: fora da Nuvemshop, produto não publicado ou variação oculta): publicar ou cadastrar. É venda parada por falha de cadastro.
+- **Estoque diferente entre Bling e Nuvemshop** (só variações com controle de estoque ligado): sincronizar.
+- Expansor: **variações esgotadas visíveis** dentro de famílias com estoque (baixa prioridade: o site mostra a opção como esgotada) e variações **vendendo sem controle de estoque** e sem estoque no Bling.
+
+### 2. O que mudou no estoque (últimos 7 dias)
+Gráfico diário por tipo de movimento e tabela com a situação no site e a ação sugerida:
+- Zerou e continua visível → ocultar ou repor.
+- Voltou e não está visível → publicar.
+- Voltou e está visível → divulgar a volta (Instagram, destaque).
+- Subiu (entrada) → conferir a publicação e o preço.
+
+A foto diária pode faltar em algum dia; nesse caso o movimento compara com a última foto disponível.
+
+### 3. Produtos em teste
+Tabela da `tb_produto_teste` com prazo, dias até o prazo, pedidos, payback e status recomendado. Destaques:
+- **Teste a vencer:** prazo nos próximos **30 dias** (decisão do Hugo, 28/09/2026).
+- **Critério atingido antes do prazo:** decidir já.
+- **Saíram do teste nos últimos 90 dias:** Graduou (virou Ativo) ou Saiu.
+
+O status é recomendação; a decisão é humana e a troca de ciclo é manual no Bling.
+
+### 4. Em Saída e Dificuldade de Reposição
+Tabela da `tb_produto_ciclo_monitor`: estoque, ritmo de venda, dias para zerar, status e ação sugerida (Em Saída); dias em ruptura e venda perdida estimada (Dificuldade de Reposição).
+
+### 5. Ofertas (Cashing)
+- Produtos com **Tipo de oferta** preenchido (campo do Bling; ofertas de order bump e upsell no Cashing), com estoque, visibilidade e giro. **Oferta sem estoque = trocar a oferta no Cashing agora.**
+- **Candidatos a oferta:** visíveis, com estoque, sem oferta, papel Impulso ou Complementar e preço "por" até **R$ 60** (`PRECO_MAX_OFERTA`), ordenados pelo estoque a custo. É um filtro de apresentação: o teto de preço do papel Impulso (~R$ 35) ainda está em definição.
+- Em 28/09/2026 o campo está sendo preenchido pelo time (só 1 produto preenchido); a seção fica vazia até lá.
+
+### 6. Empurrãozinho — baixo giro
+Famílias **visíveis e com estoque** que giram devagar: sem venda em 90 dias, ou risco de estoque "Encalhado" ou "Sobreestoque" (`tb_estoque_analitico`). Mostra o estoque parado a custo e separa pelo diagnóstico de visitas (30 dias):
+- **Pouca visita** (abaixo da mediana das páginas de produto com visita no período) → dar visibilidade: destaque no site, Instagram, entrar como oferta.
+- **Visitam e não compram** (na mediana ou acima) → revisar preço, fotos e descrição.
+
+### 7. Procura sem estoque
+Famílias **sem estoque** com visitas em 30 dias ou venda em 90 dias, ordenadas por visitas. É a fila de reposição pela demanda (mostra fornecedor e compra pendente).
+
+### 8. Cadastro
+Um SKU por linha, com filtro por tipo de problema: sem custo (a margem sai superestimada; prioridade quando tem estoque ou está visível), sem papel, sem ciclo (Curadoria), sem peso (afeta o frete), preço cheio da Nuvemshop diferente do Bling, sem imagem na Nuvemshop, fora da Nuvemshop.
+
+## Limitações
+- Visitas vêm do GA4 (histórico desde 01/07/2026; os últimos 1–2 dias ficam de fora). Página de produto com handle alterado perde o histórico anterior à troca.
+- Estoque de kits (composição) no Bling depende do cadastro do kit.
+- Com ~1 pedido/dia, "sem venda em 90 dias" é o sinal robusto; 30 dias oscila muito.
+- A classificação (papel, ciclo, oferta) está em preenchimento: o SKU herda do pai quando o próprio campo está vazio.
