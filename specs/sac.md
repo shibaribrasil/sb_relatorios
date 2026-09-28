@@ -54,14 +54,16 @@ Mudar opções: **acrescentar** é seguro; renomear/remover faz o valor antigo g
 
 ## Link de WhatsApp (todas as listas)
 
-Coluna **WhatsApp** (`LinkColumn`, texto "Mensagem") com `https://wa.me/<telefone>?text=<mensagem>` — abre a conversa com a mensagem **já escrita para aquela situação**; o atendente revisa e envia (nada é enviado sozinho). Textos em `common/mensagens_sac.py` (assinatura: "Robson, da Shibari" — constante `ATENDENTE`). Telefone: só dígitos, com DDI 55. Sem telefone → link vazio e a coluna **Obs.** mostra o e-mail.
+Coluna **WhatsApp** (`LinkColumn`, texto "Mensagem") com `https://wa.me/<telefone>?text=<mensagem>` — abre a conversa com a mensagem **já escrita para aquela situação**; o atendente revisa e envia (nada é enviado sozinho). Textos em `common/mensagens_sac.py` (assinatura: "Robson, da Shibari Brasil" — constantes `ATENDENTE` e `LOJA`).
+
+**Regras de texto (decisão do Hugo, 28/09/2026 — valem para toda mensagem nova):** (1) **sem emoji** — não renderiza quando a mensagem é enviada pelo link; `link_whatsapp` ainda remove qualquer emoji que escape (`_sem_emoji`); (2) **nome da loja sempre completo, "Shibari Brasil"**, nunca só "Shibari". Telefone: só dígitos, com DDI 55. Sem telefone → link vazio e a coluna **Obs.** mostra o e-mail.
 
 ## Seção "Carrinhos abandonados — recuperar a venda"
 
 - **Fonte:** `dbt_dw_az.tb_carrinho_abandonado` — `NOT fg_recuperado AND NOT fg_teste AND vl_total_carrinho > 0`, abandonados nos últimos **15 dias** (`JANELA_CARRINHO`, por `ts_criacao`, horário de Brasília). `fg_teste` (macro `eh_contato_teste` no dbt) = mesma regra de teste da rotina de recuperação.
 - **Colunas:** Cliente, Valor, Já é cliente?, Abandonado há (horas até 48 h, depois dias), WhatsApp, Já tratei, Resolução, Obs. (larga). Ordem: mais recente primeiro, depois maior valor.
 - **Sem coluna de prioridade** (removida em 28/09/2026, pedido do Hugo): a ordem já é do mais recente para o mais antigo.
-- **Mensagens** = os dois textos da rotina (cliente recorrente / cliente novo), com `ds_url_recuperacao` (link que reabre o carrinho).
+- **Mensagens** = os dois textos da antiga rotina (cliente recorrente / cliente novo), sem emoji e com "Shibari Brasil", com `ds_url_recuperacao` (link que reabre o carrinho).
 - **Mesmo telefone em mais de um carrinho:** link só no mais recente; os outros aparecem com "não reenviar".
 - Card extra: valor somado dos carrinhos pendentes.
 - **Frescor:** extração `nuvemshop_customers` (clientes + carrinhos) passou de 2×/dia para **de hora em hora, 08:25–22:25** (Cloud Scheduler `nuvemshop-customers-2x`, 25/09/2026); o dbt roda a cada hora no minuto 0 → o carrinho aparece aqui em até ~1h35 depois de abandonado.
