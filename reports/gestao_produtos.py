@@ -40,6 +40,39 @@ COL_VENDIDAS_90 = "Unidades vendidas (90 dias)"
 
 
 @st.cache_data(ttl=300)
+def carregar_resumo():
+    """Último resumo executivo do Kimba (dbt_dw_az.tb_resumo_executivo). Vazio se ainda não existe."""
+    try:
+        client = bq.get_client()
+        return bq.query_df(client, f"""
+            SELECT dt_referencia, ts_geracao, ds_origem, ds_persona, ds_resumo, qt_sinais
+              FROM `{bq.PROJECT}.dbt_dw_az.tb_resumo_executivo`
+             WHERE nm_relatorio = 'gestao_produtos'
+             ORDER BY dt_referencia DESC LIMIT 1""")
+    except Exception:
+        return pd.DataFrame()
+
+
+def _resumo_kimba(hoje):
+    """Caixa no topo: resumo do dia escrito pelo Kimba (IA) ou, sem IA, montado por template. Só lê a tabela."""
+    r = carregar_resumo()
+    if r.empty:
+        return
+    linha = r.iloc[0]
+    quando = pd.to_datetime(linha["ts_geracao"], utc=True).tz_convert("America/Sao_Paulo")
+    if linha["ds_origem"] == "ia":
+        rodape = f"Escrito pelo {linha['ds_persona']} (IA) em {quando:%d/%m/%Y às %H:%M}, a partir dos sinais calculados nesta página. Confira sempre nas seções abaixo."
+    else:
+        rodape = f"Resumo automático (sem IA) gerado em {quando:%d/%m/%Y às %H:%M} a partir dos sinais calculados nesta página."
+    with st.container(border=True):
+        st.markdown(f"**Resumo do dia — {linha['ds_persona']}**")
+        st.markdown(linha["ds_resumo"])
+        st.caption(rodape)
+        if pd.Timestamp(linha["dt_referencia"]).date() != hoje:
+            st.warning("Este resumo é de um dia anterior: o de hoje ainda não foi gerado (sai por volta de 07:30).")
+
+
+@st.cache_data(ttl=300)
 def carregar_dados():
     client = bq.get_client()
     az = f"`{bq.PROJECT}.dbt_dw_az"
@@ -218,6 +251,7 @@ def render():
     """)
     if fr:
         alerta_atraso(fr)
+    _resumo_kimba(hoje)
 
     frente = st.selectbox("Frente", options=["Todas", "Shibari", "Curadoria"])
     g = dados["g"]
@@ -437,19 +471,16 @@ def render():
     else:
         for r in mon[mon["alerta_exposicao"].notna()].itertuples():
             note(f"<strong>{r.nm_produto}</strong>: {r.alerta_exposicao}.", variant="warn")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**Em Saída** — liquidar o estoque")
-            _tabela(mon[mon["ds_ciclo"] == "Em Saída"].sort_values("prioridade", ascending=False),
-                    {"nm_produto": "Produto", "home": COL_HOME, "qt_estoque": COL_EST_BLING, "qt_vendas_60d": "Unidades vendidas (60 dias)",
-                     "qt_dias_para_zerar": "Dias para zerar", "ds_status_saida": "Status", "ds_acao_saida": "Ação"},
-                    {"Produto": TXT(width=180), "Ação": TXT(width=200), COL_HOME: CFG_HOME})
-        with c2:
-            st.markdown("**Dificuldade de Reposição** — buscar alternativa")
-            _tabela(mon[mon["ds_ciclo"] == "Dificuldade de Reposição"].sort_values("prioridade", ascending=False),
-                    {"nm_produto": "Produto", "home": COL_HOME, "qt_estoque": COL_EST_BLING, "qt_dias_ruptura": "Dias sem estoque",
-                     "vl_venda_perdida_estimada": "Margem perdida estimada", "ds_status_reposicao": "Status"},
-                    {"Produto": TXT(width=180), COL_HOME: CFG_HOME}, formatos={"Margem perdida estimada": "brl0"})
+        st.markdown("**Em Saída** — liquidar o estoque")
+        _tabela(mon[mon["ds_ciclo"] == "Em Saída"].sort_values("prioridade", ascending=False),
+                {"nm_produto": "Produto", "home": COL_HOME, "qt_estoque": COL_EST_BLING, "qt_vendas_60d": "Unidades vendidas (60 dias)",
+                 "qt_dias_para_zerar": "Dias para zerar", "ds_status_saida": "Status", "ds_acao_saida": "Ação"},
+                {"Produto": TXT(width=180), "Ação": TXT(width=200), COL_HOME: CFG_HOME})
+        st.markdown("**Dificuldade de Reposição** — buscar alternativa")
+        _tabela(mon[mon["ds_ciclo"] == "Dificuldade de Reposição"].sort_values("prioridade", ascending=False),
+                {"nm_produto": "Produto", "home": COL_HOME, "qt_estoque": COL_EST_BLING, "qt_dias_ruptura": "Dias sem estoque",
+                 "vl_venda_perdida_estimada": "Margem perdida estimada", "ds_status_reposicao": "Status"},
+                {"Produto": TXT(width=180), COL_HOME: CFG_HOME}, formatos={"Margem perdida estimada": "brl0"})
     note("Em Saída: dias para zerar = estoque ÷ ritmo de venda dos últimos 60 dias; vazio = sem venda no período. Produto Em Saída numa prateleira "
          "de <em>novidade</em> passa a mensagem errada — o lugar dele é liquidação/oferta. Margem perdida = dias sem estoque × ritmo anterior × "
          "margem de contribuição por unidade (estimativa).")
