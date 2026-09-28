@@ -107,3 +107,38 @@ def msg_entrega(nome, numero, rastreio, url_rastreio, problema: bool, atrasado: 
                 f"Você chegou a receber? Qualquer novidade eu te aviso por aqui.{acompanhe}")
     return (f"{_oi(nome)} O rastreio do seu {pedido} está sem atualização há {int(dias_parado)} dias e estamos verificando "
             f"com a transportadora. Você chegou a receber? Qualquer novidade eu te aviso por aqui.{acompanhe}")
+
+
+# --- Resultado do contato (coluna "Resultado" de cada lista; editável, cada troca vai para o histórico) ---------
+# Mudou uma opção aqui? Os valores antigos já gravados continuam na tabela; se sumirem da lista, a célula
+# aparece vazia até o atendente escolher de novo — por isso prefira ACRESCENTAR opção a renomear.
+
+RESULTADOS = {
+    "carrinho_abandonado": [
+        "Comprou",
+        "Vai pensar",
+        "Sem interesse — preço/frete",
+        "Sem interesse — outro motivo",
+        "Sem resposta",
+        "Telefone inválido / sem WhatsApp",
+    ],
+    "entrega_problema": [
+        "Cliente já recebeu",
+        "Aguardando transportadora",
+        "Endereço corrigido / nova tentativa",
+        "Reenvio feito",
+        "Reembolsado",
+        "Reclamação aberta na transportadora",
+        "Sem resposta",
+    ],
+    "pedido_cancelado": [
+        "Refez o pedido",
+        "Vai pensar",
+        "Estorno confirmado",
+        "Estorno pendente — resolver",
+        "Desistiu — preço/frete",
+        "Desistiu — prazo de entrega",
+        "Desistiu — outro motivo",
+        "Sem resposta",
+    ],
+}

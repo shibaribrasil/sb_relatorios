@@ -17,7 +17,7 @@ from common import bigquery as bq
 from common import mensagens_sac as msg
 from common.design import inject_css, section_title, note, card, render_cards, brl
 from common.logistica import carregar_logistica
-from common.tarefas import carregar_tarefas, marcar_tarefa
+from common.tarefas import carregar_tarefas, salvar_tarefa
 
 TIPO_ENTREGA_PROBLEMA = "entrega_problema"
 TIPO_CARRINHO = "carrinho_abandonado"
@@ -159,7 +159,8 @@ def _lista_cancelados(canc):
 
 def _secao_checklist(titulo, tipo_tarefa, itens, colunas_extra, nota, column_config=None, cards_extra=None):
     """`itens` já vem com uma coluna `chave` (str) e as colunas citadas em `colunas_extra` (dict nome exibido → coluna
-    em `itens`). Renderiza um data_editor com checkbox "Já tratei"; ao mudar, grava no BigQuery e reexecuta.
+    em `itens`). Renderiza um data_editor com "Resultado" (opções de msg.RESULTADOS[tipo_tarefa]) e checkbox "Já tratei";
+    ao mudar qualquer um dos dois, grava o estado da linha no BigQuery (+ histórico) e reexecuta.
     `column_config` (por nome exibido) formata colunas extras — ex.: o link de WhatsApp."""
     section_title(titulo)
     if itens.empty:
@@ -167,6 +168,9 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas_extra, nota, column_con
         return
     tarefas = carregar_tarefas(tipo_tarefa).set_index("chave")
     feito_atual = itens["chave"].map(lambda c: bool(tarefas.loc[c, "fg_feito"]) if c in tarefas.index else False)
+    opcoes = msg.RESULTADOS[tipo_tarefa]
+    resultado_atual = itens["chave"].map(
+        lambda c: tarefas.loc[c, "ds_resultado"] if c in tarefas.index and tarefas.loc[c, "ds_resultado"] in opcoes else None)
     pendentes, concluidos = int((~feito_atual).sum()), int(feito_atual.sum())
     render_cards([
         card("Pendentes", f"{pendentes}", "ainda sem contato registrado", variant="bad" if pendentes else "ok"),
@@ -174,25 +178,39 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas_extra, nota, column_con
         *(cards_extra(itens[~feito_atual.values]) if cards_extra else []),
     ])
     mostrar_feitos = st.toggle("Mostrar também os já tratados", value=False, key=f"toggle_{tipo_tarefa}")
-    base = itens.assign(**{"Já tratei": feito_atual.values})
+    base = itens.assign(**{"Já tratei": feito_atual.values, "Resultado": resultado_atual.values})
     if not mostrar_feitos:
         base = base[~base["Já tratei"]]
     if base.empty:
-        note("Tudo tratado por aqui. Ative \"Mostrar também os já tratados\" para conferir.")
+        note("Tudo tratado por aqui. Ative \"Mostrar também os já tratados\" para conferir ou mudar um resultado.")
         return
-    tabela = pd.DataFrame({nome: base[coluna].values for nome, coluna in colunas_extra.items()})
+    # colunas de ação (WhatsApp, Obs., Resultado, Já tratei) juntas, logo depois do cliente — o resto (detalhes) vai à direita
+    nomes = list(colunas_extra)
+    corte = max(nomes.index(n) for n in ("WhatsApp", "Obs.") if n in nomes) + 1 if "WhatsApp" in nomes else len(nomes)
+    tabela = pd.DataFrame({nome: base[colunas_extra[nome]].values for nome in nomes[:corte]})
+    tabela["Resultado"] = base["Resultado"].values
     tabela["Já tratei"] = base["Já tratei"].values
+    for nome in nomes[corte:]:
+        tabela[nome] = base[colunas_extra[nome]].values
     chaves = base["chave"].to_numpy()  # fora da tabela exibida — usada só para gravar a mudança na chave certa
+    editaveis = ["Resultado", "Já tratei"]
     editado = st.data_editor(
         tabela, hide_index=True, use_container_width=True, key=f"editor_{tipo_tarefa}",
-        disabled=[c for c in tabela.columns if c != "Já tratei"],
-        column_config={**(column_config or {}), "Já tratei": st.column_config.CheckboxColumn(width=90)},
+        disabled=[c for c in tabela.columns if c not in editaveis],
+        column_config={
+            **(column_config or {}),
+            "Resultado": st.column_config.SelectboxColumn(options=opcoes, width="medium", required=False,
+                                                          help="Como terminou o contato. Pode trocar depois quantas vezes precisar."),
+            "Já tratei": st.column_config.CheckboxColumn(width=90),
+        },
     )
     # comparação por posição (não por índice): data_editor mantém a ordem das linhas, não reordena/filtra sozinho
-    mudou = editado["Já tratei"].to_numpy() != tabela["Já tratei"].to_numpy()
+    def _norm(serie):
+        return serie.astype(object).where(serie.notna(), None).to_numpy()
+    mudou = (editado["Já tratei"].to_numpy() != tabela["Já tratei"].to_numpy()) | (_norm(editado["Resultado"]) != _norm(tabela["Resultado"]))
     if mudou.any():
-        for chave, novo_valor in zip(chaves[mudou], editado["Já tratei"].to_numpy()[mudou]):
-            marcar_tarefa(tipo_tarefa, chave, bool(novo_valor))
+        for chave, feito, resultado in zip(chaves[mudou], editado["Já tratei"].to_numpy()[mudou], _norm(editado["Resultado"])[mudou]):
+            salvar_tarefa(tipo_tarefa, chave, bool(feito), resultado)
         st.rerun()
     note(nota)
 
