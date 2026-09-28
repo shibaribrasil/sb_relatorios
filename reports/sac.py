@@ -17,7 +17,7 @@ from common import bigquery as bq
 from common import mensagens_sac as msg
 from common.design import inject_css, section_title, note, card, render_cards, brl
 from common.logistica import carregar_logistica
-from common.tarefas import carregar_tarefas, salvar_tarefa
+from common.tarefas import carregar_tarefas, salvar_tarefas
 from common.frescor import carregar_frescor, badge_atualizacao, detalhe_atualizacao, alerta_atraso
 
 TABELAS = ("tb_logistica_pedido", "tb_carrinho_abandonado", "tb_pedido_cancelado")
@@ -192,8 +192,10 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
         return
     tabela = pd.DataFrame({nome: base[nome if nome in (JA_TRATEI, RESOLUCAO) else coluna].values for nome, coluna in colunas.items()})
     chaves = base["chave"].to_numpy()  # fora da tabela exibida — usada só para gravar a mudança na chave certa
+    # o editor guarda as trocas na tela; só vão para o BigQuery no botão "Salvar alterações" (versão na key = zera o editor após salvar)
+    versao = st.session_state.get(f"versao_{tipo_tarefa}", 0)
     editado = st.data_editor(
-        tabela, hide_index=True, use_container_width=True, key=f"editor_{tipo_tarefa}",
+        tabela, hide_index=True, use_container_width=True, key=f"editor_{tipo_tarefa}_{versao}",
         disabled=[c for c in tabela.columns if c not in (JA_TRATEI, RESOLUCAO)],
         column_config={
             **(column_config or {}),
@@ -206,9 +208,20 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
     def _norm(serie):
         return serie.astype(object).where(serie.notna(), None).to_numpy()
     mudou = (editado[JA_TRATEI].to_numpy() != tabela[JA_TRATEI].to_numpy()) | (_norm(editado[RESOLUCAO]) != _norm(tabela[RESOLUCAO]))
-    if mudou.any():
-        for chave, feito, resultado in zip(chaves[mudou], editado[JA_TRATEI].to_numpy()[mudou], _norm(editado[RESOLUCAO])[mudou]):
-            salvar_tarefa(tipo_tarefa, chave, bool(feito), resultado)
+    n_mudou = int(mudou.sum())
+    col_botao, col_aviso = st.columns([1, 4], vertical_alignment="center")
+    salvar = col_botao.button(f"Salvar alterações ({n_mudou})" if n_mudou else "Salvar alterações",
+                              type="primary", disabled=not n_mudou, key=f"salvar_{tipo_tarefa}")
+    if n_mudou:
+        col_aviso.caption("Alterações ainda não salvas — só valem depois de clicar em Salvar. "
+                          "Mudar o filtro \"Mostrar também os já tratados\" antes de salvar descarta as trocas.")
+    if salvar:
+        with st.spinner("Salvando..."):
+            salvar_tarefas(tipo_tarefa, [
+                (chave, bool(feito), resultado)
+                for chave, feito, resultado in zip(chaves[mudou], editado[JA_TRATEI].to_numpy()[mudou], _norm(editado[RESOLUCAO])[mudou])
+            ])
+        st.session_state[f"versao_{tipo_tarefa}"] = versao + 1
         st.rerun()
     note(nota)
 

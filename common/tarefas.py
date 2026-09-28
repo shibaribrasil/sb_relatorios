@@ -39,33 +39,43 @@ def carregar_tarefas(tipo_tarefa: str) -> pd.DataFrame:
     return df
 
 
-def salvar_tarefa(tipo_tarefa: str, chave: str, fg_feito: bool, resultado: str | None = None):
-    """Grava (upsert) o estado atual de um item — check e resultado juntos — e registra a mudança no
-    histórico. Não identifica quem marcou (decisão do Hugo, 23/set/2026) — `nm_responsavel` fica na
-    tabela para uso futuro, mas sempre vazio. Chama carregar_tarefas.clear() depois, para a página já
-    mostrar o valor novo no mesmo rerun."""
+def salvar_tarefas(tipo_tarefa: str, itens: list[tuple[str, bool, str | None]]):
+    """Grava (upsert) o estado atual de VÁRIOS itens de uma vez — cada item = (chave, fg_feito, resultado),
+    check e resultado juntos — num único MERGE, e registra as mudanças no histórico. A página só chama isto
+    quando o usuário clica em "Salvar alterações": trocas intermediárias na tela não geram gravação nem
+    histórico, e um único comando evita gravações concorrentes (que duplicavam a chave). Não identifica quem
+    marcou (decisão do Hugo, 23/set/2026) — `nm_responsavel` fica na tabela para uso futuro, mas sempre vazio.
+    Chama carregar_tarefas.clear() depois, para a página já mostrar o valor novo no mesmo rerun."""
+    if not itens:
+        return
     client = bq.get_client()
     agora = datetime.now(timezone.utc)
-    resultado = resultado or None
+    linhas = [
+        bigquery.StructQueryParameter(
+            None,
+            bigquery.ScalarQueryParameter("chave", "STRING", str(chave)),
+            bigquery.ScalarQueryParameter("feito", "BOOL", bool(feito)),
+            bigquery.ScalarQueryParameter("resultado", "STRING", resultado or None),
+        )
+        for chave, feito, resultado in itens
+    ]
     params = [
         bigquery.ScalarQueryParameter("tipo", "STRING", tipo_tarefa),
-        bigquery.ScalarQueryParameter("chave", "STRING", str(chave)),
-        bigquery.ScalarQueryParameter("feito", "BOOL", bool(fg_feito)),
-        bigquery.ScalarQueryParameter("resultado", "STRING", resultado),
         bigquery.ScalarQueryParameter("agora", "TIMESTAMP", agora),
+        bigquery.ArrayQueryParameter("itens", "STRUCT", linhas),
     ]
     client.query(
         f"""
         MERGE `{TABELA}` T
-        USING (SELECT @tipo AS tipo_tarefa, @chave AS chave) S
+        USING (SELECT @tipo AS tipo_tarefa, i.chave, i.feito, i.resultado FROM UNNEST(@itens) i) S
            ON T.tipo_tarefa = S.tipo_tarefa AND T.chave = S.chave
          WHEN MATCHED THEN UPDATE SET
-              fg_feito = @feito, ds_resultado = @resultado, dt_atualizacao = @agora
+              fg_feito = S.feito, ds_resultado = S.resultado, dt_atualizacao = @agora
          WHEN NOT MATCHED THEN
            INSERT (tipo_tarefa, chave, fg_feito, ds_resultado, ds_observacao, dt_criacao, dt_atualizacao)
-           VALUES (@tipo, @chave, @feito, @resultado, '', @agora, @agora);
+           VALUES (S.tipo_tarefa, S.chave, S.feito, S.resultado, '', @agora, @agora);
         INSERT INTO `{HISTORICO}` (tipo_tarefa, chave, fg_feito, ds_resultado, dt_evento)
-        VALUES (@tipo, @chave, @feito, @resultado, @agora);
+        SELECT @tipo, i.chave, i.feito, i.resultado, @agora FROM UNNEST(@itens) i;
         """,
         job_config=bigquery.QueryJobConfig(query_parameters=params),
     ).result()
