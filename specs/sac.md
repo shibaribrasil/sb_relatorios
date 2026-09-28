@@ -19,19 +19,34 @@ Cada carga da página faz um `LEFT JOIN`, pela chave estável do item (hoje `cd_
 | `chave` | STRING | Identificador estável do item dentro do tipo, como texto: `cd_codigo_interno` (entregas), `cd_carrinho` (carrinhos), `cd_pedido_nuvemshop` (cancelados). |
 | `fg_feito` | BOOL | Marcado como concluído. |
 | `nm_responsavel` | STRING | Existe no schema, mas não é usada — decisão do Hugo (23/set/2026): a página não identifica quem marcou. Fica vazia. |
+| `ds_resultado` | STRING | Resultado do contato escolhido na coluna **Resultado** (opções por lista em `common/mensagens_sac.py`, `RESULTADOS`). Estado atual — pode ser trocado ou limpo a qualquer momento. Adicionada em 28/09/2026. |
 | `ds_observacao` | STRING | Livre, hoje não usado na tela (campo pronto para o futuro). |
 | `dt_criacao` / `dt_atualizacao` | TIMESTAMP | Quando a linha nasceu / foi tocada pela última vez. |
 
-Leitura e escrita: `common/tarefas.py` (`carregar_tarefas(tipo)`, `marcar_tarefa(tipo, chave, feito)` — grava via `MERGE`, parametrizado).
+Leitura e escrita: `common/tarefas.py` (`carregar_tarefas(tipo)`, `salvar_tarefa(tipo, chave, feito, resultado)` — grava check e resultado juntos via `MERGE` parametrizado e acrescenta 1 linha em `raw_control.sac_tarefas_historico`).
+
+**Histórico — `raw_control.sac_tarefas_historico`** (append-only, fora do dbt, criada em 28/09/2026): `tipo_tarefa`, `chave`, `fg_feito`, `ds_resultado`, `dt_evento` — 1 linha a cada gravação. Serve para ver a evolução de um contato (ex.: "Vai pensar" → "Comprou") e medir conversão do SAC por resultado.
 
 ## Seção "Entregas com problema — falar com o cliente"
 
 - **Fonte:** `common/logistica.py` (`tb_logistica_pedido`), o mesmo critério de risco do Pulso do Dia — atrasado (`fg_atrasado_em_aberto`), problema de entrega ativo (`fg_problema_entrega_ativo`) ou parado (em trânsito, sem evento de rastreio há 10+ dias — mesmo limite do Pulso do Dia, `DIAS_PARADO`).
-- **Tabela editável** (`st.data_editor`): Pedido (número que o cliente vê, `#cd_pedido_loja`), Cliente, Motivo, **WhatsApp**, Rastreio, Dias sem evento e a coluna **Já tratei** (checkbox). Só essa coluna é editável.
+- **Tabela editável** (`st.data_editor`): Pedido (número que o cliente vê, `#cd_pedido_loja`), Cliente, Motivo, **WhatsApp**, **Resultado**, **Já tratei**, Rastreio, Dias sem evento. Só Resultado e Já tratei são editáveis.
 - **Mensagem por motivo** (prioridade: problema de entrega > atrasado > parado): problema de entrega pede confirmação de endereço/recebedor; atrasado e parado avisam que estamos acompanhando e perguntam se já recebeu. Inclui o código e o link de rastreio quando existem. Telefone: `nr_telefone_cliente` (cadastro Nuvemshop, na `tb_logistica_pedido`).
 - **Sem identificação de quem marca** — não pede nome nem usa login do Streamlit Cloud.
 - **Toggle "Mostrar também os já tratados"**: por padrão a lista só mostra pendentes, para o SAC ver o que falta, não o que já foi feito.
 - Ao marcar/desmarcar, a página grava no BigQuery e recarrega (`st.rerun()`) para mostrar os contadores atualizados.
+
+## Coluna "Resultado" (todas as listas)
+
+Lista de opções (`SelectboxColumn`) editável, ao lado de "Já tratei" e logo depois das colunas de contato (WhatsApp/Obs.). Independente do check: o atendente pode registrar "Vai pensar" sem marcar como tratado (para voltar depois) ou trocar o resultado quando o cliente responder. Para mudar o resultado de um item já tratado, ative "Mostrar também os já tratados". Cada troca grava o estado atual em `sac_tarefas.ds_resultado` e uma linha no histórico.
+
+| Lista (`tipo_tarefa`) | Opções |
+|---|---|
+| Carrinhos (`carrinho_abandonado`) | Comprou · Vai pensar · Sem interesse — preço/frete · Sem interesse — outro motivo · Sem resposta · Telefone inválido / sem WhatsApp |
+| Entregas (`entrega_problema`) | Cliente já recebeu · Aguardando transportadora · Endereço corrigido / nova tentativa · Reenvio feito · Reembolsado · Reclamação aberta na transportadora · Sem resposta |
+| Cancelados (`pedido_cancelado`) | Refez o pedido · Vai pensar · Estorno confirmado · Estorno pendente — resolver · Desistiu — preço/frete · Desistiu — prazo de entrega · Desistiu — outro motivo · Sem resposta |
+
+Mudar opções: **acrescentar** é seguro; renomear/remover faz o valor antigo gravado aparecer vazio na tela (continua na tabela e no histórico).
 
 ## Link de WhatsApp (todas as listas)
 
@@ -40,7 +55,7 @@ Coluna **WhatsApp** (`LinkColumn`, texto "Chamar no WhatsApp") com `https://wa.m
 ## Seção "Carrinhos abandonados — recuperar a venda"
 
 - **Fonte:** `dbt_dw_az.tb_carrinho_abandonado` — `NOT fg_recuperado AND NOT fg_teste AND vl_total_carrinho > 0`, abandonados nos últimos **15 dias** (`JANELA_CARRINHO`, por `ts_criacao`, horário de Brasília). `fg_teste` (macro `eh_contato_teste` no dbt) = mesma regra de teste da rotina de recuperação.
-- **Colunas:** Prioridade, Cliente, WhatsApp, Obs., Abandonado há (horas até 48 h, depois dias), Valor, Já é cliente?, Já tratei. Ordem: mais recente primeiro, depois maior valor.
+- **Colunas:** Prioridade, Cliente, WhatsApp, Obs., Resultado, Já tratei, Abandonado há (horas até 48 h, depois dias), Valor, Já é cliente?. Ordem: mais recente primeiro, depois maior valor.
 - **Prioridade** (mesma régua da rotina): 🔴 abandonado há até 1 dia **ou** valor ≥ R$ 300; senão 🟡.
 - **Mensagens** = os dois textos da rotina (cliente recorrente / cliente novo), com `ds_url_recuperacao` (link que reabre o carrinho).
 - **Mesmo telefone em mais de um carrinho:** link só no mais recente; os outros aparecem com "não reenviar".
@@ -54,7 +69,7 @@ Coluna **WhatsApp** (`LinkColumn`, texto "Chamar no WhatsApp") com `https://wa.m
 - **Tipo** (`ds_tipo_cancelamento`, do `cancel_reason` da Nuvemshop): *Pagamento não concluído (automático)* / *Pagamento expirado* — o sistema cancelou; *Cliente desistiu*, *Sem estoque*, *Outro motivo*, *Reembolso* — **alguém da loja cancelou** e escolheu o motivo (o cliente não cancela sozinho pela loja virtual; "cliente desistiu" é o que a loja registrou). `ds_origem_cancelamento` agrupa em automatico / loja / sem_registro.
 - **"· pago, sem estorno"** (`fg_estorno_a_conferir`): cancelado com o pagamento ainda "paid" na Nuvemshop — possível estorno não feito. Vai para o topo, com a ação "Conferir estorno antes de chamar".
 - **Sai da lista:** quem voltou a comprar (`fg_recomprou`) — exceto estorno a conferir; e suspeita de fraude (não se contata).
-- **Colunas:** Pedido (#número), Cliente, O que fazer, WhatsApp, Obs., Tipo, Cancelado em, Valor, Já é cliente?, Já tratei.
+- **Colunas:** Pedido (#número), Cliente, O que fazer, WhatsApp, Obs., Resultado, Já tratei, Tipo, Cancelado em, Valor, Já é cliente?.
 - **Mensagem por tipo:** automático → pergunta se teve dificuldade com o Pix/boleto/cartão e oferece refazer; cliente desistiu → pergunta o motivo; sem estoque → desculpas + alternativa; estorno → confirma se o dinheiro voltou; outros → pergunta genérica sobre pendência.
 
 ## Extensão futura

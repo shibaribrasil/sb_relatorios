@@ -6,7 +6,10 @@ que o usuário marca ou desmarca aqui permanece entre as atualizações de dados
 páginas só fazem um LEFT JOIN desta tabela (pela chave estável do item, ex.: cd_codigo_interno)
 com os dados novos que vêm do dbt — a tabela de tarefas em si nunca é tocada pela carga.
 
-Uma linha = 1 item de 1 tipo de tarefa (`tipo_tarefa` + `chave`). Uso: `reports/sac.py`.
+Uma linha = 1 item de 1 tipo de tarefa (`tipo_tarefa` + `chave`), com o estado ATUAL do check
+(`fg_feito`) e do resultado do contato (`ds_resultado`). O resultado pode ser trocado quantas vezes
+for preciso; cada gravação também entra em `raw_control.sac_tarefas_historico` (append-only), para
+dar para ver a evolução (ex.: "vai pensar" → "comprou"). Uso: `reports/sac.py`.
 """
 from datetime import datetime, timezone
 
@@ -17,14 +20,15 @@ from google.cloud import bigquery
 from common import bigquery as bq
 
 TABELA = f"{bq.PROJECT}.raw_control.sac_tarefas"
+HISTORICO = f"{bq.PROJECT}.raw_control.sac_tarefas_historico"
 
 
 @st.cache_data(ttl=60)
 def carregar_tarefas(tipo_tarefa: str) -> pd.DataFrame:
-    """1 linha por item já marcado/desmarcado desse tipo (chave, fg_feito, dt_atualizacao)."""
+    """1 linha por item já marcado/desmarcado desse tipo (chave, fg_feito, ds_resultado, dt_atualizacao)."""
     client = bq.get_client()
     job = client.query(
-        f"SELECT chave, fg_feito, ds_observacao, dt_atualizacao FROM `{TABELA}` WHERE tipo_tarefa = @tipo",
+        f"SELECT chave, fg_feito, ds_resultado, ds_observacao, dt_atualizacao FROM `{TABELA}` WHERE tipo_tarefa = @tipo",
         job_config=bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("tipo", "STRING", tipo_tarefa)]),
     )
     df = job.result().to_dataframe()
@@ -33,29 +37,34 @@ def carregar_tarefas(tipo_tarefa: str) -> pd.DataFrame:
     return df
 
 
-def marcar_tarefa(tipo_tarefa: str, chave: str, fg_feito: bool, observacao: str = ""):
-    """Grava (upsert) o estado de um item. Não identifica quem marcou (decisão do Hugo, 23/set/2026) —
-    `nm_responsavel` fica na tabela para uso futuro, mas sempre vazio. Chama carregar_tarefas.clear()
-    depois, para a página já mostrar o valor novo no mesmo rerun."""
+def salvar_tarefa(tipo_tarefa: str, chave: str, fg_feito: bool, resultado: str | None = None):
+    """Grava (upsert) o estado atual de um item — check e resultado juntos — e registra a mudança no
+    histórico. Não identifica quem marcou (decisão do Hugo, 23/set/2026) — `nm_responsavel` fica na
+    tabela para uso futuro, mas sempre vazio. Chama carregar_tarefas.clear() depois, para a página já
+    mostrar o valor novo no mesmo rerun."""
     client = bq.get_client()
-    job = client.query(
+    agora = datetime.now(timezone.utc)
+    resultado = resultado or None
+    params = [
+        bigquery.ScalarQueryParameter("tipo", "STRING", tipo_tarefa),
+        bigquery.ScalarQueryParameter("chave", "STRING", str(chave)),
+        bigquery.ScalarQueryParameter("feito", "BOOL", bool(fg_feito)),
+        bigquery.ScalarQueryParameter("resultado", "STRING", resultado),
+        bigquery.ScalarQueryParameter("agora", "TIMESTAMP", agora),
+    ]
+    client.query(
         f"""
         MERGE `{TABELA}` T
         USING (SELECT @tipo AS tipo_tarefa, @chave AS chave) S
            ON T.tipo_tarefa = S.tipo_tarefa AND T.chave = S.chave
          WHEN MATCHED THEN UPDATE SET
-              fg_feito = @feito, ds_observacao = @obs, dt_atualizacao = @agora
+              fg_feito = @feito, ds_resultado = @resultado, dt_atualizacao = @agora
          WHEN NOT MATCHED THEN
-           INSERT (tipo_tarefa, chave, fg_feito, ds_observacao, dt_criacao, dt_atualizacao)
-           VALUES (@tipo, @chave, @feito, @obs, @agora, @agora)
+           INSERT (tipo_tarefa, chave, fg_feito, ds_resultado, ds_observacao, dt_criacao, dt_atualizacao)
+           VALUES (@tipo, @chave, @feito, @resultado, '', @agora, @agora);
+        INSERT INTO `{HISTORICO}` (tipo_tarefa, chave, fg_feito, ds_resultado, dt_evento)
+        VALUES (@tipo, @chave, @feito, @resultado, @agora);
         """,
-        job_config=bigquery.QueryJobConfig(query_parameters=[
-            bigquery.ScalarQueryParameter("tipo", "STRING", tipo_tarefa),
-            bigquery.ScalarQueryParameter("chave", "STRING", str(chave)),
-            bigquery.ScalarQueryParameter("feito", "BOOL", bool(fg_feito)),
-            bigquery.ScalarQueryParameter("obs", "STRING", observacao or ""),
-            bigquery.ScalarQueryParameter("agora", "TIMESTAMP", datetime.now(timezone.utc)),
-        ]),
-    )
-    job.result()
+        job_config=bigquery.QueryJobConfig(query_parameters=params),
+    ).result()
     carregar_tarefas.clear()
