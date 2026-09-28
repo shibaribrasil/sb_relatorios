@@ -22,6 +22,7 @@ ROTULOS_EXTRACAO = {
     "nuvemshop_orders": "Pedidos (Nuvemshop)",
     "nuvemshop_fulfillments": "Rastreio de envio (Nuvemshop)",
     "nuvemshop_customers": "Clientes e carrinhos (Nuvemshop)",
+    "nuvemshop_storefront": "Vitrine do site (home de hora em hora; sugestões e ranking 1×/dia)",
 }
 
 
