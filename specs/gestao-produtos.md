@@ -104,3 +104,12 @@ Limitações: prateleiras da home atualizam de hora em hora; sugestões (similar
 **Home é a informação principal:** coluna própria "Prateleira da home" (prateleira · posição, +N se estiver em mais de uma), logo depois do nome, e **linhas de produto na home destacadas** (fundo âmbar, negrito) em todas as tabelas. O resto vai em "Outra exposição no site" (oferta no Cashing, categoria de vitrine, "sugerido em N páginas de produto").
 
 **Rótulos sempre dizem onde e quando:** "Visível no site", "Estoque no Bling", "Estoque na Nuvemshop", "Unidades vendidas (90 dias)", "Visitas à página (30 dias)", "Compra pendente (un.)", "Ciclo de vida", "Preço cheio na Nuvemshop" etc.
+
+## Resumo executivo do Kimba (28/09/2026, pedido do Hugo)
+Caixa no topo da página: resumo do dia escrito pelo **Kimba** (persona de IA do projeto), para poupar minutos de leitura do relatório inteiro.
+- **Quem decide o que é preocupante é o dbt** (`tb_gestao_sinal`, 1 linha por sinal x produto, com gravidade). A IA só redige a partir dessa lista curta; não analisa a base.
+- **Sinais (gravidade):** 1 produto na home sem estoque · 2 Nuvemshop com mais estoque que o Bling · 3 oferta do Cashing sem estoque · 4 Em Saída/Descontinuado exposto · 5 com estoque e fora do site (exceto componente de kit visível) · 5 Nuvemshop com menos estoque que o Bling · 6 estoque zerou (hoje/ontem) · 7 teste vencendo (prazo em até 7 dias ou critério atingido) · 9 estoque voltou (informativo).
+- **Fluxo:** função `resumo-executivo` (sb_data_pipeline), 1x/dia às 07:30 -> `raw_ia.resumo_executivo` (histórico) -> `dbt_dw_az.tb_resumo_executivo` (última do dia) -> esta página só lê. O Streamlit não chama IA.
+- **Controles:** validação em código (todo número e nome de produto do texto precisa existir nos sinais; sem emoji; tamanho máximo); se a IA falhar ou reprovar, grava resumo por **template** com os mesmos sinais (`ds_origem = template`, rótulo "sem IA" na tela). A função falha se o dbt estiver com mais de 4h de atraso (não resume dado velho). "Mudou desde ontem" = comparação, em código, com os sinais do último dia anterior.
+- **Limitação:** a validação garante que números e produtos vieram dos sinais, não que a redação seja perfeita; a tela avisa para conferir nas seções.
+- **Seção 8:** as tabelas Em Saída e Dificuldade de Reposição ficam uma embaixo da outra (28/09/2026).
