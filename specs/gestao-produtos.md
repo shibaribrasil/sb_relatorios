@@ -72,3 +72,19 @@ Um SKU por linha, com filtro por tipo de problema: sem custo (a margem sai super
 - Estoque de kits (composição) no Bling depende do cadastro do kit.
 - Com ~1 pedido/dia, "sem venda em 90 dias" é o sinal robusto; 30 dias oscila muito.
 - A classificação (papel, ciclo, oferta) está em preenchimento: o SKU herda do pai quando o próprio campo está vazio.
+
+## Atualização dos dados (28/09/2026)
+Cabeçalho mostra **"Atualizado em"** = horário da tabela mais antiga que a página lê (`common/frescor.py`, a partir de `dbt_dw_az.__TABLES__`), e o expansor "De quando são os dados desta página" lista a última extração com sucesso de cada fonte (`raw_control.pipeline_runs`) e a data do GA4. Todas as extrações usadas aqui rodam de hora em hora entre :20 e :45 e o dbt na hora cheia (7h–23h), então as seções saem da mesma rodada. Alerta na página se o dbt passar de 90 minutos sem rodar dentro da janela.
+
+## Vitrine como agravante (28/09/2026, pedido do Hugo)
+A vitrine **não é uma seção à parte**: ela pesa os problemas das seções existentes. Fonte: `tb_produto_vitrine` (dbt), que chega à página pelas colunas de exposição da `tb_produto_gestao`.
+
+- **Nível de exposição** (regra no dbt): 3 **Home** (alguma prateleira da home) › 2 **Vitrine** (categoria de vitrine visível — Liquidação, Seleção Prazer, Primeiras Cordas, campanhas — ou sugerido em "Produtos similares"/"Para comprar com esse produto" na página de outro produto) › 1 **Só categoria** › 0 **Fora do site**.
+- **Coluna "Exposição"** em todas as listas (ex.: "Home · Os Mais Queridos (3º)", "Vitrine · sugerido em 7 páginas").
+- **Ordenação:** o mais exposto primeiro (visível sem estoque, divergência de estoque, movimentos, Em Saída, procura sem estoque, cadastro). **Exceção — empurrãozinho:** o menos exposto primeiro, porque o primeiro empurrão é expor.
+- **Ações que mudam com a exposição:** zerou e está na home → "Tirar da home ou repor já"; voltou e está só na categoria → "Divulgar a volta e colocar em vitrine"; empurrãozinho → "Sem vitrine" (expor) › "Em vitrine e pouca visita" (divulgar fora do site) › "Visitam e não compram" (página/preço).
+- **Conflitos ciclo × vitrine** (`ds_alerta_exposicao`, dbt): Em Saída/Descontinuado na home; Descontinuado em vitrine; Em Teste só na categoria (entra como alerta na seção de teste).
+- **Cadastro:** novos problemas — sem SEO, fotos sem texto alternativo, sem GTIN na Nuvemshop — e a lista de **categorias da loja visíveis e vazias** (`tb_categoria_loja`).
+- Card "Visíveis sem estoque" separa quantos estão na home / em vitrine / só na categoria; card novo "Conflitos de vitrine".
+
+Limitações: prateleiras da home atualizam de hora em hora; sugestões (similares/complementares) e ranking "mais vendidos" 1×/dia. Histórico da vitrine desde 28/09/2026. Leitura depende dos marcadores do tema da loja (`data-store`): se o tema mudar, a extração falha com erro em vez de gravar vitrine vazia.

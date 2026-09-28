@@ -18,6 +18,10 @@ from common import mensagens_sac as msg
 from common.design import inject_css, section_title, note, card, render_cards, brl
 from common.logistica import carregar_logistica
 from common.tarefas import carregar_tarefas, salvar_tarefa
+from common.frescor import carregar_frescor, badge_atualizacao, detalhe_atualizacao
+
+TABELAS = ("tb_logistica_pedido", "tb_carrinho_abandonado", "tb_pedido_cancelado")
+EXTRATORES = ("nuvemshop_orders", "nuvemshop_fulfillments", "nuvemshop_customers", "bling_orders")
 
 TIPO_ENTREGA_PROBLEMA = "entrega_problema"
 TIPO_CARRINHO = "carrinho_abandonado"
@@ -211,15 +215,22 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
 
 def render():
     inject_css()
-    st.html("""
+    try:
+        fr = carregar_frescor(TABELAS, EXTRATORES)
+    except Exception:
+        fr = None
+    st.html(f"""
     <div class="report-header">
       <div>
         <div class="report-brand">shibari brasil · camada diária</div>
         <div class="report-title">SAC <span>—</span> Tarefas do Dia</div>
         <div class="report-meta">Lista de trabalho com mensagem pronta e check de execução — o que fica marcado (ou sem marcar) permanece entre as atualizações de dados</div>
       </div>
+      {badge_atualizacao(fr) if fr else ""}
     </div>
     """)
+    if fr:
+        detalhe_atualizacao(fr)
 
     with st.spinner("Carregando dados..."):
         try:
