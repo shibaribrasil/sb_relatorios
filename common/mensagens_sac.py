@@ -2,16 +2,23 @@
 
 Isto é texto de atendimento (apresentação), não regra de negócio: quem decide QUEM entra em cada lista e o
 tipo de cada situação é o dbt (tb_logistica_pedido, tb_carrinho_abandonado, tb_pedido_cancelado). Aqui só se
-monta a conversa. Os dois textos de carrinho abandonado são os mesmos da rotina de recuperação
-(Base de Conhecimento 10.1.3 / tarefa agendada `recuperacao-carrinho-abandonado`) — mudou lá, mude aqui.
+monta a conversa. Os dois textos de carrinho abandonado vieram da antiga rotina de recuperação (desligada em 25/09/2026),
+sem o emoji e com o nome completo da loja.
 
 O link só abre o WhatsApp com a mensagem escrita; nada é enviado sem o atendente revisar e apertar enviar.
+
+REGRAS DE TEXTO (decisão do Hugo, 28/09/2026 — valem para toda mensagem nova):
+- **Sem emoji.** Não renderiza quando a mensagem é enviada pelo link (chega como caractere quebrado). `link_whatsapp`
+  remove qualquer emoji que escape (`_sem_emoji`), mas não escreva emoji nos textos.
+- **Nome da loja sempre completo: "Shibari Brasil"** (constante `LOJA`), nunca só "Shibari".
 """
 import re
 from urllib.parse import quote
 
 ATENDENTE = "Robson"
-LOJA = "Shibari"
+LOJA = "Shibari Brasil"  # nome completo, sempre (regra de texto acima)
+# emoji e modificadores (variação, ZWJ, tons de pele): não renderizam na mensagem enviada pelo link
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF\uFE0F\u200D\u2B50\u2B55\u2934\u2935\u3030\u303D\u3297\u3299]")
 
 
 def primeiro_nome(nome) -> str:
@@ -30,11 +37,16 @@ def telefone_whatsapp(telefone) -> str | None:
     return d if len(d) >= 12 else None
 
 
+def _sem_emoji(texto: str) -> str:
+    """Remove emoji (regra de texto) e arruma os espaços que sobrarem."""
+    return re.sub(r"\s{2,}", " ", _EMOJI.sub("", texto)).strip()
+
+
 def link_whatsapp(telefone, mensagem: str) -> str | None:
     fone = telefone_whatsapp(telefone)
     if not fone:
         return None
-    return f"https://wa.me/{fone}?text={quote(mensagem, safe='')}"
+    return f"https://wa.me/{fone}?text={quote(_sem_emoji(mensagem), safe='')}"
 
 
 def _valor(v) -> str:
@@ -53,7 +65,7 @@ def msg_carrinho(nome, recorrente: bool, url_recuperacao) -> str:
     if recorrente:
         return (f"Oi {n}, tudo bem? Aqui é o {ATENDENTE}, da {LOJA}. Você já comprou com a gente e começou um novo pedido "
                 f"que acabou não sendo finalizado. Ainda tem interesse? Se quiser, te ajudo a fechar por aqui: {url_recuperacao}")
-    return (f"Oi {n}, aqui é o {ATENDENTE}, da {LOJA} 🌸 Vi que você montou um pedido com a gente e não chegou a finalizar. "
+    return (f"Oi {n}, aqui é o {ATENDENTE}, da {LOJA}. Vi que você montou um pedido com a gente e não chegou a finalizar. "
             f"Ficou alguma dúvida sobre frete ou forma de pagamento? Está tudo salvo aqui, é só finalizar por este link: {url_recuperacao}")
 
 
