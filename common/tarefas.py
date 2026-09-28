@@ -34,6 +34,8 @@ def carregar_tarefas(tipo_tarefa: str) -> pd.DataFrame:
     df = job.result().to_dataframe()
     if not df.empty:
         df["dt_atualizacao"] = pd.to_datetime(df["dt_atualizacao"])
+        # dois cliques quase simultâneos podem inserir a mesma chave 2x (MERGE concorrente): vale o estado mais recente
+        df = df.sort_values("dt_atualizacao").drop_duplicates("chave", keep="last")
     return df
 
 
