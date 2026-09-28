@@ -61,14 +61,19 @@ def badge_atualizacao(fr):
     return f'<div class="report-badge">Atualizado em: <strong>{_fmt(ts)}</strong></div>'
 
 
-def detalhe_atualizacao(fr):
-    """Expansor com o horário de cada fonte + alerta se o dbt atrasou."""
-    tab, ext = fr["tabelas"], fr["extracoes"]
+def alerta_atraso(fr):
+    """Aviso no TOPO da página quando o dbt passou do horário (dentro da janela 7h–23h)."""
+    tab = fr["tabelas"]
     agora = pd.Timestamp.now(tz=FUSO).tz_localize(None)
     ts = tab["dt_atualizacao"].min() if not tab.empty else None
     if ts is not None and pd.notna(ts) and 7 <= agora.hour <= 23 and (agora - ts).total_seconds() / 60 > ATRASO_ALERTA_MIN:
         note(f"<strong>Dados atrasados:</strong> a última atualização foi em {_fmt(ts)}. O normal é a cada hora cheia, das 7h às 23h — "
              "confira o job <code>sb-dbt-run</code> e as extrações.", variant="warn")
+
+
+def detalhe_atualizacao(fr):
+    """Expansor com o horário de cada fonte (vai no FIM da página; o aviso de atraso fica no topo, em alerta_atraso)."""
+    tab, ext = fr["tabelas"], fr["extracoes"]
     with st.expander("De quando são os dados desta página"):
         linhas = [{"Fonte": ROTULOS_EXTRACAO.get(r.extrator, r.extrator), "Etapa": "Extração", "Última execução": r.dt_atualizacao}
                   for r in ext.sort_values("extrator").itertuples()]
@@ -78,5 +83,5 @@ def detalhe_atualizacao(fr):
                      column_config={"Última execução": st.column_config.DatetimeColumn(format="DD/MM HH:mm")})
         extra = f" Visitas do site (GA4) vão até {fr['ga4'].strftime('%d/%m')} — o Google entrega 1× por dia, com 1–2 dias de atraso." \
             if fr.get("ga4") is not None else ""
-        st.caption("As extrações rodam de hora em hora entre :30 e :45 e o dbt recria as tabelas na hora cheia (7h–23h): o horário do "
+        st.caption("As extrações rodam de hora em hora entre :20 e :45 e o dbt recria as tabelas na hora cheia (7h–23h): o horário do "
                    "cabeçalho é o da tabela mais antiga desta página." + extra)

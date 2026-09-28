@@ -18,7 +18,7 @@ from common import mensagens_sac as msg
 from common.design import inject_css, section_title, note, card, render_cards, brl
 from common.logistica import carregar_logistica
 from common.tarefas import carregar_tarefas, salvar_tarefa
-from common.frescor import carregar_frescor, badge_atualizacao, detalhe_atualizacao
+from common.frescor import carregar_frescor, badge_atualizacao, detalhe_atualizacao, alerta_atraso
 
 TABELAS = ("tb_logistica_pedido", "tb_carrinho_abandonado", "tb_pedido_cancelado")
 EXTRATORES = ("nuvemshop_orders", "nuvemshop_fulfillments", "nuvemshop_customers", "bling_orders")
@@ -230,7 +230,7 @@ def render():
     </div>
     """)
     if fr:
-        detalhe_atualizacao(fr)
+        alerta_atraso(fr)
 
     with st.spinner("Carregando dados..."):
         try:
@@ -294,3 +294,6 @@ def render():
              "não some quando a base atualizar de novo; se o pedido sair da situação de risco (por exemplo, foi entregue), ele some da "
              "lista, mas o registro de que você tratou continua guardado.",
     )
+
+    if fr:
+        detalhe_atualizacao(fr)
