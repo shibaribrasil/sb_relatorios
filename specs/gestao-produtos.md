@@ -88,3 +88,19 @@ A vitrine **não é uma seção à parte**: ela pesa os problemas das seções e
 - Card "Visíveis sem estoque" separa quantos estão na home / em vitrine / só na categoria; card novo "Conflitos de vitrine".
 
 Limitações: prateleiras da home atualizam de hora em hora; sugestões (similares/complementares) e ranking "mais vendidos" 1×/dia. Histórico da vitrine desde 28/09/2026. Leitura depende dos marcadores do tema da loja (`data-store`): se o tema mudar, a extração falha com erro em vez de gravar vitrine vazia.
+
+
+## Ordem por urgência e leitura clara (28/09/2026, pedido do Hugo) — substitui a ordem das seções acima
+**Ordem das seções = do maior problema para o menor:**
+1. **Estoque diferente entre Bling e Nuvemshop** (primeiro: pode vender o que não tem). Coluna "Diferença (Nuvemshop − Bling)" e "Risco"; Nuvemshop maior que o Bling vem antes.
+2. **Com estoque e fora do site.** Não entra o SKU que é **componente de kit/composição visível no site** (`fg_componente_kit_visivel`, dbt) — é vendido dentro do kit; esses ficam num expansor. Se o único kit que usa o item está oculto, continua no alerta com o kit indicado.
+3. **Visíveis no site sem estoque.**
+4. **Ofertas no Cashing** — oferta sem estoque primeiro (a vitrine mais cara de errar).
+5. O que mudou no estoque (7 dias) · 6. Procura sem estoque · 7. Produtos em teste · 8. Em Saída e Dificuldade de Reposição · 9. Empurrãozinho · 10. Cadastro.
+11. **De quando são os dados desta página** — no fim (o aviso de dado atrasado continua no topo). Mesmo padrão no SAC.
+
+**Prioridade dentro das seções = exposição no site:** prateleira da home › oferta no Cashing › categoria de vitrine / sugestão em outras páginas › só na categoria › fora do site (`prioridade` = home×100 + oferta×10 + nível). Exceção: empurrãozinho (menos exposto primeiro).
+
+**Home é a informação principal:** coluna própria "Prateleira da home" (prateleira · posição, +N se estiver em mais de uma), logo depois do nome, e **linhas de produto na home destacadas** (fundo âmbar, negrito) em todas as tabelas. O resto vai em "Outra exposição no site" (oferta no Cashing, categoria de vitrine, "sugerido em N páginas de produto").
+
+**Rótulos sempre dizem onde e quando:** "Visível no site", "Estoque no Bling", "Estoque na Nuvemshop", "Unidades vendidas (90 dias)", "Visitas à página (30 dias)", "Compra pendente (un.)", "Ciclo de vida", "Preço cheio na Nuvemshop" etc.
