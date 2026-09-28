@@ -8,7 +8,7 @@ arquivo em reports/ + entrada aqui.
 """
 import streamlit as st
 
-from reports import canais_unit_economics, clientes, produtos_mix, pulso_dia, sac, site_funil, trafego_conteudo, vendas_margem, vendas_semana
+from reports import canais_unit_economics, clientes, gestao_produtos, produtos_mix, pulso_dia, sac, site_funil, trafego_conteudo, vendas_margem, vendas_semana
 
 # Estoque e Google Ads ficam ocultos do menu por decisão do Hugo (22/set/2026) — ainda sobre
 # tabelas rpt antigas, não a `az`. Os arquivos continuam em reports/, só não entram em `pages`.
@@ -25,6 +25,7 @@ pages = {
     "Diário": [
         st.Page(pulso_dia.render, title="Pulso do Dia", icon="⚡", url_path="dia", default=True),
         st.Page(sac.render, title="SAC", icon="🎧", url_path="sac"),
+        st.Page(gestao_produtos.render, title="Gestão de Produtos", icon="📦", url_path="gestao-produtos"),
     ],
     "Semanal": [
         st.Page(vendas_semana.render, title="Vendas da Semana", icon="📅", url_path="semana"),
