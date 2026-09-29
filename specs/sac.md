@@ -84,3 +84,20 @@ Para uma nova lista de tarefas do SAC: escolher um `tipo_tarefa` novo, escrever 
 
 ## Atualização dos dados (28/09/2026)
 Cabeçalho mostra **"Atualizado em"** (tabela mais antiga entre `tb_logistica_pedido`, `tb_carrinho_abandonado`, `tb_pedido_cancelado`) e um expansor com a última extração de pedidos (Bling e Nuvemshop), rastreio e clientes/carrinhos. Todas rodam de hora em hora entre :20 e :45 (rastreio passou de 3×/dia para de hora em hora) e o dbt na hora cheia, 7h–23h. Código em `common/frescor.py`.
+
+## Observação SAC e novas resoluções (28/09/2026, pedido do Hugo)
+- **Observação SAC** (coluna editável, texto livre até 500 caracteres) em todas as listas: grava em `raw_control.sac_tarefas.ds_observacao` junto com o check e a Resolução, no mesmo botão "Salvar alterações". Mostra sempre a observação atual; ao salvar um texto novo, ele **sobrescreve** o anterior (o anterior continua no histórico). Não confundir com a coluna **Obs.**, que é aviso automático do sistema (sem telefone, estorno a conferir, telefone repetido).
+- `raw_control.sac_tarefas_historico` ganhou a coluna `ds_observacao` (ALTER TABLE manual, 28/09/2026).
+- Novas opções de Resolução em **todas** as listas: "WhatsApp inválido" e "Não retomar contato". No carrinho, "Telefone inválido / sem WhatsApp" continua na lista (há valores gravados com ele); as duas fazem o mesmo papel.
+
+## Recontato com cupom — última tentativa (28/09/2026, pedido do Hugo)
+Lista nova (tipo de tarefa `recontato_cupom`), paralela a carrinhos e cancelados. Regras:
+- **Quem entra:** item de `carrinho_abandonado` ou `pedido_cancelado` cujo 1º contato foi marcado "Já tratei" há **7 dias ou mais** (`DIAS_RECONTATO`; data = 1ª vez que o check foi marcado, em `sac_tarefas_historico`; se o item é anterior ao histórico, a última atualização). Sem teto de idade por decisão (o item fica até ser tratado ou o cliente comprar).
+- **Não pode ter comprado:** carrinho `fg_recuperado` / pedido `fg_recomprou` (dbt) — some sozinho quando o cliente compra.
+- **Resolução do 1º contato** não pode estar em `msg.RESOLUCOES_SEM_RECONTATO`: "Não retomar contato", "WhatsApp inválido", "Telefone inválido / sem WhatsApp", "Comprou", "Refez o pedido", "Estorno confirmado", "Estorno pendente — resolver". Resolução vazia não impede. Fora também: teste e cancelamento por fraude.
+- **1 linha por cliente** (telefone, senão e-mail): vale o contato mais recente.
+- **Cupom `SEGUNDACHANCE`** (código único `SEGUNDACHANCE`+4 caracteres; 20%, uso único, 48 horas): criado pelo botão **Gerar cupom** (Cloud Function `nuvemshop-criar-cupom`, preset `cupom_recuperacao_venda_whatsapp`) — a validade de 48h começa no clique, por isso a mensagem só sai com cupom já gerado. 1 cupom por item (referência `<tipo_tarefa>:<chave>`; repetir o clique devolve o mesmo cupom). Estado em `raw_control.cupons_gerados`. Cupom vencido: sem link, aviso em Obs. (a última tentativa já foi usada).
+- Mensagem: `msg.msg_recontato_cupom` (sem emoji, "Shibari Brasil", escassez de 48h com data e hora de vencimento). Resoluções do recontato: `RESULTADOS["recontato_cupom"]`.
+- A carga (`carregar_recontato`) vem de `raw_control` + `az` (mesma região); falha nela não derruba o resto da página.
+- Cliente que compra com o cupom: cruzar `cupons_gerados.codigo` com `orders.coupon_code` (medição de conversão — ainda não construída).
+
