@@ -26,7 +26,7 @@ Cada espaço nobre do site (prateleiras da home) está ocupado pelo produto que 
 1. A home montada (prateleiras em cartões com foto, posição, faixa, score, visitas, cliques da home, vendas, alerta sem estoque).
 2. Veredito por prateleira (% dos cliques × % das posições, score médio, frios, quentes, sem estoque).
 3. Onde erro e onde acerto: frios na home; acertos (Quente/Estrela na home); quentes fora da home (candidatos a subir).
-4. Quadrantes (dispersão visitas × taxa de carrinho; bolha = margem; cor = exposição).
+4. Quadrantes (cards de contagem + tabela filtrável por quadrante: score, visitas, carrinhos, taxa de carrinho e vs média da loja, unidades, margem, margem por visita, estoque).
 5. Efeito da posição (cliques médios por posição).
 Rodapé: de quando são os dados (frescor) e cobertura.
 
