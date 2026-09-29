@@ -36,8 +36,10 @@ pages = {
         st.Page(vendas_margem.render, title="Vendas & Margem", icon="🛒", url_path="vendas"),
         st.Page(clientes.render, title="Clientes & Coorte", icon="👥", url_path="clientes"),
         st.Page(produtos_mix.render, title="Produtos & Mix", icon="🧩", url_path="produtos"),
-        st.Page(canais_unit_economics.render, title="Canais & Unit Economics", icon="🧮", url_path="canais"),
         st.Page(site_funil.render, title="Site & Funil", icon="🔻", url_path="funil"),
+    ],
+    "ADS e Tráfego": [
+        st.Page(canais_unit_economics.render, title="Canais & Unit Economics", icon="🧮", url_path="canais"),
         st.Page(trafego_conteudo.render, title="Tráfego & Conteúdo", icon="🧭", url_path="trafego"),
     ],
     # "Marketing": [

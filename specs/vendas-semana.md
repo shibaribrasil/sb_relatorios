@@ -3,7 +3,7 @@
 Fechamento semanal de vendas: quanto vendemos, com que margem, vindo de onde, de quem e o que vendeu. Reaproveita `carregar_dados()` e as regras de `vendas_margem` (mesma `tb_pedido`, mesma margem de contribuição antes de mídia; ver `specs/vendas-margem.md`). Nenhuma regra nova de negócio: só filtro por semana e soma.
 
 ## Regras
-- **Semana** = segunda a domingo (ISO), pela data do pedido. Padrão: última semana fechada; a semana em andamento é selecionável e mostra **só dias fechados** (até ontem), comparada aos **mesmos dias** da semana anterior.
+- **Semana** = segunda a domingo (ISO), pela data do pedido. Padrão: **semana atual** (em andamento), consolidada **até hoje** (dia de hoje parcial incluso, pois `dt_pedido` é data sem hora), comparada aos **mesmos dias** da semana anterior (dias inteiros; o dia de hoje aberto tende a ficar abaixo do dia fechado da semana anterior). Semanas fechadas seguem selecionáveis.
 - **Comparação:** semana anterior (inteira, se a selecionada está fechada). Deltas relativos em R$/pedidos/ticket e em p.p. na margem %. Razões sempre Σnumerador ÷ Σdenominador.
 - **Margem de contribuição:** antes de mídia, com o reembolso no pedido de origem (visão por pedido). Semáforo: verde ≥ 50%, âmbar ≥ 40%.
 - **Google Ads:** soma do custo dos dias da semana (`tb_gads_conta_diario`); "margem após mídia" = margem de contribuição − custo, com o mesmo semáforo. Só aparece se houver custo na semana.
@@ -14,3 +14,6 @@ Fechamento semanal de vendas: quanto vendemos, com que margem, vindo de onde, de
 ## v2 — 21/set/2026: logística
 - Seção "Logística dos pedidos da semana" (semana do **pedido**): pedidos com data de expedição ÷ enviados, média de dias do pedido à expedição, média de trânsito e % entregues no prazo (entre entregas com estimativa), com delta contra a semana anterior (menos dias = melhor). Tendência de 12 semanas: dias até a expedição (barras) e % no prazo em janela de 4 semanas.
 - **Cobertura mínima:** semana só entra nas métricas/gráfico se ≥ 80% dos pedidos enviados têm `dt_expedicao` (o rastreio chega com defasagem; hoje o extrator está parado desde 10/09 — B054). Abaixo disso os indicadores ficam em branco com aviso.
+
+## v3 — 29/set/2026: semana atual como padrão
+- Bug: a semana em andamento só contava dias fechados; com segunda sem pedidos, aparecia zerada. Agora vai até hoje e é a visão padrão.

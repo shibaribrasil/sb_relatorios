@@ -97,6 +97,27 @@ def _tabela_aquisicao(s, com_campanha):
     return out
 
 
+def _compras_blog(s, p):
+    """Sessões com blog e compra (GA4): onde começaram e quais páginas do blog viram. Uma linha por sessão."""
+    sb = p[p["fl_blog"]]["cd_sessao"].unique()
+    comp = s[s["cd_sessao"].isin(sb) & s["fl_conversao"]]
+    linhas = []
+    for _, x in comp.iterrows():
+        ps = p[p["cd_sessao"] == x["cd_sessao"]]
+        ent = ps[ps["fl_pagina_entrada"]]
+        vistas = ps[ps["fl_blog"]]
+        titulo = lambda r: r["ds_pagina_titulo"] or r["ds_pagina_path"]
+        linhas.append({
+            "Data": x["dt_data"].date(),
+            "Começou no blog?": "Sim" if ent["fl_blog"].any() else "Não",
+            "Página de entrada": titulo(ent.iloc[0]) if len(ent) else "(não identificada)",
+            "Páginas do blog vistas": " · ".join(sorted({titulo(r) for _, r in vistas.iterrows()})),
+            "Origem / meio": f"{x['ds_fonte']} / {x['ds_meio']}",
+            "Compras (GA4)": int(x["qt_compras"]), "Receita (GA4)": float(x["vl_receita"]),
+        })
+    return pd.DataFrame(linhas).sort_values("Data", ascending=False) if linhas else pd.DataFrame()
+
+
 def _tabela_paginas(p):
     g = p.groupby(["ds_pagina_titulo", "ds_pagina_path"], as_index=False).agg(
         pv=("qt_pageviews", "sum"), sess=("cd_sessao", "nunique"), usu=("cd_usuario_pseudo", "nunique"),
@@ -184,20 +205,34 @@ def render():
     section_title("Blog")
     blog = p[p["fl_blog"]]
     sess_blog = blog["cd_sessao"].unique()
-    conv_blog = s[s["cd_sessao"].isin(sess_blog) & s["fl_conversao"]]["cd_sessao"].nunique()
+    sess_entrou = blog[blog["fl_pagina_entrada"]]["cd_sessao"].unique()
+    conv_entrou = s[s["cd_sessao"].isin(sess_entrou) & s["fl_conversao"]]["cd_sessao"].nunique()
+    conv_passou = s[s["cd_sessao"].isin(set(sess_blog) - set(sess_entrou)) & s["fl_conversao"]]["cd_sessao"].nunique()
     render_cards([
         card("Sessões com blog", _n(len(sess_blog)), f"{pct(len(sess_blog) / n_sess if n_sess else None, 1)} das sessões do site"),
         card("Entraram pelo blog", _n(blog[blog["fl_pagina_entrada"]]["cd_sessao"].nunique()), "sessões que começaram no blog"),
         card("Pageviews do blog", _n(blog["qt_pageviews"].sum()), f"{_n(blog['cd_usuario_pseudo'].nunique())} usuários"),
-        card("Compraram na sessão", _n(conv_blog), "sessões com blog e compra (GA4)"),
+        card("Compraram — começaram no blog", _n(conv_entrou), f"de {_n(len(sess_entrou))} sessões que entraram pelo blog"),
+        card("Compraram — passaram pelo blog", _n(conv_passou), f"de {_n(len(sess_blog) - len(sess_entrou))} sessões que começaram em outra página e depois leram o blog"),
     ])
+    compras = _compras_blog(s, p)
+    if not compras.empty:
+        st.markdown("**Compras em sessões com blog** — onde a sessão começou e quais páginas do blog foram vistas")
+        st.dataframe(compras, hide_index=True, use_container_width=True, column_config={
+            "Data": st.column_config.DateColumn(format="DD/MM/YYYY", width=90),
+            "Começou no blog?": st.column_config.TextColumn(width=100),
+            "Página de entrada": st.column_config.TextColumn(width="large"),
+            "Páginas do blog vistas": st.column_config.TextColumn(width="large"),
+            "Origem / meio": st.column_config.TextColumn(width=150),
+            "Compras (GA4)": st.column_config.NumberColumn(format="%d", width=100),
+            "Receita (GA4)": st.column_config.NumberColumn(format="R$ %.0f", width=110)})
     posts = _tabela_paginas(p_filtro[p_filtro["fl_blog_post"]])
     if posts.empty:
         st.caption("Nenhum post do blog no período" + (" com esse título." if busca_titulo.strip() else "."))
     else:
         st.dataframe(posts, hide_index=True, use_container_width=True, column_config=CFG_PAG, height=min(38 + 35 * len(posts), 420))
     note("Blog = páginas sob /blog (a tabela lista só os posts, /blog/posts/). <strong>Entradas</strong> = sessões que começaram no post: mede o post como porta de entrada "
-         "(busca orgânica, Instagram). \"Compraram na sessão\" é associação, não prova de que o post vendeu. A busca por título filtra esta tabela.")
+         "(busca orgânica, Instagram). Compra em sessão que <strong>começou no blog</strong> sugere o post como porta de entrada; compra em sessão que <strong>passou pelo blog</strong> (começou em outra página) só mostra que o blog fez parte da jornada. Nos dois casos é associação (GA4), não prova de que o post vendeu. A busca por título filtra esta tabela.")
 
     # ═══ PÁGINAS ═══
     section_title("Páginas por título" + (f" — filtro: “{busca_titulo.strip()}”" if busca_titulo.strip() else ""))

@@ -149,20 +149,15 @@ def render():
     """)
 
     semanas = sorted(set(df["semana"]) | {hoje_seg}, reverse=True)
-    fechadas = [s for s in semanas if s < hoje_seg]
-    default = 0 if not fechadas else semanas.index(fechadas[0])
-    seg = pd.Timestamp(st.selectbox("Semana", options=semanas, index=default, format_func=lambda s: _rotulo(s) + (" (em andamento)" if s == hoje_seg else "")))
+    seg = pd.Timestamp(st.selectbox("Semana", options=semanas, index=semanas.index(hoje_seg), format_func=lambda s: _rotulo(s) + (" (em andamento)" if s == hoje_seg else "")))
     parcial = seg == hoje_seg
-    ate = min(seg + pd.Timedelta(days=6), hoje_ts - pd.Timedelta(days=1)) if parcial else seg + pd.Timedelta(days=6)  # só dias fechados
+    ate = min(seg + pd.Timedelta(days=6), hoje_ts)  # semana em andamento vai até hoje (dia parcial incluso)
     ant_ini = seg - pd.Timedelta(days=7)
 
     sel_full = df[df["semana"] == seg]
     sel = sel_full[sel_full["dt_pedido"] <= ate]
     ant_full = df[df["semana"] == ant_ini]
     ant = ant_full[ant_full["dt_pedido"] <= (ate - pd.Timedelta(days=7))]  # mesmo trecho da semana anterior
-    if parcial and ate < seg:
-        st.info("A semana em andamento ainda não tem dia fechado. Escolha a semana anterior.")
-        return
     s, sa = _somas(sel), _somas(ant)
     r, ra = _razoes(s), _razoes(sa)
     rot_ant = f"semana anterior{' (mesmos dias)' if parcial else ''}"
@@ -172,7 +167,7 @@ def render():
         return _delta(cur, prev, rot_ant, tipo, fmt if tipo == "rel" else None)
 
     # ═══ NÚMEROS DA SEMANA ═══
-    section_title(f"Semana {_rotulo(seg)}" + (" — até ontem" if parcial else ""))
+    section_title(f"Semana {_rotulo(seg)}" + (" — até hoje (parcial)" if parcial else ""))
     t_f, c_f = d("vl_liquido_item")
     t_p, c_p = d("pedidos", fmt=lambda v: f"{int(v)}")
     t_t, c_t = d("ticket", "rel", "r")
@@ -199,7 +194,7 @@ def render():
         ])
     note("Com ~10 pedidos por semana, a margem em % oscila com o mix de produtos e frete: compare tendências de várias semanas (gráfico abaixo), "
          "não uma semana isolada. Embalagem é estimada (R$ 2,50 por pedido). Reembolsos entram no pedido de origem. "
-         + ("Semana em andamento: só dias fechados, comparados com os mesmos dias da semana anterior." if parcial else "Comparação com a semana anterior inteira."))
+         + ("Semana em andamento: resultado consolidado até hoje (o dia de hoje ainda está aberto), comparado com os mesmos dias da semana anterior (dias inteiros)." if parcial else "Comparação com a semana anterior inteira."))
 
     # ═══ PERFIL DOS PEDIDOS ═══
     secao_perfil(pedidos_de_linhas(sel), pedidos_de_linhas(ant), rot_ant)
@@ -208,7 +203,7 @@ def render():
     section_title(f"Últimas {SEMANAS_TENDENCIA} semanas")
     with st.container(border=True):
         st.plotly_chart(_grafico_tendencia(df, seg, hoje_seg), use_container_width=True)
-    note("Eixo: segunda-feira de cada semana. A semana em andamento, se aparecer, está incompleta.")
+    note("Eixo: segunda-feira de cada semana. A semana em andamento está incompleta.")
 
     # ═══ DIA A DIA ═══
     section_title("Faturamento por dia da semana")
