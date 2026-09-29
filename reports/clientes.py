@@ -15,6 +15,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from common import bigquery as bq
+from reports.origem_campanha import drill_clientes_campanhas
 from common.design import (
     COLORS, METRIC_COLORS, CATEGORICAL, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct,
 )
@@ -279,6 +280,7 @@ def render():
                                 "Valor médio (R$)": st.column_config.NumberColumn(format="R$ %.2f", width=140)})
     note("Origem detectada pela URL de entrada do 1º pedido (<code>tb_atribuicao_pedido</code>); \"(sem parametro)\" agrega direto/orgânico/sem marcação. "
          "Serve para ver qual canal traz cliente que volta, não só cliente que compra uma vez. Ignore linhas com poucos clientes.")
+    drill_clientes_campanhas(cli)
 
     # ═══ LISTAS ═══
     section_title("Melhores clientes")

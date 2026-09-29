@@ -18,3 +18,6 @@ Pergunta: **os clientes voltam a comprar, quando, quem vale mais e de que canal 
 
 ## v2 — 21/set/2026: concentração geográfica
 - Seção "Onde estão os clientes": UF do cadastro do cliente (Bling), 10 maiores por margem de contribuição acumulada (clientes, % clientes, margem, % da margem, recorrentes) + cards da maior praça e das três maiores (aviso se > 80%).
+
+## v+ — 29/09/2026: drill por campanha
+Abaixo da tabela "De onde vêm os clientes que ficam", blocos expansíveis por origem/mídia mostram as campanhas do 1º pedido (clientes, % recorrentes, valor médio). Regra e limitações em `specs/origem-campanha.md` ("Drill de clientes"). No histórico inteiro, a maioria dos clientes de Google pago aparece em "campanha não identificada" (cliques do Ads só desde 15/06/2026).

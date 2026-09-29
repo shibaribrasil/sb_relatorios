@@ -34,6 +34,18 @@ def carregar_campanhas():
     return {"ponte": ponte, "perf": perf}
 
 
+@st.cache_data(ttl=1800)
+def carregar_atribuicao_primeiro_pedido():
+    """gclid e utm_campaign da URL de entrada do 1º pedido de cada cliente (tb_atribuicao_pedido, az). O tb_cliente traz só origem/mídia."""
+    client = bq.get_client()
+    a = bq.query_df(client, f"""
+        SELECT CAST(cd_contato AS STRING) AS cd_contato, ANY_VALUE(ds_gclid) AS ds_gclid, ANY_VALUE(ds_utm_campaign) AS ds_utm_campaign
+          FROM `{bq.PROJECT}.dbt_dw_az.tb_atribuicao_pedido`
+         WHERE fg_primeiro_pedido_cliente AND cd_contato IS NOT NULL GROUP BY 1
+    """)
+    return a
+
+
 def pedidos_com_campanha(pedidos, ponte):
     """pedidos: 1 linha por pedido com origem, midia, ds_gclid, ds_utm_campaign. Acrescenta cd_campanha e campanha."""
     p = pedidos.merge(ponte.rename(columns={"cd_gclid": "ds_gclid", "nm_campanha": "nm_ads"}), on="ds_gclid", how="left")
@@ -101,3 +113,43 @@ def drill_campanhas(pedidos, ini, fim, meses=None, valor_label="Receita líq.", 
          "<strong>Custo, cliques e compras (Ads)</strong> são o que o Google reporta por campanha no período e podem incluir compras sem gclid na nossa base — por isso \"Compras (Ads)\" "
          "não bate com \"Pedidos\". <strong>Demais origens:</strong> campanha = <code>utm_campaign</code> da URL (só ~10% dos pedidos trazem UTM); no Instagram pago é o ID da campanha do Meta, "
          "ainda sem nome (não há dados do Meta Ads na base). \"(sem campanha)\" = origem sem <code>utm_campaign</code>.")
+
+
+def drill_clientes_campanhas(clientes):
+    """Drill origem -> campanha para CLIENTES, pela origem do 1º pedido. clientes: 1 linha por cliente com cd_contato,
+    ds_origem_primeiro_pedido, ds_midia_primeiro_pedido, fg_recorrente e vl_margem_contribuicao (valor acumulado do cliente).
+    Google pago: campanha via gclid do 1º pedido -> tb_gads_clique_campanha; demais: utm_campaign. Sem regra nova: só cruza e soma."""
+    try:
+        dados = carregar_campanhas()
+        atrib = carregar_atribuicao_primeiro_pedido()
+    except Exception as e:
+        st.warning(f"Campanhas indisponíveis: {e}")
+        return
+    c = clientes.assign(cd_contato=clientes["cd_contato"].astype(str)).merge(atrib, on="cd_contato", how="left")
+    c = c.rename(columns={"ds_origem_primeiro_pedido": "origem", "ds_midia_primeiro_pedido": "midia"})
+    p = pedidos_com_campanha(c, dados["ponte"])
+
+    st.html('<div class="c-label" style="margin:14px 0 6px">Campanhas do 1º pedido de cada origem (clique para abrir)</div>')
+    combos = p.groupby(["origem", "midia"]).size().sort_values(ascending=False)
+    mostrou = 0
+    for (origem, midia), n in combos.items():
+        x = p[(p["origem"] == origem) & (p["midia"] == midia)]
+        google = (origem, midia) == GOOGLE_PAGO
+        if not ((x["campanha"] != SEM_CAMPANHA).any() or google):
+            continue
+        g = x.groupby("campanha", as_index=False).agg(clientes=("cd_contato", "size"), rec=("fg_recorrente", "sum"), marg=("vl_margem_contribuicao", "sum"))
+        g = g.sort_values(["clientes", "marg"], ascending=False)
+        tot = int(g["clientes"].sum())
+        with st.expander(f"{origem} · {midia} — {tot} clientes", expanded=(mostrou == 0)):
+            st.dataframe(pd.DataFrame({
+                "Campanha": g["campanha"], "Clientes": g["clientes"], "% dos clientes": g["clientes"] / tot if tot else 0, "Recorrentes": g["rec"],
+                "% recorrentes": g["rec"] / g["clientes"], "Valor médio (R$)": g["marg"] / g["clientes"]}),
+                hide_index=True, use_container_width=True,
+                column_config={"Clientes": st.column_config.NumberColumn(format="%d", width=90), "% dos clientes": st.column_config.NumberColumn(format="percent", width=120),
+                               "Recorrentes": st.column_config.NumberColumn(format="%d", width=110), "% recorrentes": st.column_config.NumberColumn(format="percent", width=120),
+                               "Valor médio (R$)": st.column_config.NumberColumn(format="R$ %.2f", width=140)})
+        mostrou += 1
+    note("<strong>Google pago:</strong> a campanha vem do <code>gclid</code> da URL de entrada do <strong>1º pedido</strong>, cruzado com os cliques do Ads — que só existem desde 15/06/2026 "
+         "e o Google guarda ~90 dias: clientes que entraram antes disso, ou com clique sem <code>gclid</code> (iPhone), ficam em \"" + NAO_IDENTIFICADA + "\". "
+         "<strong>Demais origens:</strong> campanha = <code>utm_campaign</code> (só ~10% dos pedidos trazem UTM). <strong>Valor médio</strong> = margem de contribuição acumulada do cliente até hoje; "
+         "clientes de entrada recente ainda não tiveram tempo de recomprar, então <strong>% recorrentes</strong> baixo em campanha nova não é ruim. Poucos clientes por linha: leia como hipótese.")

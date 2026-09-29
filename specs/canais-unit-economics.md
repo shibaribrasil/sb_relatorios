@@ -29,3 +29,6 @@ Tabela nova entre "Mês a mês" e "De onde vêm os clientes novos", uma linha po
 - Três fontes de compras por campanha, com critérios diferentes: **Pedidos** (base própria, `gclid` da URL de entrada; piso), **Compras (Ads)** (modelo do Google Ads) e **Compras (GA4)** (vinculação GA4–Ads, último clique não direto). Divergência grande = CAC e ROAS da linha são piso, não veredito. Motivo: investigação do Shopping em 29/09 (5 pedidos casados, 17 no Ads, 14 no GA4; 8 pedidos de Google pago com `gclid` válido não existem na tabela bruta de cliques).
 - Referência jul–set (29/09): Total 44 pedidos / 59 no Ads / 48 no GA4; Shopping 5 / 17 / 14; Pesquisa Compra Direta 16 / 26 / 23; Remarketing 12 / 14 / 10.
 - **Rótulo:** o meio `organico_shopping` (dbt) virou `organico_srsltid` (`sb_dw_dbt#20`): pedidos com `srsltid` e sem `gclid` aterrissam em home/categoria, ou seja, Google orgânico com auto-tagging do Merchant, não Shopping pago sem marcação. A página só exibe o valor.
+
+## v2.2 — 29/09/2026: drill por campanha em "De onde vêm os clientes novos"
+Abaixo da tabela por origem, blocos expansíveis por origem/mídia abrem as campanhas do 1º pedido dos clientes novos do período (clientes, % recorrentes, valor médio): complementa a tabela "CAC e retorno por campanha", que traz custo, CAC e ROAS mas não a recompra. Regra em `specs/origem-campanha.md` ("Drill de clientes").

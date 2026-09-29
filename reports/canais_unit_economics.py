@@ -13,7 +13,7 @@ from common.design import (
     COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct,
 )
 from reports.clientes import carregar_dados as carregar_clientes, COORTE_DESDE
-from reports.origem_campanha import carregar_campanhas, pedidos_com_campanha, NAO_IDENTIFICADA
+from reports.origem_campanha import carregar_campanhas, pedidos_com_campanha, drill_clientes_campanhas, NAO_IDENTIFICADA
 from reports.vendas_margem import carregar_dados as carregar_vendas, _hoje_brt
 
 INICIO_ADS = pd.Timestamp("2026-07-01")   # o custo de Ads só existe desde 15/06/2026: junho é parcial, começamos em julho
@@ -321,3 +321,5 @@ def render():
     note("Origem detectada pela URL de entrada do 1º pedido. \"Investimento medido\" só existe para o <strong>Google pago (cpc)</strong>: as demais origens (Google orgânico, "
          "direto, Instagram, e-mail) aparecem sem custo — Meta/Instagram pago não tem gasto na base (Melhorias Manuais, item 6). O Google inclui todo o gasto da conta, inclusive "
          "campanhas que trazem clientes que a URL não identifica como cpc, então o CAC do Google pago é um <strong>teto</strong>.")
+
+    drill_clientes_campanhas(nov)
