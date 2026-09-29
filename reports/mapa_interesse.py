@@ -67,7 +67,9 @@ def carregar_dados(dias):
           FROM {az}.tb_produto_vitrine` AS v
           LEFT JOIN (
                 SELECT cd_produto_nuvemshop,
-                       ANY_VALUE(lk_imagem_produto) AS lk_imagem_produto,
+                       -- links do Bling são assinados (S3) e vencem (Expires=); vale o de maior validade entre as SKUs do produto
+                       ARRAY_AGG(lk_imagem_produto IGNORE NULLS
+                                 ORDER BY SAFE_CAST(REGEXP_EXTRACT(lk_imagem_produto, r'Expires=([0-9]+)') AS INT64) DESC LIMIT 1)[SAFE_OFFSET(0)] AS lk_imagem_produto,
                        ANY_VALUE(ds_frente) AS ds_frente,
                        ANY_VALUE(ds_ciclo) AS ds_ciclo,
                        LOGICAL_OR(fg_tem_estoque) AS tem_estoque,
