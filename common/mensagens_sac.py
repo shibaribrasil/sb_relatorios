@@ -137,10 +137,10 @@ def msg_recontato_cupom(nome, origem, numero_pedido, codigo, valor_pct, expira_e
 # --- Proximidade: contato amistoso depois da entrega de uma recompra --------------------------------------------
 
 def msg_proximidade(nome, numero_pedido, produto, nr_pedido_cliente, dias_desde_entrega, atrasado: bool) -> str:
-    """Relacionamento, não venda: pergunta como foi a experiência (sem cupom, sem oferta). `dias_desde_entrega` 1 = chegou ontem; mais de 3 = contato retroativo ("chegou faz alguns dias").
+    """Relacionamento, não venda: pergunta como foi a experiência (sem cupom, sem oferta). `dias_desde_entrega` 1 = chegou ontem; mais de 3 = registro que ficou aguardando ("chegou faz alguns dias").
     `atrasado`: a entrega passou do prazo — a mensagem reconhece e pede desculpa antes de perguntar."""
     d = int(dias_desde_entrega)
-    # até 3 dias: fala o prazo exato; acima disso (contato retroativo da 1ª carga, 28/09/2026) não cravamos o número de dias
+    # até 3 dias: fala o prazo exato; acima disso (o registro ficou aguardando o atendimento) não cravamos o número de dias
     chegou = "chegou ontem" if d <= 1 else (f"chegou há {d} dias" if d <= 3 else "chegou faz alguns dias")
     item = f" ({produto})" if isinstance(produto, str) and produto.strip() else ""
     desculpa = "Sei que a entrega demorou mais do que o combinado e peço desculpa por isso. " if atrasado else ""
