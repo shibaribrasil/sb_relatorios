@@ -39,9 +39,9 @@ def carregar_tarefas(tipo_tarefa: str) -> pd.DataFrame:
     return df
 
 
-def salvar_tarefas(tipo_tarefa: str, itens: list[tuple[str, bool, str | None]]):
-    """Grava (upsert) o estado atual de VÁRIOS itens de uma vez — cada item = (chave, fg_feito, resultado),
-    check e resultado juntos — num único MERGE, e registra as mudanças no histórico. A página só chama isto
+def salvar_tarefas(tipo_tarefa: str, itens: list[tuple[str, bool, str | None, str | None]]):
+    """Grava (upsert) o estado atual de VÁRIOS itens de uma vez — cada item = (chave, fg_feito, resultado, observacao),
+    check, resultado e observação juntos — num único MERGE, e registra as mudanças no histórico. A página só chama isto
     quando o usuário clica em "Salvar alterações": trocas intermediárias na tela não geram gravação nem
     histórico, e um único comando evita gravações concorrentes (que duplicavam a chave). Não identifica quem
     marcou (decisão do Hugo, 23/set/2026) — `nm_responsavel` fica na tabela para uso futuro, mas sempre vazio.
@@ -56,8 +56,9 @@ def salvar_tarefas(tipo_tarefa: str, itens: list[tuple[str, bool, str | None]]):
             bigquery.ScalarQueryParameter("chave", "STRING", str(chave)),
             bigquery.ScalarQueryParameter("feito", "BOOL", bool(feito)),
             bigquery.ScalarQueryParameter("resultado", "STRING", resultado or None),
+            bigquery.ScalarQueryParameter("observacao", "STRING", (observacao or "").strip()),
         )
-        for chave, feito, resultado in itens
+        for chave, feito, resultado, observacao in itens
     ]
     params = [
         bigquery.ScalarQueryParameter("tipo", "STRING", tipo_tarefa),
@@ -67,15 +68,15 @@ def salvar_tarefas(tipo_tarefa: str, itens: list[tuple[str, bool, str | None]]):
     client.query(
         f"""
         MERGE `{TABELA}` T
-        USING (SELECT @tipo AS tipo_tarefa, i.chave, i.feito, i.resultado FROM UNNEST(@itens) i) S
+        USING (SELECT @tipo AS tipo_tarefa, i.chave, i.feito, i.resultado, i.observacao FROM UNNEST(@itens) i) S
            ON T.tipo_tarefa = S.tipo_tarefa AND T.chave = S.chave
          WHEN MATCHED THEN UPDATE SET
-              fg_feito = S.feito, ds_resultado = S.resultado, dt_atualizacao = @agora
+              fg_feito = S.feito, ds_resultado = S.resultado, ds_observacao = S.observacao, dt_atualizacao = @agora
          WHEN NOT MATCHED THEN
            INSERT (tipo_tarefa, chave, fg_feito, ds_resultado, ds_observacao, dt_criacao, dt_atualizacao)
-           VALUES (S.tipo_tarefa, S.chave, S.feito, S.resultado, '', @agora, @agora);
-        INSERT INTO `{HISTORICO}` (tipo_tarefa, chave, fg_feito, ds_resultado, dt_evento)
-        SELECT @tipo, i.chave, i.feito, i.resultado, @agora FROM UNNEST(@itens) i;
+           VALUES (S.tipo_tarefa, S.chave, S.feito, S.resultado, S.observacao, @agora, @agora);
+        INSERT INTO `{HISTORICO}` (tipo_tarefa, chave, fg_feito, ds_resultado, ds_observacao, dt_evento)
+        SELECT @tipo, i.chave, i.feito, i.resultado, i.observacao, @agora FROM UNNEST(@itens) i;
         """,
         job_config=bigquery.QueryJobConfig(query_parameters=params),
     ).result()

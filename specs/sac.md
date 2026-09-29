@@ -84,3 +84,9 @@ Para uma nova lista de tarefas do SAC: escolher um `tipo_tarefa` novo, escrever 
 
 ## Atualização dos dados (28/09/2026)
 Cabeçalho mostra **"Atualizado em"** (tabela mais antiga entre `tb_logistica_pedido`, `tb_carrinho_abandonado`, `tb_pedido_cancelado`) e um expansor com a última extração de pedidos (Bling e Nuvemshop), rastreio e clientes/carrinhos. Todas rodam de hora em hora entre :20 e :45 (rastreio passou de 3×/dia para de hora em hora) e o dbt na hora cheia, 7h–23h. Código em `common/frescor.py`.
+
+## Observação SAC e novas resoluções (28/09/2026, pedido do Hugo)
+- **Observação SAC** (coluna editável, texto livre até 500 caracteres) em todas as listas: grava em `raw_control.sac_tarefas.ds_observacao` junto com o check e a Resolução, no mesmo botão "Salvar alterações". Mostra sempre a observação atual; ao salvar um texto novo, ele **sobrescreve** o anterior (o anterior continua no histórico). Não confundir com a coluna **Obs.**, que é aviso automático do sistema (sem telefone, estorno a conferir, telefone repetido).
+- `raw_control.sac_tarefas_historico` ganhou a coluna `ds_observacao` (ALTER TABLE manual, 28/09/2026).
+- Novas opções de Resolução em **todas** as listas: "WhatsApp inválido" e "Não retomar contato". No carrinho, "Telefone inválido / sem WhatsApp" continua na lista (há valores gravados com ele); as duas fazem o mesmo papel.
+

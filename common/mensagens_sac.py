@@ -122,7 +122,8 @@ def msg_entrega(nome, numero, rastreio, url_rastreio, problema: bool, atrasado: 
 
 
 # --- Resultado do contato (coluna "Resultado" de cada lista; editável, cada troca vai para o histórico) ---------
-# Mudou uma opção aqui? Os valores antigos já gravados continuam na tabela; se sumirem da lista, a célula
+# "WhatsApp inválido" e "Não retomar contato" (28/09, pedido do Hugo) valem em todas as listas; "Não retomar contato" também tira o cliente do
+# recontato com cupom. Mudou uma opção aqui? Os valores antigos já gravados continuam na tabela; se sumirem da lista, a célula
 # aparece vazia até o atendente escolher de novo — por isso prefira ACRESCENTAR opção a renomear.
 
 RESULTADOS = {
@@ -133,6 +134,8 @@ RESULTADOS = {
         "Sem interesse — outro motivo",
         "Sem resposta",
         "Telefone inválido / sem WhatsApp",
+        "WhatsApp inválido",
+        "Não retomar contato",
     ],
     "entrega_problema": [
         "Cliente já recebeu",
@@ -142,6 +145,8 @@ RESULTADOS = {
         "Reembolsado",
         "Reclamação aberta na transportadora",
         "Sem resposta",
+        "WhatsApp inválido",
+        "Não retomar contato",
     ],
     "pedido_cancelado": [
         "Refez o pedido",
@@ -152,5 +157,7 @@ RESULTADOS = {
         "Desistiu — prazo de entrega",
         "Desistiu — outro motivo",
         "Sem resposta",
+        "WhatsApp inválido",
+        "Não retomar contato",
     ],
 }

@@ -31,7 +31,8 @@ JANELA_CARRINHO = 15    # dias: carrinho mais velho que isso não vale mais cont
 JANELA_CANCELADO = 30   # dias desde o cancelamento
 FUSO = "America/Sao_Paulo"
 
-JA_TRATEI, RESOLUCAO = "Já tratei", "Resolução"  # colunas editáveis; entram em `colunas` na posição desejada
+JA_TRATEI, RESOLUCAO, OBS_SAC = "Já tratei", "Resolução", "Observação SAC"  # colunas editáveis; entram em `colunas` na posição desejada
+EDITAVEIS = (JA_TRATEI, RESOLUCAO, OBS_SAC)
 COL_WHATSAPP = st.column_config.LinkColumn("WhatsApp", display_text="Mensagem", width="small")
 COL_OBS = st.column_config.TextColumn("Obs.", width="large")
 
@@ -165,8 +166,9 @@ def _lista_cancelados(canc):
 
 def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=None, cards_extra=None):
     """`itens` já vem com uma coluna `chave` (str). `colunas` = dict nome exibido → coluna em `itens`, NA ORDEM de exibição;
-    as colunas editáveis entram com as chaves JA_TRATEI e RESOLUCAO (valor None) onde devem aparecer. "Resolução" = opções
-    de msg.RESULTADOS[tipo_tarefa] (gravada em sac_tarefas.ds_resultado); ao mudar ela ou o check, grava o estado da linha
+    as colunas editáveis entram com as chaves JA_TRATEI, RESOLUCAO e OBS_SAC (valor None) onde devem aparecer. "Resolução" = opções
+    de msg.RESULTADOS[tipo_tarefa] (gravada em sac_tarefas.ds_resultado); "Observação SAC" = texto livre (ds_observacao, a atual
+    sobrescreve a anterior). As trocas ficam na tela e o botão "Salvar alterações" grava o estado das linhas alteradas
     no BigQuery (+ histórico) e reexecuta. `column_config` (por nome exibido) formata as demais colunas."""
     section_title(titulo)
     if itens.empty:
@@ -177,6 +179,7 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
     opcoes = msg.RESULTADOS[tipo_tarefa]
     resultado_atual = itens["chave"].map(
         lambda c: tarefas.loc[c, "ds_resultado"] if c in tarefas.index and tarefas.loc[c, "ds_resultado"] in opcoes else None)
+    obs_atual = itens["chave"].map(lambda c: (tarefas.loc[c, "ds_observacao"] or "") if c in tarefas.index else "")
     pendentes, concluidos = int((~feito_atual).sum()), int(feito_atual.sum())
     render_cards([
         card("Pendentes", f"{pendentes}", "ainda sem contato registrado", variant="bad" if pendentes else "ok"),
@@ -184,30 +187,35 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
         *(cards_extra(itens[~feito_atual.values]) if cards_extra else []),
     ])
     mostrar_feitos = st.toggle("Mostrar também os já tratados", value=False, key=f"toggle_{tipo_tarefa}")
-    base = itens.assign(**{JA_TRATEI: feito_atual.values, RESOLUCAO: resultado_atual.values})
+    base = itens.assign(**{JA_TRATEI: feito_atual.values, RESOLUCAO: resultado_atual.values, OBS_SAC: obs_atual.values})
     if not mostrar_feitos:
         base = base[~base[JA_TRATEI]]
     if base.empty:
         note("Tudo tratado por aqui. Ative \"Mostrar também os já tratados\" para conferir ou mudar uma resolução.")
         return
-    tabela = pd.DataFrame({nome: base[nome if nome in (JA_TRATEI, RESOLUCAO) else coluna].values for nome, coluna in colunas.items()})
+    tabela = pd.DataFrame({nome: base[nome if nome in EDITAVEIS else coluna].values for nome, coluna in colunas.items()})
     chaves = base["chave"].to_numpy()  # fora da tabela exibida — usada só para gravar a mudança na chave certa
     # o editor guarda as trocas na tela; só vão para o BigQuery no botão "Salvar alterações" (versão na key = zera o editor após salvar)
     versao = st.session_state.get(f"versao_{tipo_tarefa}", 0)
     editado = st.data_editor(
         tabela, hide_index=True, use_container_width=True, key=f"editor_{tipo_tarefa}_{versao}",
-        disabled=[c for c in tabela.columns if c not in (JA_TRATEI, RESOLUCAO)],
+        disabled=[c for c in tabela.columns if c not in EDITAVEIS],
         column_config={
             **(column_config or {}),
             RESOLUCAO: st.column_config.SelectboxColumn(options=opcoes, width="medium", required=False,
                                                         help="Como terminou o contato. Pode trocar depois quantas vezes precisar."),
+            OBS_SAC: st.column_config.TextColumn(width="large", max_chars=500,
+                                                 help="Texto livre do SAC sobre este contato. Salva junto com o resto; o texto atual sobrescreve o anterior."),
             JA_TRATEI: st.column_config.CheckboxColumn(width=90),
         },
     )
     # comparação por posição (não por índice): data_editor mantém a ordem das linhas, não reordena/filtra sozinho
     def _norm(serie):
         return serie.astype(object).where(serie.notna(), None).to_numpy()
-    mudou = (editado[JA_TRATEI].to_numpy() != tabela[JA_TRATEI].to_numpy()) | (_norm(editado[RESOLUCAO]) != _norm(tabela[RESOLUCAO]))
+    def _texto(serie):
+        return serie.map(lambda v: v.strip() if isinstance(v, str) else "").to_numpy()
+    mudou = ((editado[JA_TRATEI].to_numpy() != tabela[JA_TRATEI].to_numpy()) | (_norm(editado[RESOLUCAO]) != _norm(tabela[RESOLUCAO]))
+             | (_texto(editado[OBS_SAC]) != _texto(tabela[OBS_SAC])))
     n_mudou = int(mudou.sum())
     col_botao, col_aviso = st.columns([1, 4], vertical_alignment="center")
     salvar = col_botao.button(f"Salvar alterações ({n_mudou})" if n_mudou else "Salvar alterações",
@@ -218,8 +226,9 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
     if salvar:
         with st.spinner("Salvando..."):
             salvar_tarefas(tipo_tarefa, [
-                (chave, bool(feito), resultado)
-                for chave, feito, resultado in zip(chaves[mudou], editado[JA_TRATEI].to_numpy()[mudou], _norm(editado[RESOLUCAO])[mudou])
+                (chave, bool(feito), resultado, obs)
+                for chave, feito, resultado, obs in zip(chaves[mudou], editado[JA_TRATEI].to_numpy()[mudou],
+                                                        _norm(editado[RESOLUCAO])[mudou], _texto(editado[OBS_SAC])[mudou])
             ])
         st.session_state[f"versao_{tipo_tarefa}"] = versao + 1
         st.rerun()
@@ -255,7 +264,7 @@ def render():
             return
 
     aviso_link = ("O link \"Mensagem\" abre a conversa no WhatsApp com o texto já escrito para aquela situação — <b>revise antes "
-                  "de enviar</b>; nada sai sozinho. Registre a <b>Resolução</b> (pode trocar depois) e marque \"Já tratei\".")
+                  "de enviar</b>; nada sai sozinho. Registre a <b>Resolução</b> e, se quiser, a <b>Observação SAC</b> (pode trocar depois), marque \"Já tratei\" e clique em <b>Salvar alterações</b>.")
     valor = st.column_config.NumberColumn(format="R$ %.2f")
 
     _secao_checklist(
@@ -263,7 +272,7 @@ def render():
         TIPO_CARRINHO, _lista_carrinhos(car),
         colunas={
             "Cliente": "nm_cliente", "Valor": "vl_total_carrinho", "Já é cliente?": "cliente_antigo",
-            "Abandonado há": "abandonado_ha", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, "Obs.": "obs",
+            "Abandonado há": "abandonado_ha", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
         },
         column_config={"WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS},
         cards_extra=lambda pend: [card("Valor em carrinhos pendentes", brl(pend["vl_total_carrinho"].sum()), "soma dos carrinhos sem check")],
@@ -279,7 +288,7 @@ def render():
         TIPO_CANCELADO, _lista_cancelados(canc),
         colunas={
             "Pedido": "codigo", "Cliente": "nm_cliente", "Valor": "vl_total_pedido", "Já é cliente?": "cliente_antigo",
-            "Cancelado em": "dt_cancelamento", "Tipo": "tipo", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, "Obs.": "obs",
+            "Cancelado em": "dt_cancelamento", "Tipo": "tipo", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
         },
         column_config={
             "WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS,
@@ -298,7 +307,7 @@ def render():
         TIPO_ENTREGA_PROBLEMA, _lista_entregas_problema(logi),
         colunas={
             "Pedido": "codigo", "Cliente": "nm_cliente", "Motivo": "motivo", "Rastreio": "cd_rastreio",
-            "Dias sem evento": "qt_dias_sem_movimento", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None,
+            "Dias sem evento": "qt_dias_sem_movimento", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None,
         },
         column_config={"WhatsApp": COL_WHATSAPP},
         nota="Mesmo critério do Pulso do Dia (\"Entregas em risco\"): pedido atrasado, com problema de entrega ativo (devolução/tentativa "
