@@ -134,6 +134,19 @@ def msg_recontato_cupom(nome, origem, numero_pedido, codigo, valor_pct, expira_e
             f"É só aplicar o código no checkout.{link} Qualquer dúvida, me chama por aqui.")
 
 
+# --- Proximidade: contato amistoso depois da entrega de uma recompra --------------------------------------------
+
+def msg_proximidade(nome, numero_pedido, produto, nr_pedido_cliente, dias_desde_entrega, atrasado: bool) -> str:
+    """Relacionamento, não venda: pergunta como foi a experiência (sem cupom, sem oferta). `dias_desde_entrega` 1 = chegou ontem.
+    `atrasado`: a entrega passou do prazo — a mensagem reconhece e pede desculpa antes de perguntar."""
+    chegou = "chegou ontem" if int(dias_desde_entrega) <= 1 else f"chegou há {int(dias_desde_entrega)} dias"
+    item = f" ({produto})" if isinstance(produto, str) and produto.strip() else ""
+    desculpa = "Sei que a entrega demorou mais do que o combinado e peço desculpa por isso. " if atrasado else ""
+    volta = "Obrigado por voltar a comprar com a gente." if int(nr_pedido_cliente) == 2 else "Obrigado por continuar comprando com a gente."
+    return (f"{_oi(nome)} Vi que o seu pedido #{numero_pedido}{item} {chegou} e queria saber como foi a sua experiência. {desculpa}"
+            f"O que você recebeu cumpriu o que esperava? Se tiver qualquer feedback, elogio ou sugestão, eu gosto muito de ouvir. {volta}")
+
+
 # --- Resultado do contato (coluna "Resultado" de cada lista; editável, cada troca vai para o histórico) ---------
 # "WhatsApp inválido" e "Não retomar contato" (28/09, pedido do Hugo) valem em todas as listas; "Não retomar contato" também tira o cliente do
 # recontato com cupom. Mudou uma opção aqui? Os valores antigos já gravados continuam na tabela; se sumirem da lista, a célula
@@ -169,6 +182,15 @@ RESULTADOS = {
         "Desistiu — preço/frete",
         "Desistiu — prazo de entrega",
         "Desistiu — outro motivo",
+        "Sem resposta",
+        "WhatsApp inválido",
+        "Não retomar contato",
+    ],
+    # proximidade: contato amistoso pós-entrega de recompra
+    "proximidade_pos_entrega": [
+        "Respondeu — satisfeito",
+        "Respondeu — com feedback",
+        "Reclamação — abrir tratativa",
         "Sem resposta",
         "WhatsApp inválido",
         "Não retomar contato",
