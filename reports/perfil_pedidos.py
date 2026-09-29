@@ -128,9 +128,18 @@ def secao_perfil(p, ant=None, rot_ant="", titulo="Perfil dos pedidos", contexto=
              **dl("itens_pedido", fmt=f1)),
     ])
     mix = s["mix"]
+
+    def dl_mix(t):
+        """Variação da participação do tipo (p.p.) contra o período anterior; mostra o valor anterior no texto."""
+        if a is None or mix[t]["share"] is None or a["mix"][t]["share"] is None:
+            return {}
+        txt, c = _delta(mix[t]["share"], a["mix"][t]["share"], rot_ant, "pp", lambda v: pct(v, 0))
+        return {"delta": txt, "delta_color": c}
+
     render_cards([
         card(t, pct(mix[t]["share"], 0),
-             f"{mix[t]['n']} pedidos · ticket {brl(mix[t]['ticket'])}" if mix[t]["n"] else "nenhum pedido")
+             f"{mix[t]['n']} {'pedido' if mix[t]['n'] == 1 else 'pedidos'} · ticket {brl(mix[t]['ticket'])}" if mix[t]["n"] else "nenhum pedido",
+             **dl_mix(t))
         for t in TIPOS
     ] + [
         card("Clientes recorrentes", pct(s["pct_recorrente"], 0), "% dos pedidos de quem já tinha comprado antes", **dl("pct_recorrente", "pp")),
