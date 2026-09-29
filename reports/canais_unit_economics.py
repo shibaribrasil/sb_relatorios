@@ -8,20 +8,64 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from common import bigquery as bq
 from common.design import (
     COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct,
 )
 from reports.clientes import carregar_dados as carregar_clientes, COORTE_DESDE
+from reports.origem_campanha import carregar_campanhas, pedidos_com_campanha, NAO_IDENTIFICADA
 from reports.vendas_margem import carregar_dados as carregar_vendas, _hoje_brt
 
 INICIO_ADS = pd.Timestamp("2026-07-01")   # o custo de Ads só existe desde 15/06/2026: junho é parcial, começamos em julho
-# Orçamento diário vigente da conta (Notion: "Reestruturação do Google Ads — Plano de Ação", realocação de 21/set/2026:
-# Shopping R$ 22 + Pesquisa R$ 13 = R$ 35/dia). Não vem do dbt: atualizar aqui (e na spec) quando o orçamento mudar.
-# A meta antiga de R$ 600/mês (Backlog B008, ~R$ 20/dia) foi superada pela decisão de 18/set.
-ORCAMENTO_DIARIO = 35.0
+AMOSTRA_MIN = 10                           # menos pedidos que isso por campanha = amostra pequena (CAC e ROAS oscilam muito)
 LTV_CAC_MIN = 3.0                          # benchmark: mínimo 3:1; saudável 4–5:1
 MESES_LTV = 12
 GOOGLE_PAGO = ("google", "cpc")
+
+
+@st.cache_data(ttl=900)
+def carregar_orcamento():
+    """Orçamento diário somado das campanhas ATIVAS em cada dia (histórico da conta desde 15/06/2026). Substitui a constante antiga:
+    o valor muda a cada campanha ligada, pausada ou reajustada. Dataset US, consulta separada."""
+    client = bq.get_client()
+    o = bq.query_df(client, f"""
+        SELECT dt_data, SUM(vl_orc) AS vl_orcamento FROM (
+            SELECT cd_campanha, dt_data, MAX(vl_orcamento_diario) AS vl_orc
+              FROM `{bq.PROJECT}.dbt_dw_us_az.tb_gads_campanha_orcamento`
+             WHERE ds_status_campanha = 'ENABLED' GROUP BY 1, 2
+        ) GROUP BY 1
+    """)
+    o["dt_data"] = pd.to_datetime(o["dt_data"])
+    o["vl_orcamento"] = pd.to_numeric(o["vl_orcamento"]).fillna(0.0)
+    return o
+
+
+def _orcamento_meses(orc, meses):
+    """Soma do orçamento diário nos dias dos meses escolhidos (só dias que o Ads já tem: o mês corrente vai até o último dia carregado)."""
+    return float(orc.loc[orc["dt_data"].dt.to_period("M").isin(meses), "vl_orcamento"].sum())
+
+
+def _campanhas_google(vendas, sel, ponte, perf):
+    """Uma linha por campanha do Google Ads: custo (Ads) x pedidos e clientes novos atribuídos pelo gclid x faturamento e margem dos pedidos.
+    Sem regra de negócio nova: origem/mídia/gclid vêm da tb_atribuicao_pedido; custo, cliques e compras vêm do Ads por campanha."""
+    v = vendas[vendas["mes"].dt.to_period("M").isin(sel)]
+    ped = v.groupby("cd_codigo_interno", as_index=False).agg(
+        origem=("origem", "first"), midia=("midia", "first"), ds_gclid=("ds_gclid", "first"), ds_utm_campaign=("ds_utm_campaign", "first"),
+        valor=("vl_liquido_item", "sum"), marg=("vl_margem_contribuicao", "sum"), recorrente=("fg_cliente_recorrente", "first"))
+    ped = ped[(ped["origem"] == GOOGLE_PAGO[0]) & (ped["midia"] == GOOGLE_PAGO[1])]
+    p = pedidos_com_campanha(ped, ponte)
+    p["novo"] = ~p["recorrente"].fillna(False).astype(bool)
+    ag = p.groupby(["cd_campanha", "campanha"], as_index=False, dropna=False).agg(
+        pedidos=("campanha", "size"), novos=("novo", "sum"), valor=("valor", "sum"), marg=("marg", "sum"))
+    pf = perf[perf["dt_data"].dt.to_period("M").isin(sel)]
+    custo = pf.groupby("cd_campanha", as_index=False).agg(nm=("nm_campanha", "last"), custo=("vl_custo", "sum"), cliques=("qt_cliques", "sum"), compras_ads=("qt_conversoes", "sum"))
+    g = ag.merge(custo, on="cd_campanha", how="outer")
+    g["campanha"] = g["campanha"].fillna(g["nm"])
+    for c in ["pedidos", "novos", "valor", "marg", "custo", "cliques", "compras_ads"]:
+        g[c] = pd.to_numeric(g[c]).fillna(0)
+    g = g[(g["pedidos"] > 0) | (g["custo"] > 0)].sort_values("custo", ascending=False)
+    ident = int(g.loc[g["campanha"] != NAO_IDENTIFICADA, "pedidos"].sum())
+    return g, ident, int(g["pedidos"].sum())
 
 
 def _mes(ts):
@@ -56,13 +100,13 @@ def _tabela_mensal(meses, ads, cli, vendas, hoje):
     return pd.DataFrame(linhas)
 
 
-def _grafico_investimento(t):
+def _grafico_investimento(t, orc):
     x = [m.strftime("%m/%Y") for m in t["m"]]
     fig = go.Figure()
     fig.add_bar(x=x, y=t["inv"], name="Investimento Google Ads", marker_color=METRIC_COLORS["receita"], hovertemplate="%{x}: R$ %{y:,.0f}<extra></extra>")
-    # referência mensal = orçamento diário × dias do mês (mês corrente: só dias decorridos, para comparar com o gasto até agora)
-    ref = [ORCAMENTO_DIARIO * (min(_hoje_brt().day, m.days_in_month) if m == pd.Period(_hoje_brt(), "M") else m.days_in_month) for m in t["m"]]
-    fig.add_trace(go.Scatter(x=x, y=ref, name="Orçamento diário × dias", mode="lines+markers", line=dict(color=METRIC_COLORS["meta"], dash="dash", width=2),
+    # referência mensal = soma dos orçamentos diários das campanhas ativas em cada dia (mês corrente: só até o último dia carregado)
+    ref = [_orcamento_meses(orc, [m]) for m in t["m"]]
+    fig.add_trace(go.Scatter(x=x, y=ref, name="Orçamento das campanhas ativas", mode="lines+markers", line=dict(color=METRIC_COLORS["meta"], dash="dash", width=2),
                              hovertemplate="%{x}: R$ %{y:,.0f} de orçamento<extra></extra>"))
     plotly_layout(fig, height=280, xaxis=dict(type="category"), yaxis=dict(tickprefix="R$ ", gridcolor=COLORS["grid"]))
     return fig
@@ -87,6 +131,7 @@ def render():
         try:
             dc = carregar_clientes()
             dv = carregar_vendas()
+            orc = carregar_orcamento()
         except Exception as e:
             st.error(f"Erro ao carregar dados do BigQuery: {e}")
             return
@@ -125,12 +170,12 @@ def render():
     be = fat / mc if mc else None
     n_meses = len(sel)
     tem_parcial = mes_atual in sel
-    orcado = sum(ORCAMENTO_DIARIO * (min(hoje.day, m.days_in_month) if m == mes_atual else m.days_in_month) for m in sel)  # orçamento diário atual × dias do período
+    orcado = _orcamento_meses(orc, sel)  # orçamento diário real das campanhas ativas, dia a dia (não uma constante)
 
     section_title("Economia de aquisição: " + ", ".join(m.strftime("%m/%Y") for m in sorted(sel)))
     render_cards([
-        card("Investimento em mídia (Google Ads)", brl(inv), f"{pct(inv / orcado, 0)} do orçamento atual ({brl(orcado)} = R$ {ORCAMENTO_DIARIO:.0f}/dia × dias)",
-             variant=("bad" if inv > orcado * 1.1 else "ok")),
+        card("Investimento em mídia (Google Ads)", brl(inv), f"{pct(inv / orcado, 0) if orcado else '—'} do orçamento das campanhas ativas ({brl(orcado)} no período)",
+             variant=("bad" if orcado and inv > orcado * 1.1 else "ok")),
         card("Clientes novos", f"{novos}", f"{novos_g} vindos do Google pago (origem do 1º pedido)"),
         card("CAC (todos os clientes novos)", brl(cac) if cac else "—", "investimento ÷ clientes novos", ref="referência: R$ 50–175 (mediana do setor)"),
         card("CAC do Google pago", brl(cac_g) if cac_g else "—", "investimento ÷ clientes novos atribuídos ao Google (cpc)"),
@@ -168,16 +213,60 @@ def render():
                        "Faturamento": st.column_config.NumberColumn(format="R$ %.0f", width=110), "MER": st.column_config.NumberColumn(format="%.1f×", width=80)})
     col1, col2 = st.columns(2)
     with col1:
-        st.html('<div class="c-label" style="margin:0 0 10px">Investimento × orçamento atual</div>')
+        st.html('<div class="c-label" style="margin:0 0 10px">Investimento × orçamento das campanhas ativas</div>')
         with st.container(border=True):
-            st.plotly_chart(_grafico_investimento(t), use_container_width=True)
+            st.plotly_chart(_grafico_investimento(t, orc), use_container_width=True)
     with col2:
         st.html('<div class="c-label" style="margin:0 0 10px">MER × break-even</div>')
         with st.container(border=True):
             st.plotly_chart(_grafico_mer(t), use_container_width=True)
-    note(f"Orçamento de referência = R$ {ORCAMENTO_DIARIO:.0f}/dia (Shopping R$ 22 + Pesquisa R$ 13, realocação de 21/set/2026, do plano de reestruturação no Notion) × dias do mês; "
-         "antes de 18/set o orçamento era menor e antes da auditoria (ago) era ~R$ 52/dia, então meses anteriores comparam com o orçamento de hoje, não com o da época. "
-         "A meta antiga de R$ 600/mês (Backlog B008) foi superada. O histórico de Ads começa em 15/06/2026, por isso a tabela parte de julho.")
+    note("<strong>Orçamento</strong> = soma, dia a dia, do orçamento diário das campanhas <em>ativas</em> naquele dia (histórico da conta no BigQuery), e não um valor fixo: "
+         "sobe quando uma campanha é ligada e cai quando é pausada. É um teto, não meta de gasto: o Google pode gastar menos, e o gasto de campanhas pausadas no meio do dia "
+         "não entra no teto. O histórico de Ads começa em 15/06/2026, por isso a tabela parte de julho.")
+
+    # ═══ POR CAMPANHA DO GOOGLE ═══
+    section_title("CAC e retorno por campanha do Google Ads")
+    try:
+        dcamp = carregar_campanhas()
+    except Exception as e:
+        dcamp = None
+        st.warning(f"Campanhas indisponíveis: {e}")
+    if dcamp is not None:
+        g, ident, total_ped = _campanhas_google(vendas, sel, dcamp["ponte"], dcamp["perf"])
+        if g.empty:
+            st.info("Sem custo nem pedidos de Google pago nos meses escolhidos.")
+        else:
+            g["cac"] = g["custo"] / g["novos"].where((g["novos"] > 0) & (g["custo"] > 0))  # sem custo ligado à linha (ex.: campanha não identificada), CAC fica em branco
+            g["roas"] = g["valor"] / g["custo"].where(g["custo"] > 0)
+            g["mc_custo"] = g["marg"] / g["custo"].where(g["custo"] > 0)
+            g["amostra"] = ["pequena" if n < AMOSTRA_MIN else "ok" for n in g["pedidos"]]
+            tot = {"campanha": "Total", "custo": g["custo"].sum(), "cliques": g["cliques"].sum(), "pedidos": g["pedidos"].sum(), "novos": g["novos"].sum(),
+                   "valor": g["valor"].sum(), "marg": g["marg"].sum(), "compras_ads": g["compras_ads"].sum()}
+            tot["cac"] = tot["custo"] / tot["novos"] if tot["novos"] else None
+            tot["roas"] = tot["valor"] / tot["custo"] if tot["custo"] else None
+            tot["mc_custo"] = tot["marg"] / tot["custo"] if tot["custo"] else None
+            tot["amostra"] = "pequena" if tot["pedidos"] < AMOSTRA_MIN else "ok"
+            g = pd.concat([g, pd.DataFrame([tot])], ignore_index=True)
+            st.dataframe(pd.DataFrame({
+                "Campanha": g["campanha"], "Custo (Ads)": g["custo"], "Cliques": g["cliques"], "Pedidos": g["pedidos"], "Clientes novos": g["novos"], "CAC": g["cac"],
+                "Faturamento atribuído": g["valor"], "ROAS real": g["roas"], "Margem de contrib.": g["marg"], "Margem ÷ custo": g["mc_custo"],
+                "Compras (Ads)": g["compras_ads"], "Amostra": g["amostra"],
+            }), hide_index=True, use_container_width=True,
+                column_config={"Campanha": st.column_config.TextColumn(width="large"), "Custo (Ads)": st.column_config.NumberColumn(format="R$ %.0f", width=100),
+                               "Cliques": st.column_config.NumberColumn(format="%d", width=70), "Pedidos": st.column_config.NumberColumn(format="%d", width=70),
+                               "Clientes novos": st.column_config.NumberColumn(format="%d", width=100), "CAC": st.column_config.NumberColumn(format="R$ %.0f", width=80),
+                               "Faturamento atribuído": st.column_config.NumberColumn(format="R$ %.0f", width=140), "ROAS real": st.column_config.NumberColumn(format="%.1f×", width=90),
+                               "Margem de contrib.": st.column_config.NumberColumn(format="R$ %.0f", width=130), "Margem ÷ custo": st.column_config.NumberColumn(format="%.1f×", width=110),
+                               "Compras (Ads)": st.column_config.NumberColumn(format="%.0f", width=110), "Amostra": st.column_config.TextColumn(width=80)})
+            note(f"<strong>Como ler:</strong> cada pedido de Google pago é ligado à campanha pelo <code>gclid</code> da URL de entrada (cruzado com os cliques do Ads). Neste período, "
+                 f"<strong>{ident} de {total_ped} pedidos</strong> ({pct(ident / total_ped if total_ped else None, 0)}) têm campanha identificada; o resto fica em “{NAO_IDENTIFICADA}” "
+                 "(clique sem <code>gclid</code>, como no iPhone, ou fora do histórico de cliques). <strong>CAC</strong> = custo da campanha ÷ clientes novos atribuídos a ela (1º pedido do cliente); "
+                 "custo sem cliente identificado não some: fica na linha da campanha, com CAC em branco. <strong>ROAS real</strong> = faturamento dos pedidos atribuídos ÷ custo (o valor de "
+                 "conversão que o Ads reporta é maior e não é usado). <strong>Margem ÷ custo</strong> ≥ 1 = a campanha pagou o próprio custo só com a margem de contribuição. "
+                 f"<strong>Amostra pequena</strong> = menos de {AMOSTRA_MIN} pedidos: CAC e ROAS de poucos pedidos oscilam demais, leia como hipótese, não como conclusão. "
+                 "O <strong>Remarketing</strong> (e a Marca) fecha a venda de quem já conhecia a loja: CAC baixo ali não quer dizer que a campanha sozinha traz gente nova, e parte do mérito é do "
+                 "Shopping, da Pesquisa e do topo de funil, que apresentaram a loja antes (o último clique leva o crédito). Por isso leia o Total e compare campanhas de mesma função. "
+                 "“Compras (Ads)” não bate com “Pedidos” porque o Ads conta conversões que a nossa base não ligou ao <code>gclid</code>.")
 
     # ═══ POR CANAL ═══
     section_title("De onde vêm os clientes novos")
