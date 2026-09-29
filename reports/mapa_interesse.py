@@ -43,7 +43,6 @@ FAIXAS = [
     ("Sem sinal", 0, "#E2E8F0", "#94A3B8"),
 ]
 ORDEM_FAIXA = [f[0] for f in FAIXAS][::-1]
-COR_EXPOSICAO = {"Home": COLORS["primary"], "Vitrine": COLORS["accent"], "Só categoria": COLORS["text_muted"]}
 
 
 @st.cache_data(ttl=900)
@@ -326,23 +325,25 @@ def render():
     if q.empty:
         st.info(f"Nenhum produto com {MIN_VISITAS}+ visitas na janela.")
     else:
-        fig = go.Figure()
-        for nivel, cor in COR_EXPOSICAO.items():
-            s = q[q["ds_nivel_exposicao"] == nivel]
-            if s.empty:
-                continue
-            fig.add_trace(go.Scatter(
-                x=s["qt_visitas"], y=s["taxa_carrinho"], mode="markers", name=nivel,
-                marker=dict(color=cor, opacity=0.75, size=np.clip(np.sqrt(s["vl_margem"].clip(lower=0)) * 3 + 8, 8, 60), line=dict(width=1, color="#fff")),
-                text=s["nm_produto"], customdata=np.stack([s["score"], s["vl_margem"], s["quadrante"]], axis=1),
-                hovertemplate="<b>%{text}</b><br>%{x} visitas · carrinho %{y:.1%}<br>score %{customdata[0]:.0f} · margem R$ %{customdata[1]:.2f}<br>%{customdata[2]}<extra></extra>"))
-        fig.add_hline(y=p0, line_dash="dash", line_color=COLORS["text_muted"], annotation_text=f"média da loja {p0:.1%}", annotation_position="top left")
-        plotly_layout(fig, height=430, xaxis=dict(title=f"Visitas à página ({dias} dias)", type="log"),
-                      yaxis=dict(title="Taxa de carrinho suavizada", tickformat=".0%"))
-        st.plotly_chart(fig, use_container_width=True)
-        cont = q.groupby("quadrante").size().reindex(["Estrela", "Vitrine que não fecha", "Joia escondida", "Cão"], fill_value=0)
+        ordem_q = ["Estrela", "Vitrine que não fecha", "Joia escondida", "Cão"]
+        cont = q.groupby("quadrante").size().reindex(ordem_q, fill_value=0)
         st.html('<div class="cards">' + "".join(card(n, str(int(v))) for n, v in cont.items()) + "</div>")
-    note(f"Eixo x em escala logarítmica; bolha = margem de contribuição do período (antes de mídia); cor = onde o produto está exposto. "
+        escolha = st.radio("Mostrar", ["Todos"] + ordem_q, horizontal=True, key="mapa_quadrante")
+        t = q if escolha == "Todos" else q[q["quadrante"] == escolha]
+        t = t.assign(_o=t["quadrante"].map({n: i for i, n in enumerate(ordem_q)})).sort_values(["_o", "score"], ascending=[True, False])
+        tabela_q = pd.DataFrame({
+            "Produto": t["nm_produto"], "Quadrante": t["quadrante"], "Exposição": t["ds_nivel_exposicao"], "Score": t["score"],
+            f"Visitas ({dias}d)": t["qt_visitas"], "Carrinhos": t["qt_carrinhos"], "Taxa de carrinho": t["taxa_carrinho"],
+            "Taxa vs média da loja": t["taxa_carrinho"] / p0, "Unidades": t["qt_unidades"], "Margem (R$)": t["vl_margem"],
+            "Margem por visita (R$)": t["margem_por_visita"], "Estoque": np.where(t["tem_estoque"], "com estoque", "SEM estoque")})
+        st.dataframe(tabela_q, hide_index=True, use_container_width=True, height=min(640, 38 + 35 * len(tabela_q)), column_config={
+            "Score": st.column_config.ProgressColumn(format="%.0f", min_value=0, max_value=100),
+            "Taxa de carrinho": st.column_config.NumberColumn(format="percent"),
+            "Taxa vs média da loja": st.column_config.NumberColumn(format="%.1fx"),
+            f"Visitas ({dias}d)": st.column_config.NumberColumn(format="%.0f"), "Carrinhos": st.column_config.NumberColumn(format="%.0f"),
+            "Unidades": st.column_config.NumberColumn(format="%.0f"),
+            "Margem (R$)": st.column_config.NumberColumn(format="R$ %.2f"), "Margem por visita (R$)": st.column_config.NumberColumn(format="R$ %.2f")})
+    note(f"Ordenado por quadrante e, dentro dele, por score; a margem é a de contribuição do período (antes de mídia). "
          f"<b>Taxa de carrinho suavizada</b> = (carrinhos + {K_SUAVIZACAO} × média da loja) ÷ (visitas + {K_SUAVIZACAO}), para 1 carrinho em 2 visitas não virar 50%. "
          f"Só entram produtos com {MIN_VISITAS}+ visitas. <b>Estrela</b> = score ≥ {CORTE_INTERESSE} e taxa acima da média; "
          "<b>Vitrine que não fecha</b> = muita visita e pouco carrinho (preço, foto, descrição, frete); <b>Joia escondida</b> = pouca visita e taxa alta "
