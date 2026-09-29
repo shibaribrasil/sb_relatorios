@@ -1,4 +1,52 @@
-# Spec — Relatório de Estoque
+# Spec — Estoque & Reposição (v2, 29/09/2026 — escopo aprovado pelo Hugo)
+
+> **Status:** construída em `reports/estoque.py` (menu Semanal, `url_path=estoque`). A v1 (abaixo, sobre `rpt_estoque_produtos`) é histórico e não é mais usada. R7 do plano de KPIs.
+
+Pergunta: **"vou perder venda por ruptura, quanto preciso comprar agora e quanto capital está parado?"**
+
+## Escopo da primeira leva (decisão do Hugo, 29/09)
+- **Só produto físico comercial** (revenda e produção própria). **Suprimento e matéria-prima ficam para a segunda leva** (regra: excluir `ds_categoria = '[Interno] Insumos'` — 48 produtos, ~R$ 710 a custo da última compra — e `[Interno] Inativos`; `tb_suprimento_analitico` está vazia hoje). Isso também tira o Óleo de Semente de Uva (5.000 un × custo cadastrado R$ 75,89 = R$ 379 mil, custo evidentemente errado) dos totais.
+- Fonte: **`dbt_dw_az`** — não usar mais `rpt_estoque_*`. Regra de negócio fica no dbt; a página filtra, soma e apresenta.
+
+## Fontes (todas us-east4, uma região só)
+| Uso | Tabela |
+|---|---|
+| Risco, cobertura, compra pendente, ABC, ciclo | `tb_estoque_analitico` (1 linha por produto físico) |
+| Histórico de posição e ruptura | `tb_estoque_posicao_dia` (desde 02/07/2026), `tb_estoque_ruptura` (dt_inicio, dt_fim, qt_dias_sem_estoque) |
+| Giro, cobertura, GMROI, parado por papel × origem | `tb_giro_papel_mes` |
+| Orçamento de mercadoria | `tb_orcamento_mercadoria_mes` (orçado, consumido, disponível) |
+| Lista de compra | `tb_sugestao_reposicao` + regras da rotina `sugestao-compras-reposicao` (3 blocos) |
+| Compras em aberto | `tb_compra` / `tb_agg_compra_produto` |
+
+## Blocos (ordem do maior problema ao menor)
+1. **Comprar agora:** produtos de revenda com risco 🆘 Rompido / 🛑 Urgente e venda em 60 dias > 0, ou ✅ Estável abaixo do mínimo com venda; qtd sugerida, custo, fornecedor, **custo acumulado contra o orçamento disponível do mês** (corte pelo caixa é decisão humana). Produtos do ciclo "Descontinuado/Em Saída" não entram em compra.
+2. **Produção própria abaixo do mínimo** (agrupada por família), separado da revenda.
+3. **Cobertura × lead time por papel** (Core / Complementar / Impulso): dias de cobertura atual e total (com compra pendente) contra o lead time do produto.
+4. **Capital em estoque:** valor a custo por papel × origem, giro anualizado, GMROI e estoque parado (`tb_giro_papel_mes`), com aviso de mês parcial.
+5. **Rupturas:** produtos com mais dias sem estoque no período e classe ABC deles (`tb_estoque_ruptura`).
+6. **Qualidade do cadastro:** sem estoque mínimo, sem lead time, sem origem, "Sem Classificação", sem custo — cada um com contagem e lista, porque o risco depende desses campos.
+7. **Girando devagar** (Encalhado, Sobreestoque, Sem Histórico): alerta para descontinuar/baixar mínimo/ação de marketing, **não** é recomendação de compra. Sobreposição com Gestão de Produtos (baixo giro): aqui só o valor de capital; a ação de vitrine fica lá.
+
+## Regras
+- Classificação de risco, cobertura, lead time e ABC: **as definidas em `tb_estoque_analitico`** (ver v1 abaixo); custo base = `vl_custo_cadastro` com fallback `vl_custo_ultima_compra`; não recalcular no Streamlit.
+- Razões soma ÷ soma; mês corrente parcial rotulado.
+
+## Como ficou (implementação)
+- Sem dbt novo: tudo lido de tabelas `az` existentes. Bloco 1 usa a `tb_sugestao_reposicao` como está (quantidade, caixa fechada, pedido mínimo, ciclo de vida e orçamento já vêm de lá); "Cabe no orçamento" = custo acumulado na ordem de prioridade ≤ `vl_disponivel` do mês.
+- Exceção assumida à regra "regra só no dbt": o rótulo "Por que não está na lista" (produtos em risco fora da sugestão) é derivado no pandas de campos já existentes (fabricado, ciclo, custo) — só explica a ausência, não decide compra.
+- Custo do estoque hoje = `vl_custo_cadastro` com fallback `vl_custo_ultima_compra` (base da v1). Giro/GMROI vêm da `tb_giro_papel_mes` (custo vigente por dia); "Sem papel" fica fora do bloco 4 (insumos/uso e consumo, 2ª leva).
+- Rupturas: dias inclusivos na janela; só produtos com venda em 60 dias ou curva A/B; sem estimativa de venda perdida.
+- Verificado em 29/09 contra o BigQuery: 11 rompidos, 12 urgentes, estoque a custo R$ 7.838,31 (R$ 4.332,81 em sobreestoque/encalhado), lista de compra 14 produtos = R$ 1.003,79 vs. orçamento disponível R$ 583,28, 30 produtos com ruptura nos últimos 30 dias.
+
+## Pontos abertos (dbt / dados)
+- Lacuna "Sem Classificação" (cobertura 30–45 com estoque > mínimo) — decidir regra no dbt.
+- 96 de 290 produtos sem estoque mínimo e 17 sem origem/lead time: correção manual no Bling (Melhorias Manuais).
+- Vendas perdidas por ruptura (estimativa) exige definição de venda média diária antes da ruptura — propor antes de implementar.
+- Segunda leva: suprimento/matéria-prima (`tb_suprimento_analitico` vazia; conferir custo e unidade do Óleo de Semente de Uva no Bling).
+
+---
+
+# Spec v1 — Relatório de Estoque (histórico)
 
 Documenta as regras de negócio e a definição de cada indicador do relatório de Estoque. **Leia antes de alterar qualquer cálculo, filtro ou seção deste relatório.** Se a mudança alterar uma regra de negócio, atualize este arquivo no mesmo commit — não deixe a regra só implícita no SQL ou no app (ver `CLAUDE.md` e o histórico do bug do ROI em `specs/google-ads.md`, motivo dessa regra existir).
 
