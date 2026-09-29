@@ -21,13 +21,15 @@ from common import cupom as cup
 from common.tarefas import carregar_tarefas, salvar_tarefas, TABELA as TAB_TAREFAS, HISTORICO as TAB_HISTORICO
 from common.frescor import carregar_frescor, badge_atualizacao, detalhe_atualizacao, alerta_atraso
 
-TABELAS = ("tb_logistica_pedido", "tb_carrinho_abandonado", "tb_pedido_cancelado")
+TABELAS = ("tb_logistica_pedido", "tb_carrinho_abandonado", "tb_pedido_cancelado", "tb_pedido_recompra_entregue")
 EXTRATORES = ("nuvemshop_orders", "nuvemshop_fulfillments", "nuvemshop_customers", "bling_orders")
 
 TIPO_ENTREGA_PROBLEMA = "entrega_problema"
 TIPO_CARRINHO = "carrinho_abandonado"
 TIPO_CANCELADO = "pedido_cancelado"
 TIPO_RECONTATO = "recontato_cupom"
+TIPO_PROXIMIDADE = "proximidade_pos_entrega"
+JANELA_PROXIMIDADE = 3  # dias: entregas de D-1 a D-3 entram na lista (D-3 é folga de segurança; sai só quando o Robson marca)
 DIAS_RECONTATO = 7     # dias depois do 1º contato do SAC (marcado "Já tratei") para o recontato com cupom (decisão do Hugo, 28/09)
 DIAS_PARADO = 10        # mesmo limite usado no Pulso do Dia (decisão de apresentação)
 JANELA_CARRINHO = 15    # dias: carrinho mais velho que isso não vale mais contato
@@ -115,6 +117,72 @@ def carregar_recontato():
     df["ts_contato"] = pd.to_datetime(df["ts_contato"], utc=True).dt.tz_convert(FUSO).dt.tz_localize(None)
     df["vl_total"] = pd.to_numeric(df["vl_total"]).fillna(0.0)
     for c in ["fg_comprou", "fg_teste"]:
+        df[c] = df[c].fillna(False).astype(bool)
+    return df
+
+
+@st.cache_data(ttl=300)
+def carregar_proximidade():
+    """Recompras (2º pedido em diante) com entrega confirmada nos últimos dias, com duas marcas do estado do SAC:
+    `fg_nao_retomar` (o cliente tem "Não retomar contato" em QUALQUER lista do SAC, por e-mail) e `fg_contatado_antes` (já teve
+    contato de proximidade tratado em OUTRO pedido, exceto "WhatsApp inválido", que não chegou ao cliente)."""
+    client = bq.get_client()
+    az = f"{bq.PROJECT}.dbt_dw_az"
+    df = bq.query_df(client, f"""
+        WITH base AS (
+          SELECT r.*, LOWER(r.ds_email_cliente) AS email
+            FROM `{az}.tb_pedido_recompra_entregue` r
+           WHERE NOT r.fg_teste
+             AND r.dt_entrega >= DATE_SUB(CURRENT_DATE('{FUSO}'), INTERVAL {JANELA_PROXIMIDADE + 1} DAY)
+        ), tarefa AS (
+          SELECT tipo_tarefa, chave, ds_resultado, fg_feito
+            FROM `{TAB_TAREFAS}`
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_tarefa, chave ORDER BY dt_atualizacao DESC) = 1
+        ), nao_retomar AS (
+          SELECT t.tipo_tarefa, t.chave, LOWER(cr.ds_email_cliente) AS email
+            FROM tarefa t JOIN `{az}.tb_carrinho_abandonado` cr ON t.tipo_tarefa = '{TIPO_CARRINHO}' AND t.chave = CAST(cr.cd_carrinho AS STRING)
+           WHERE t.ds_resultado = 'Não retomar contato'
+          UNION ALL
+          SELECT t.tipo_tarefa, t.chave, LOWER(pc.ds_email_cliente)
+            FROM tarefa t JOIN `{az}.tb_pedido_cancelado` pc ON t.tipo_tarefa = '{TIPO_CANCELADO}' AND t.chave = CAST(pc.cd_pedido_nuvemshop AS STRING)
+           WHERE t.ds_resultado = 'Não retomar contato'
+          UNION ALL
+          SELECT t.tipo_tarefa, t.chave, LOWER(lp.ds_email_cliente)
+            FROM tarefa t JOIN `{az}.tb_logistica_pedido` lp ON t.tipo_tarefa = '{TIPO_ENTREGA_PROBLEMA}' AND t.chave = lp.cd_codigo_interno
+           WHERE t.ds_resultado = 'Não retomar contato'
+          UNION ALL
+          SELECT t.tipo_tarefa, t.chave, LOWER(cr.ds_email_cliente)
+            FROM tarefa t JOIN `{az}.tb_carrinho_abandonado` cr
+              ON t.tipo_tarefa = '{TIPO_RECONTATO}' AND STARTS_WITH(t.chave, '{TIPO_CARRINHO}:')
+             AND SUBSTR(t.chave, LENGTH('{TIPO_CARRINHO}:') + 1) = CAST(cr.cd_carrinho AS STRING)
+           WHERE t.ds_resultado = 'Não retomar contato'
+          UNION ALL
+          SELECT t.tipo_tarefa, t.chave, LOWER(pc.ds_email_cliente)
+            FROM tarefa t JOIN `{az}.tb_pedido_cancelado` pc
+              ON t.tipo_tarefa = '{TIPO_RECONTATO}' AND STARTS_WITH(t.chave, '{TIPO_CANCELADO}:')
+             AND SUBSTR(t.chave, LENGTH('{TIPO_CANCELADO}:') + 1) = CAST(pc.cd_pedido_nuvemshop AS STRING)
+           WHERE t.ds_resultado = 'Não retomar contato'
+          UNION ALL
+          SELECT t.tipo_tarefa, t.chave, LOWER(r.ds_email_cliente)
+            FROM tarefa t JOIN `{az}.tb_pedido_recompra_entregue` r ON t.tipo_tarefa = '{TIPO_PROXIMIDADE}' AND t.chave = r.cd_codigo_interno
+           WHERE t.ds_resultado = 'Não retomar contato'
+        ), contatado AS (
+          SELECT r.cd_contato, r.cd_codigo_interno
+            FROM tarefa t JOIN `{az}.tb_pedido_recompra_entregue` r ON t.tipo_tarefa = '{TIPO_PROXIMIDADE}' AND t.chave = r.cd_codigo_interno
+           WHERE t.fg_feito AND COALESCE(t.ds_resultado, '') != 'WhatsApp inválido'
+        )
+        SELECT b.cd_codigo_interno, b.cd_pedido_loja, b.cd_contato, b.nm_cliente, b.ds_email_cliente, b.nr_telefone_cliente,
+               b.dt_entrega, b.nr_pedido_cliente, b.vl_total_pedido, b.nm_produto_principal, b.fg_entrega_atrasada,
+               b.qt_dias_atraso_entrega,
+               EXISTS (SELECT 1 FROM nao_retomar n WHERE n.email = b.email
+                          AND NOT (n.tipo_tarefa = '{TIPO_PROXIMIDADE}' AND n.chave = b.cd_codigo_interno)) AS fg_nao_retomar,
+               EXISTS (SELECT 1 FROM contatado c WHERE c.cd_contato = b.cd_contato
+                          AND c.cd_codigo_interno != b.cd_codigo_interno) AS fg_contatado_antes
+          FROM base b
+    """)
+    df["dt_entrega"] = pd.to_datetime(df["dt_entrega"])
+    df["vl_total_pedido"] = pd.to_numeric(df["vl_total_pedido"]).fillna(0.0)
+    for c in ["fg_entrega_atrasada", "fg_nao_retomar", "fg_contatado_antes"]:
         df[c] = df[c].fillna(False).astype(bool)
     return df
 
@@ -255,6 +323,41 @@ def _lista_recontato(df, cupons, agora=None):
     return el
 
 
+def elegivel_proximidade(df, hoje=None, janela=JANELA_PROXIMIDADE):
+    """Regra da lista Proximidade (decisão do Hugo, 28/09/2026): recompra (a base do dbt já garante 2º pedido em diante, entrega
+    confirmada e sem reembolso) entregue de D-1 a D-`janela` — a janela é só folga de segurança: o item some da lista quando o
+    atendente marca "Já tratei" (ou depois de `janela` dias). Fora: cliente com "Não retomar contato" em qualquer lista e cliente que
+    já teve contato de proximidade em outro pedido. Cliente com mais de um pedido na janela entra uma vez (o mais recente)."""
+    if df.empty:
+        return df
+    hoje = (hoje or _agora()).normalize()
+    dias = (hoje - df["dt_entrega"]).dt.days
+    ok = (dias >= 1) & (dias <= janela) & ~df["fg_nao_retomar"] & ~df["fg_contatado_antes"]
+    out = df[ok].assign(dias_entrega=dias[ok])
+    return out.sort_values(["dt_entrega", "cd_codigo_interno"], ascending=False).drop_duplicates("cd_contato", keep="first")
+
+
+def _lista_proximidade(df, hoje=None):
+    """Itens da Proximidade prontos para a tabela: mensagem (com variante de atraso) e avisos."""
+    el = elegivel_proximidade(df, hoje)
+    if el.empty:
+        return el.assign(chave=pd.Series(dtype=str))
+    el = el.sort_values("dt_entrega").copy()  # o mais antigo primeiro: é o que está mais perto de sair da janela
+    el["chave"] = el["cd_codigo_interno"].astype(str)
+    el["codigo"] = "#" + el["cd_pedido_loja"].astype(str)
+    el["entregue_txt"] = el["dias_entrega"].map(lambda d: "ontem" if d <= 1 else f"há {int(d)} dias")
+    el["compra_txt"] = el["nr_pedido_cliente"].map(lambda n: f"{int(n)}ª compra")
+    el["whatsapp"] = el.apply(lambda r: msg.link_whatsapp(r["nr_telefone_cliente"], msg.msg_proximidade(
+        r["nm_cliente"], r["cd_pedido_loja"], r["nm_produto_principal"], r["nr_pedido_cliente"], r["dias_entrega"],
+        bool(r["fg_entrega_atrasada"]))), axis=1)
+    el["obs"] = el.apply(lambda r: " · ".join(t for t in (
+        f"entrega atrasou {int(r['qt_dias_atraso_entrega'])} dia(s) — a mensagem já pede desculpa"
+        if r["fg_entrega_atrasada"] and pd.notna(r["qt_dias_atraso_entrega"]) else
+        ("entrega fora do prazo — a mensagem já pede desculpa" if r["fg_entrega_atrasada"] else ""),
+        _sem_whatsapp(r, "nr_telefone_cliente", "ds_email_cliente")) if t), axis=1)
+    return el
+
+
 # --- Seção genérica com check persistente ---------------------------------------------------------------------
 
 def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=None, cards_extra=None):
@@ -328,6 +431,51 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
     note(nota)
 
 
+GRUPOS = {  # visual por grupo de listas: cor da faixa, fundo suave e propósito (uma linha)
+    "recuperacao": ("Recuperação de venda", "Trazer de volta quem quase comprou", "#0284C7", "#E0F2FE"),
+    "problemas": ("Problemas", "Resolver antes que vire reclamação", "#D97706", "#FEF3C7"),
+    "proximidade": ("Proximidade", "Cuidar de quem já é cliente — relacionamento, sem venda", "#16A34A", "#DCFCE7"),
+}
+
+
+def _pendentes(tipo_tarefa, itens):
+    """Quantos itens da lista ainda não têm o check marcado (mesma conta dos cards da seção)."""
+    if itens.empty:
+        return 0
+    try:
+        feitos = set(carregar_tarefas(tipo_tarefa).query("fg_feito")["chave"])
+    except Exception:
+        return 0
+    return int((~itens["chave"].isin(feitos)).sum())
+
+
+def _faixa_grupo(grupo, pendentes):
+    """Faixa colorida que abre cada grupo de listas do SAC, com o total de pendentes do grupo."""
+    titulo, proposito, cor, fundo = GRUPOS[grupo]
+    chip = (f'<span style="background:{cor};color:#fff;border-radius:999px;padding:2px 12px;font-size:12px;font-weight:700">'
+            f'{pendentes} pendente{"s" if pendentes != 1 else ""}</span>') if pendentes else (
+            '<span style="color:#475569;font-size:12px;font-weight:600">nada pendente</span>')
+    st.html(f'''
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:38px 0 6px 0;
+                padding:12px 18px;background:{fundo};border-left:6px solid {cor};border-radius:8px">
+      <div>
+        <div style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:{cor}">{titulo}</div>
+        <div style="font-size:13px;color:#475569;margin-top:2px">{proposito}</div>
+      </div>
+      {chip}
+    </div>
+    ''')
+
+
+def carregar_proximidade_seguro():
+    """A lista de Proximidade não deve derrubar o resto da página do SAC se a carga falhar."""
+    try:
+        return carregar_proximidade()
+    except Exception as e:
+        st.warning(f"Não consegui montar a lista de Proximidade agora: {e}")
+        return None
+
+
 def carregar_recontato_seguro():
     """A lista de recontato não deve derrubar o resto da página do SAC se a carga falhar."""
     try:
@@ -392,9 +540,15 @@ def render():
                   "de enviar</b>; nada sai sozinho. Registre a <b>Resolução</b> e, se quiser, a <b>Observação SAC</b> (pode trocar depois), marque \"Já tratei\" e clique em <b>Salvar alterações</b>.")
     valor = st.column_config.NumberColumn(format="R$ %.2f")
 
+    lst_car, lst_canc, lst_ent = _lista_carrinhos(car), _lista_cancelados(canc), _lista_entregas_problema(logi)
+    recontato = _lista_recontato(carregar_recontato_seguro(), cup.carregar_cupons(cup.CAMPANHA_RECUPERACAO_WHATSAPP))
+    df_prox = carregar_proximidade_seguro()
+    lst_prox = _lista_proximidade(df_prox) if df_prox is not None else None
+
+    _faixa_grupo("recuperacao", _pendentes(TIPO_CARRINHO, lst_car) + _pendentes(TIPO_CANCELADO, lst_canc) + _pendentes(TIPO_RECONTATO, recontato))
     _secao_checklist(
         "Carrinhos abandonados — recuperar a venda",
-        TIPO_CARRINHO, _lista_carrinhos(car),
+        TIPO_CARRINHO, lst_car,
         colunas={
             "Cliente": "nm_cliente", "Valor": "vl_total_carrinho", "Já é cliente?": "cliente_antigo",
             "Abandonado há": "abandonado_ha", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
@@ -410,7 +564,7 @@ def render():
 
     _secao_checklist(
         "Pedidos cancelados — entender e recuperar",
-        TIPO_CANCELADO, _lista_cancelados(canc),
+        TIPO_CANCELADO, lst_canc,
         colunas={
             "Pedido": "codigo", "Cliente": "nm_cliente", "Valor": "vl_total_pedido", "Já é cliente?": "cliente_antigo",
             "Cancelado em": "dt_cancelamento", "Tipo": "tipo", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
@@ -427,7 +581,6 @@ def render():
              "aviso em Obs.). Sai da lista quem já voltou a comprar (exceto estorno a conferir). " + aviso_link,
     )
 
-    recontato = _lista_recontato(carregar_recontato_seguro(), cup.carregar_cupons(cup.CAMPANHA_RECUPERACAO_WHATSAPP))
     _secao_checklist(
         "Recontato com cupom — última tentativa",
         TIPO_RECONTATO, recontato,
@@ -449,9 +602,10 @@ def render():
     )
     _form_gerar_cupom(recontato)
 
+    _faixa_grupo("problemas", _pendentes(TIPO_ENTREGA_PROBLEMA, lst_ent))
     _secao_checklist(
         "Entregas com problema — falar com o cliente",
-        TIPO_ENTREGA_PROBLEMA, _lista_entregas_problema(logi),
+        TIPO_ENTREGA_PROBLEMA, lst_ent,
         colunas={
             "Pedido": "codigo", "Cliente": "nm_cliente", "Motivo": "motivo", "Rastreio": "cd_rastreio",
             "Dias sem evento": "qt_dias_sem_movimento", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None,
@@ -463,6 +617,29 @@ def render():
              "não some quando a base atualizar de novo; se o pedido sair da situação de risco (por exemplo, foi entregue), ele some da "
              "lista, mas o registro de que você tratou continua guardado.",
     )
+
+    if lst_prox is not None:
+        _faixa_grupo("proximidade", _pendentes(TIPO_PROXIMIDADE, lst_prox))
+        _secao_checklist(
+            "Pós-entrega — como foi a experiência?",
+            TIPO_PROXIMIDADE, lst_prox,
+            colunas={
+                "Cliente": "nm_cliente", "Pedido": "codigo", "Compra": "compra_txt", "Produto": "nm_produto_principal",
+                "Valor": "vl_total_pedido", "Entregue em": "dt_entrega", "Chegou": "entregue_txt", "WhatsApp": "whatsapp",
+                JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
+            },
+            column_config={
+                "WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS,
+                "Entregue em": st.column_config.DateColumn(format="DD/MM/YYYY"),
+            },
+            nota="Contato amistoso, sem venda e sem cupom: pergunta como foi a experiência, se o produto cumpriu o que o cliente esperava "
+                 "e se ele tem algum feedback. Entra quem fez a <b>2ª compra ou mais</b> e teve a entrega confirmada de <b>ontem até "
+                 f"{JANELA_PROXIMIDADE} dias atrás</b> (a janela é só folga: o item sai da lista quando você marca \"Já tratei\"). "
+                 "Cada cliente recebe esse contato <b>uma vez só</b>: se já foi contatado em outro pedido, ou tem \"Não retomar contato\" "
+                 "em qualquer lista do SAC, não aparece. Entrega que atrasou leva uma mensagem que reconhece o atraso (ver Obs.). "
+                 "O que o cliente responder vai na <b>Observação SAC</b>; se for reclamação, escolha \"Reclamação — abrir tratativa\". "
+                 + aviso_link,
+        )
 
     if fr:
         detalhe_atualizacao(fr)

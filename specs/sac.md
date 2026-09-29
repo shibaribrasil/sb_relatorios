@@ -101,3 +101,11 @@ Lista nova (tipo de tarefa `recontato_cupom`), paralela a carrinhos e cancelados
 - A carga (`carregar_recontato`) vem de `raw_control` + `az` (mesma região); falha nela não derruba o resto da página.
 - Cliente que compra com o cupom: cruzar `cupons_gerados.codigo` com `orders.coupon_code` (medição de conversão — ainda não construída).
 
+## Grupos visuais e lista Proximidade (28/09/2026, pedido do Hugo)
+- **Três grupos, cada um com faixa colorida** (propósito em uma linha + total de pendentes do grupo): **Recuperação de venda** (azul: carrinhos, cancelados, recontato com cupom), **Problemas** (âmbar: entregas com problema) e **Proximidade** (verde). Ordem: Recuperação → Problemas → Proximidade.
+- **Lista "Pós-entrega — como foi a experiência?"** (tipo de tarefa `proximidade_pos_entrega`): contato amistoso, **sem venda e sem cupom**, com a recompra entregue. Fonte: `tb_pedido_recompra_entregue` (dbt: pedido válido, `nr_pedido_cliente` >= 2, entrega confirmada com data, sem reembolso/cancelamento; entrega presumida fica de fora).
+- **Janela:** entrega de D-1 a D-3 (`JANELA_PROXIMIDADE`). A janela é só folga de segurança; o item sai quando o Robson marca "Já tratei". Passou de 3 dias sem tratar, sai da lista (contato frio).
+- **Uma vez por cliente:** fora quem já teve contato de proximidade tratado em OUTRO pedido (exceto "WhatsApp inválido", que não chegou ao cliente) e quem tem **"Não retomar contato" em qualquer lista** do SAC (cruzado por e-mail: carrinho, cancelado, entrega, recontato e a própria proximidade em outro pedido). Cliente com 2 pedidos na janela entra uma vez (o mais recente).
+- **Mensagem** (`msg.msg_proximidade`): pergunta como foi a experiência, se o produto cumpriu o esperado, se há feedback; cita pedido e produto principal; "chegou ontem"/"chegou há N dias"; variante que **reconhece o atraso e pede desculpa** quando `fg_entrega_atrasada`; agradece a 2ª compra ("voltar a comprar") ou as seguintes ("continuar comprando"). Sem emoji, "Shibari Brasil".
+- **Resoluções:** "Respondeu — satisfeito", "Respondeu — com feedback", "Reclamação — abrir tratativa", "Sem resposta", "WhatsApp inválido", "Não retomar contato". O texto do feedback vai na **Observação SAC**.
+
