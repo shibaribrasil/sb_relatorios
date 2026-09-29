@@ -30,6 +30,11 @@ TIPO_CANCELADO = "pedido_cancelado"
 TIPO_RECONTATO = "recontato_cupom"
 TIPO_PROXIMIDADE = "proximidade_pos_entrega"
 JANELA_PROXIMIDADE = 3  # dias: entregas de D-1 a D-3 entram na lista (D-3 é folga de segurança; sai só quando o Robson marca)
+# Carga inicial (pedido do Hugo, 28/09/2026): a lista nasceu com o modelo já rodando, então as recompras entregues nos 30 dias ANTES
+# do lançamento entram uma vez, como backlog, e ficam até serem tratadas (ou até completarem 30 dias de entrega). Depois do lançamento
+# vale só a janela normal de D-1 a D-3. Some sozinho a partir de RETROATIVO_ATE + 30 dias; pode apagar a constante depois disso.
+RETROATIVO_ATE = pd.Timestamp("2026-09-28")
+RETROATIVO_DIAS = 30
 DIAS_RECONTATO = 7     # dias depois do 1º contato do SAC (marcado "Já tratei") para o recontato com cupom (decisão do Hugo, 28/09)
 DIAS_PARADO = 10        # mesmo limite usado no Pulso do Dia (decisão de apresentação)
 JANELA_CARRINHO = 15    # dias: carrinho mais velho que isso não vale mais contato
@@ -133,7 +138,7 @@ def carregar_proximidade():
           SELECT r.*, LOWER(r.ds_email_cliente) AS email
             FROM `{az}.tb_pedido_recompra_entregue` r
            WHERE NOT r.fg_teste
-             AND r.dt_entrega >= DATE_SUB(CURRENT_DATE('{FUSO}'), INTERVAL {JANELA_PROXIMIDADE + 1} DAY)
+             AND r.dt_entrega >= DATE_SUB(CURRENT_DATE('{FUSO}'), INTERVAL {max(JANELA_PROXIMIDADE + 1, RETROATIVO_DIAS + 1)} DAY)
         ), tarefa AS (
           SELECT tipo_tarefa, chave, ds_resultado, fg_feito
             FROM `{TAB_TAREFAS}`
@@ -326,13 +331,14 @@ def _lista_recontato(df, cupons, agora=None):
 def elegivel_proximidade(df, hoje=None, janela=JANELA_PROXIMIDADE):
     """Regra da lista Proximidade (decisão do Hugo, 28/09/2026): recompra (a base do dbt já garante 2º pedido em diante, entrega
     confirmada e sem reembolso) entregue de D-1 a D-`janela` — a janela é só folga de segurança: o item some da lista quando o
-    atendente marca "Já tratei" (ou depois de `janela` dias). Fora: cliente com "Não retomar contato" em qualquer lista e cliente que
+    atendente marca "Já tratei" (ou depois de `janela` dias). Exceção única: o backlog da carga inicial (RETROATIVO_*), que fica até ser tratado. Fora: cliente com "Não retomar contato" em qualquer lista e cliente que
     já teve contato de proximidade em outro pedido. Cliente com mais de um pedido na janela entra uma vez (o mais recente)."""
     if df.empty:
         return df
     hoje = (hoje or _agora()).normalize()
     dias = (hoje - df["dt_entrega"]).dt.days
-    ok = (dias >= 1) & (dias <= janela) & ~df["fg_nao_retomar"] & ~df["fg_contatado_antes"]
+    retroativo = (dias <= RETROATIVO_DIAS) & (df["dt_entrega"] <= RETROATIVO_ATE)  # backlog da carga inicial (ver constantes)
+    ok = (dias >= 1) & ((dias <= janela) | retroativo) & ~df["fg_nao_retomar"] & ~df["fg_contatado_antes"]
     out = df[ok].assign(dias_entrega=dias[ok])
     return out.sort_values(["dt_entrega", "cd_codigo_interno"], ascending=False).drop_duplicates("cd_contato", keep="first")
 
