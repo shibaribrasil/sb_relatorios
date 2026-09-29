@@ -121,6 +121,19 @@ def msg_entrega(nome, numero, rastreio, url_rastreio, problema: bool, atrasado: 
             f"com a transportadora. Você chegou a receber? Qualquer novidade eu te aviso por aqui.{acompanhe}")
 
 
+# --- Recontato com cupom (última tentativa, 7 dias depois do contato do SAC) ---------------------------------------
+
+def msg_recontato_cupom(nome, origem, numero_pedido, codigo, valor_pct, expira_em, url_recuperacao=None) -> str:
+    """`origem`: "carrinho" ou "cancelado". `expira_em`: datetime (horário de Brasília) em que o cupom vence — a escassez
+    da mensagem (48 horas) só é verdadeira porque o cupom nasce na hora do envio e vence de fato nesse horário."""
+    assunto = f"o seu pedido #{numero_pedido}" if origem == "cancelado" else "a sua compra"
+    quando = expira_em.strftime("%d/%m às %H:%M")
+    link = f" O carrinho continua salvo aqui: {url_recuperacao}" if origem == "carrinho" and isinstance(url_recuperacao, str) and url_recuperacao else ""
+    return (f"{_oi(nome)} Passei para te avisar de uma última cortesia: separei um cupom de {int(valor_pct)}% de desconto para você "
+            f"concluir {assunto}. O código é {codigo}, de uso único, e vale só por 48 horas, até {quando}. Depois disso ele expira. "
+            f"É só aplicar o código no checkout.{link} Qualquer dúvida, me chama por aqui.")
+
+
 # --- Resultado do contato (coluna "Resultado" de cada lista; editável, cada troca vai para o histórico) ---------
 # "WhatsApp inválido" e "Não retomar contato" (28/09, pedido do Hugo) valem em todas as listas; "Não retomar contato" também tira o cliente do
 # recontato com cupom. Mudou uma opção aqui? Os valores antigos já gravados continuam na tabela; se sumirem da lista, a célula
@@ -160,4 +173,20 @@ RESULTADOS = {
         "WhatsApp inválido",
         "Não retomar contato",
     ],
+    # recontato com cupom (última tentativa)
+    "recontato_cupom": [
+        "Comprou com o cupom",
+        "Vai pensar",
+        "Sem interesse",
+        "Sem resposta",
+        "WhatsApp inválido",
+        "Não retomar contato",
+    ],
+}
+
+# Resoluções do 1º contato que IMPEDEM o recontato com cupom (não orientam nova abordagem: já resolvido, contato inviável
+# ou pedido do cliente/SAC para não insistir). Resolução vazia NÃO impede.
+RESOLUCOES_SEM_RECONTATO = {
+    "Não retomar contato", "WhatsApp inválido", "Telefone inválido / sem WhatsApp",
+    "Comprou", "Refez o pedido", "Estorno confirmado", "Estorno pendente — resolver",
 }

@@ -17,7 +17,8 @@ from common import bigquery as bq
 from common import mensagens_sac as msg
 from common.design import inject_css, section_title, note, card, render_cards, brl
 from common.logistica import carregar_logistica
-from common.tarefas import carregar_tarefas, salvar_tarefas
+from common import cupom as cup
+from common.tarefas import carregar_tarefas, salvar_tarefas, TABELA as TAB_TAREFAS, HISTORICO as TAB_HISTORICO
 from common.frescor import carregar_frescor, badge_atualizacao, detalhe_atualizacao, alerta_atraso
 
 TABELAS = ("tb_logistica_pedido", "tb_carrinho_abandonado", "tb_pedido_cancelado")
@@ -26,6 +27,8 @@ EXTRATORES = ("nuvemshop_orders", "nuvemshop_fulfillments", "nuvemshop_customers
 TIPO_ENTREGA_PROBLEMA = "entrega_problema"
 TIPO_CARRINHO = "carrinho_abandonado"
 TIPO_CANCELADO = "pedido_cancelado"
+TIPO_RECONTATO = "recontato_cupom"
+DIAS_RECONTATO = 7     # dias depois do 1º contato do SAC (marcado "Já tratei") para o recontato com cupom (decisão do Hugo, 28/09)
 DIAS_PARADO = 10        # mesmo limite usado no Pulso do Dia (decisão de apresentação)
 JANELA_CARRINHO = 15    # dias: carrinho mais velho que isso não vale mais contato
 JANELA_CANCELADO = 30   # dias desde o cancelamento
@@ -73,6 +76,45 @@ def carregar_cancelados():
     df["dt_cancelamento"] = pd.to_datetime(df["dt_cancelamento"])
     df["vl_total_pedido"] = pd.to_numeric(df["vl_total_pedido"]).fillna(0.0)
     for c in ["fg_estorno_a_conferir", "fg_cliente_recorrente", "fg_recomprou"]:
+        df[c] = df[c].fillna(False).astype(bool)
+    return df
+
+
+@st.cache_data(ttl=300)
+def carregar_recontato():
+    """1º contato do SAC já feito (check marcado) em carrinho ou pedido cancelado, com os dados do cliente e se ele comprou desde então.
+    `ts_contato` = 1ª vez que o check foi marcado (histórico; se o item é anterior ao histórico, a última atualização)."""
+    client = bq.get_client()
+    df = bq.query_df(client, f"""
+        WITH tarefa AS (
+          SELECT tipo_tarefa, chave, ds_resultado, dt_atualizacao
+            FROM `{TAB_TAREFAS}`
+           WHERE tipo_tarefa IN ('{TIPO_CARRINHO}', '{TIPO_CANCELADO}') AND fg_feito
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_tarefa, chave ORDER BY dt_atualizacao DESC) = 1
+        ), contato AS (
+          SELECT t.tipo_tarefa, t.chave, t.ds_resultado,
+                 COALESCE((SELECT MIN(h.dt_evento) FROM `{TAB_HISTORICO}` h
+                            WHERE h.tipo_tarefa = t.tipo_tarefa AND h.chave = t.chave AND h.fg_feito),
+                          t.dt_atualizacao) AS ts_contato
+            FROM tarefa t
+        )
+        SELECT c.tipo_tarefa, c.chave, c.ds_resultado AS ds_resolucao_contato, c.ts_contato,
+               'carrinho' AS origem, cr.nm_cliente, cr.nr_telefone AS nr_telefone, cr.ds_email_cliente,
+               cr.vl_total_carrinho AS vl_total, CAST(NULL AS STRING) AS cd_pedido_loja, cr.ds_url_recuperacao,
+               cr.fg_recuperado AS fg_comprou, cr.fg_teste, CAST(NULL AS STRING) AS ds_motivo_cancelamento
+          FROM contato c JOIN `{bq.PROJECT}.dbt_dw_az.tb_carrinho_abandonado` cr
+            ON c.tipo_tarefa = '{TIPO_CARRINHO}' AND c.chave = CAST(cr.cd_carrinho AS STRING)
+        UNION ALL
+        SELECT c.tipo_tarefa, c.chave, c.ds_resultado, c.ts_contato,
+               'cancelado', pc.nm_cliente, pc.nr_telefone_cliente, pc.ds_email_cliente,
+               pc.vl_total_pedido, CAST(pc.cd_pedido_loja AS STRING), CAST(NULL AS STRING),
+               pc.fg_recomprou, pc.fg_teste, pc.ds_motivo_cancelamento
+          FROM contato c JOIN `{bq.PROJECT}.dbt_dw_az.tb_pedido_cancelado` pc
+            ON c.tipo_tarefa = '{TIPO_CANCELADO}' AND c.chave = CAST(pc.cd_pedido_nuvemshop AS STRING)
+    """)
+    df["ts_contato"] = pd.to_datetime(df["ts_contato"], utc=True).dt.tz_convert(FUSO).dt.tz_localize(None)
+    df["vl_total"] = pd.to_numeric(df["vl_total"]).fillna(0.0)
+    for c in ["fg_comprou", "fg_teste"]:
         df[c] = df[c].fillna(False).astype(bool)
     return df
 
@@ -162,6 +204,57 @@ def _lista_cancelados(canc):
     return canc
 
 
+def elegivel_recontato(df, agora=None, dias=DIAS_RECONTATO):
+    """Regra do recontato com cupom (decisão do Hugo, 28/09/2026): o 1º contato do SAC foi feito (check marcado) há pelo menos
+    `dias` dias; o cliente NÃO comprou desde então (carrinho recuperado / pedido refeito); a Resolução do 1º contato não é
+    uma que impeça nova abordagem (msg.RESOLUCOES_SEM_RECONTATO; vazia não impede); não é teste nem suspeita de fraude.
+    Um cliente com mais de um item elegível entra uma vez só (o contato mais recente)."""
+    if df.empty:
+        return df.assign(_pessoa=pd.Series(dtype=str))
+    agora = agora or _agora()
+    ok = (
+        (df["ts_contato"] <= agora - pd.Timedelta(days=dias))
+        & ~df["fg_comprou"] & ~df["fg_teste"]
+        & ~df["ds_resolucao_contato"].isin(msg.RESOLUCOES_SEM_RECONTATO)
+        & (df["ds_motivo_cancelamento"] != "fraud")
+    )
+    out = df[ok].copy()
+    fone = out["nr_telefone"].map(msg.telefone_whatsapp)
+    pessoa = fone.where(fone.notna(), out["ds_email_cliente"].fillna(out["chave"]))
+    return out.assign(_pessoa=pessoa).sort_values("ts_contato", ascending=False).drop_duplicates("_pessoa", keep="first")
+
+
+def _lista_recontato(df, cupons, agora=None):
+    """Itens elegíveis + cupom (se já gerado) + link do WhatsApp (só com cupom ainda válido)."""
+    agora = agora or _agora()
+    el = elegivel_recontato(df, agora)
+    if el.empty:
+        return el.assign(referencia=pd.Series(dtype=str), cupom=pd.Series(dtype=str))
+    el = el.sort_values("ts_contato").copy()  # o contato mais antigo primeiro: é o que está mais frio
+    el["referencia"] = el["tipo_tarefa"] + ":" + el["chave"]
+    el["chave"] = el["referencia"]  # a chave do checklist do recontato é a própria referência do cupom
+    el["contato_em"] = el["ts_contato"].dt.normalize()
+    el["origem_txt"] = el.apply(lambda r: "Carrinho" if r["origem"] == "carrinho" else f"Pedido #{r['cd_pedido_loja']}", axis=1)
+    mapa = cupons.set_index("referencia") if not cupons.empty else pd.DataFrame(columns=["codigo", "valor", "expira_em"])
+    cupom_txt, whatsapp, obs = [], [], []
+    for _, r in el.iterrows():
+        sem_fone = _sem_whatsapp(r, "nr_telefone", "ds_email_cliente")
+        if r["referencia"] not in mapa.index:
+            cupom_txt.append("— (gerar abaixo)"); whatsapp.append(None); obs.append(sem_fone)
+            continue
+        c = mapa.loc[r["referencia"]]
+        if c["expira_em"] <= agora:
+            cupom_txt.append(f"{c['codigo']} — expirado"); whatsapp.append(None)
+            obs.append(" · ".join(t for t in ("cupom expirado em " + c["expira_em"].strftime("%d/%m %H:%M") + " — a última tentativa já foi usada", sem_fone) if t))
+            continue
+        cupom_txt.append(f"{c['codigo']} — vence {c['expira_em'].strftime('%d/%m %H:%M')}")
+        whatsapp.append(msg.link_whatsapp(r["nr_telefone"], msg.msg_recontato_cupom(
+            r["nm_cliente"], r["origem"], r["cd_pedido_loja"], c["codigo"], c["valor"], c["expira_em"], r["ds_url_recuperacao"])))
+        obs.append(sem_fone)
+    el["cupom"], el["whatsapp"], el["obs"] = cupom_txt, whatsapp, obs
+    return el
+
+
 # --- Seção genérica com check persistente ---------------------------------------------------------------------
 
 def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=None, cards_extra=None):
@@ -235,6 +328,38 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
     note(nota)
 
 
+def carregar_recontato_seguro():
+    """A lista de recontato não deve derrubar o resto da página do SAC se a carga falhar."""
+    try:
+        return carregar_recontato()
+    except Exception as e:
+        st.warning(f"Não consegui montar a lista de recontato com cupom agora: {e}")
+        return pd.DataFrame(columns=["tipo_tarefa", "chave", "ds_resolucao_contato", "ts_contato", "origem", "nm_cliente", "nr_telefone",
+                                     "ds_email_cliente", "vl_total", "cd_pedido_loja", "ds_url_recuperacao", "fg_comprou", "fg_teste",
+                                     "ds_motivo_cancelamento"])
+
+
+def _form_gerar_cupom(recontato):
+    """Gera o cupom (function) para 1 cliente da lista que ainda não tem cupom. A validade de 48h conta a partir do clique."""
+    sem_cupom = recontato[recontato["cupom"].str.startswith("—")] if not recontato.empty else recontato
+    if sem_cupom.empty:
+        return
+    rotulos = {r["referencia"]: f"{r['nm_cliente']} — {r['origem_txt']} — {brl(r['vl_total'])}" for _, r in sem_cupom.iterrows()}
+    with st.container(border=True):
+        st.markdown("**Gerar cupom SEGUNDACHANCE (20% · uso único · 48 horas)**")
+        st.caption("O prazo de 48h começa quando você clicar. Gere só na hora de mandar a mensagem; depois o link \"Mensagem\" da tabela já traz o código.")
+        col1, col2 = st.columns([3, 1], vertical_alignment="bottom")
+        ref = col1.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key="cupom_cliente")
+        if col2.button("Gerar cupom", type="primary", key="cupom_gerar"):
+            try:
+                with st.spinner("Criando o cupom na Nuvemshop..."):
+                    cup.gerar_cupom(cup.CAMPANHA_RECUPERACAO_WHATSAPP, ref)
+            except Exception as e:
+                st.error(str(e))
+            else:
+                st.rerun()
+
+
 def render():
     inject_css()
     try:
@@ -301,6 +426,28 @@ def render():
              "com o pagamento ainda como pago na Nuvemshop: confira se o dinheiro foi devolvido antes de chamar (aparece no topo, com o "
              "aviso em Obs.). Sai da lista quem já voltou a comprar (exceto estorno a conferir). " + aviso_link,
     )
+
+    recontato = _lista_recontato(carregar_recontato_seguro(), cup.carregar_cupons(cup.CAMPANHA_RECUPERACAO_WHATSAPP))
+    _secao_checklist(
+        "Recontato com cupom — última tentativa",
+        TIPO_RECONTATO, recontato,
+        colunas={
+            "Cliente": "nm_cliente", "Origem": "origem_txt", "Valor": "vl_total", "1º contato em": "contato_em",
+            "Resolução do 1º contato": "ds_resolucao_contato", "Cupom": "cupom", "WhatsApp": "whatsapp",
+            JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
+        },
+        column_config={
+            "WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS,
+            "1º contato em": st.column_config.DateColumn(format="DD/MM/YYYY"),
+        },
+        nota=f"Última tentativa de vender para quem o SAC já contatou (carrinho abandonado ou pedido cancelado). Entra aqui quem teve o "
+             f"1º contato marcado como tratado há <b>{DIAS_RECONTATO} dias ou mais</b>, <b>não comprou</b> desde então e cuja Resolução do "
+             "1º contato não impede nova abordagem (fora: \"Não retomar contato\", \"WhatsApp inválido\", \"Comprou\", \"Refez o "
+             "pedido\", estorno). Cada cliente aparece uma vez. O cupom <b>SEGUNDACHANCE</b> (20%, uso único, <b>48 horas</b>) só é "
+             "criado quando você clica em \"Gerar cupom\" abaixo — a validade começa nesse momento, então gere na hora de enviar. "
+             "Depois de gerado, o link \"Mensagem\" já leva o código e o prazo. " + aviso_link,
+    )
+    _form_gerar_cupom(recontato)
 
     _secao_checklist(
         "Entregas com problema — falar com o cliente",
