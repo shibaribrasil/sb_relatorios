@@ -7,7 +7,11 @@ ciclo de vida, quantidade sugerida, giro/GMROI) mora no dbt (`tb_estoque_analiti
 Escopo da 1ª leva (Hugo, 29/09/2026): só produto físico comercial. Insumos/matéria-prima/suprimento ficam para a 2ª leva
 (categorias `[Interno] Insumos` e `[Interno] Inativos` saem de todas as contas).
 
-ORDEM: do maior problema ao menor — comprar agora, produção própria, cobertura × lead time, capital, rupturas, cadastro, giro lento.
+ÁREAS (abas, na ordem do fluxo de decisão — v3, 29/09/2026):
+  1. Compras — o que comprar ou produzir agora e quanto do orçamento isso consome (lista de compra, fora da lista, produção própria, compras em aberto).
+  2. Cobertura e rupturas — vou ficar sem produto antes da reposição chegar? onde já faltou? (cobertura × lead time, rupturas).
+  3. Volume e giro — quanto capital está em estoque e com que velocidade ele vira (capital hoje, giro/GMROI, o que gira devagar).
+  4. Cadastro — os dados que alimentam as outras áreas estão completos?
 """
 import re
 
@@ -101,10 +105,10 @@ def _motivo_fora_da_sugestao(r):
     return "Fora da regra de compra (cobertura suficiente com a compra pendente)"
 
 
-# ═══ 1. COMPRAR AGORA ═══
+# ═══ COMPRAR AGORA ═══
 def _bloco_comprar(d):
     est, sug, orc, comp = d["est"], d["sug"], d["orc"], d["comp"]
-    section_title("1. Comprar agora")
+    section_title("Comprar agora — revenda")
     total = float(sug["vl_custo_sugerido"].sum())
     disp = float(orc["vl_disponivel"].iloc[0]) if not orc.empty else None
     consumido = float(orc["vl_consumido"].iloc[0]) if not orc.empty else None
@@ -154,23 +158,28 @@ def _bloco_comprar(d):
                       "Compra pendente": st.column_config.NumberColumn(format="%d", width=100), "Venda 60d": st.column_config.NumberColumn(format="%d", width=80)},
                 altura=min(38 + 35 * len(out), 420))
         note("Motivo é só um rótulo do que já explica a ausência (produção própria, ciclo, teste, custo faltando); não é uma segunda regra de compra.")
-    if not comp.empty:
-        st.markdown("**Compras em aberto no Bling**")
-        hoje = pd.Timestamp(_hoje_brt())
-        c = comp.sort_values("dt_prevista")
-        out = pd.DataFrame({"Compra": c["cd_compra"].astype(str), "Fornecedor": c["nm_fornecedor"].fillna("—"), "Data da compra": c["dt_compra"].dt.date,
-                            "Previsão": c["dt_prevista"].dt.date, "Itens": c["itens"], "Valor": c["vl_total"],
-                            "Situação": ["Previsão vencida" if pd.notna(p) and p < hoje else "No prazo" for p in c["dt_prevista"]]})
-        _tabela(out, {"Data da compra": st.column_config.DateColumn(format="DD/MM/YYYY"), "Previsão": st.column_config.DateColumn(format="DD/MM/YYYY"),
-                      "Itens": st.column_config.NumberColumn(format="%d", width=60), "Valor": st.column_config.NumberColumn(format="R$ %.2f", width=110)})
-        if (out["Situação"] == "Previsão vencida").any():
-            note("<strong>Compra em aberto com previsão vencida</strong> conta como reposição a caminho no cálculo de cobertura. Se ela já chegou ou foi cancelada, "
-                 "dê baixa no Bling — senão o risco de alguns produtos aparece menor do que é.", variant="warn")
+
+
+def _bloco_compras_abertas(comp):
+    section_title("Compras já feitas — em aberto no Bling")
+    if comp.empty:
+        st.info("Nenhuma compra em aberto no Bling.")
+        return
+    hoje = pd.Timestamp(_hoje_brt())
+    c = comp.sort_values("dt_prevista")
+    out = pd.DataFrame({"Compra": c["cd_compra"].astype(str), "Fornecedor": c["nm_fornecedor"].fillna("—"), "Data da compra": c["dt_compra"].dt.date,
+                        "Previsão": c["dt_prevista"].dt.date, "Itens": c["itens"], "Valor": c["vl_total"],
+                        "Situação": ["Previsão vencida" if pd.notna(p) and p < hoje else "No prazo" for p in c["dt_prevista"]]})
+    _tabela(out, {"Data da compra": st.column_config.DateColumn(format="DD/MM/YYYY"), "Previsão": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                  "Itens": st.column_config.NumberColumn(format="%d", width=60), "Valor": st.column_config.NumberColumn(format="R$ %.2f", width=110)})
+    if (out["Situação"] == "Previsão vencida").any():
+        note("<strong>Compra em aberto com previsão vencida</strong> conta como reposição a caminho no cálculo de cobertura. Se ela já chegou ou foi cancelada, "
+             "dê baixa no Bling — senão o risco de alguns produtos aparece menor do que é.", variant="warn")
 
 
 # ═══ 2. PRODUÇÃO PRÓPRIA ═══
 def _bloco_producao(est):
-    section_title("2. Produção própria abaixo do mínimo")
+    section_title("Produzir — produção própria abaixo do mínimo")
     p = est[est["fg_produto_fabricado"] & (est["qt_estoque_minimo"] > 0) & (est["qt_estoque_atual"] < est["qt_estoque_minimo"])].copy()
     if p.empty:
         st.info("Nenhum produto de produção própria abaixo do mínimo.")
@@ -189,7 +198,7 @@ def _bloco_producao(est):
          "(fio de juta, algodão, óleo) fica para a segunda leva — os insumos não estão nesta página.")
 
 
-# ═══ 3. COBERTURA × LEAD TIME ═══
+# ═══ COBERTURA × LEAD TIME ═══
 def _grafico_cobertura(v):
     v = v.sort_values("qt_pecas_sessenta_dias", ascending=False).head(TOP_COBERTURA).iloc[::-1]
     y = list(range(len(v)))
@@ -208,7 +217,7 @@ def _grafico_cobertura(v):
 
 
 def _bloco_cobertura(est):
-    section_title("3. Cobertura × lead time")
+    section_title("Quanto tempo o estoque dura — cobertura × lead time")
     v = est[(est["qt_pecas_sessenta_dias"] > 0) & (~est["fg_produto_fabricado"])].copy()
     if v.empty:
         st.info("Sem produtos com venda nos últimos 60 dias.")
@@ -234,10 +243,10 @@ def _bloco_cobertura(est):
          "O traço é o lead time cadastrado; se a barra não passa dele, comprar hoje já é tarde. Com ~1 pedido por dia, a venda de 60 dias de itens de baixo giro é poucas unidades: leia com cautela.")
 
 
-# ═══ 4. CAPITAL EM ESTOQUE ═══
+# ═══ CAPITAL EM ESTOQUE ═══
 def _bloco_capital(d):
     est, giro = d["est"], d["giro"]
-    section_title("4. Capital em estoque")
+    section_title("Quanto capital está em estoque")
     tot = float(est["vl_estoque_custo"].sum())
     parado = float(est.loc[est["cod_risco"].isin(["e", "f"]), "vl_estoque_custo"].sum())
     render_cards([
@@ -256,6 +265,7 @@ def _bloco_capital(d):
     gm = giro[giro["ds_papel"] != "Sem papel"].copy()
     if gm.empty:
         return
+    section_title("Com que velocidade o estoque vira — giro e retorno")
     meses = sorted(gm["dt_mes"].unique(), reverse=True)
     mes_atual = pd.Timestamp(_hoje_brt()).replace(day=1)
     rot = lambda m: pd.Timestamp(m).strftime("%m/%Y") + (" (parcial)" if pd.Timestamp(m) == mes_atual else "")
@@ -294,10 +304,10 @@ def _bloco_capital(d):
          "Produtos \"Sem papel\" (em geral insumos e uso e consumo) ficam fora desta leva. Com poucas unidades vendidas por mês, o giro oscila muito: olhe a tendência de vários meses.")
 
 
-# ═══ 5. RUPTURAS ═══
+# ═══ RUPTURAS ═══
 def _bloco_rupturas(d):
     est, rup, dt_pos = d["est"], d["rup"], d["dt_pos"]
-    section_title("5. Rupturas — dias sem estoque")
+    section_title("O que já faltou — rupturas (dias sem estoque)")
     sel = st.selectbox("Janela", options=list(JANELAS_RUPTURA))
     n = JANELAS_RUPTURA[sel]
     ini = rup["dt_inicio"].min() if n is None else dt_pos - pd.Timedelta(days=n - 1)
@@ -333,9 +343,9 @@ def _bloco_rupturas(d):
          "Não estimamos venda perdida: com ~1 pedido por dia, qualquer estimativa por produto seria chute.")
 
 
-# ═══ 6. QUALIDADE DO CADASTRO ═══
+# ═══ QUALIDADE DO CADASTRO ═══
 def _bloco_cadastro(est):
-    section_title("6. Qualidade do cadastro")
+    section_title("Campos que faltam no cadastro")
     rel = est[(est["qt_estoque_atual"] > 0) | (est["qt_pecas_sessenta_dias"] > 0)].copy()
     prob = {
         "Sem estoque mínimo": rel["qt_estoque_minimo"].isna() | (rel["qt_estoque_minimo"] <= 0),
@@ -361,9 +371,9 @@ def _bloco_cadastro(est):
          "conhecida da regra de risco (estoque acima do mínimo com cobertura entre 30 e 45 dias).")
 
 
-# ═══ 7. GIRANDO DEVAGAR ═══
+# ═══ GIRANDO DEVAGAR ═══
 def _bloco_giro_lento(est):
-    section_title("7. Girando devagar — capital parado")
+    section_title("O que gira devagar — capital parado")
     t = est[est["cod_risco"].isin(["e", "f"]) & (est["qt_estoque_atual"] > 0)].copy()
     if t.empty:
         st.info("Nenhum produto em sobreestoque ou encalhado.")
@@ -401,7 +411,7 @@ def render():
       <div>
         <div class="report-brand">shibari brasil · camada semanal</div>
         <div class="report-title">Estoque <span>&amp;</span> Reposição</div>
-        <div class="report-meta">Do maior problema ao menor · produtos físicos comerciais (insumos e matéria-prima ficam para a próxima leva) · fonte: dbt (az)</div>
+        <div class="report-meta">Quatro áreas na ordem da decisão: compras → cobertura e rupturas → volume e giro → cadastro · produtos físicos comerciais (insumos e matéria-prima ficam para a próxima leva)</div>
       </div>
       {badge_atualizacao(fr) if fr else f'<div class="report-badge">Hoje: <strong>{hoje.strftime("%d/%m/%Y")}</strong></div>'}
     </div>
@@ -419,12 +429,25 @@ def render():
         card("Estoque a custo", brl(est["vl_estoque_custo"].sum()), "todos os produtos físicos comerciais"),
     ])
 
-    _bloco_comprar(d)
-    _bloco_producao(est)
-    _bloco_cobertura(est)
-    _bloco_capital(d)
-    _bloco_rupturas(d)
-    _bloco_cadastro(est)
-    _bloco_giro_lento(est)
+    t_compras, t_cobertura, t_volume, t_cadastro = st.tabs(["Compras", "Cobertura e rupturas", "Volume e giro", "Cadastro"])
+    with t_compras:
+        note("<strong>O que comprar ou produzir agora, e quanto do orçamento de mercadoria isso consome.</strong> Comece pela lista de compra; "
+             "depois veja o que está em risco mas ficou fora dela, a produção própria e o que já foi comprado e ainda não chegou.")
+        _bloco_comprar(d)
+        _bloco_producao(est)
+        _bloco_compras_abertas(d["comp"])
+    with t_cobertura:
+        note("<strong>Vou ficar sem produto antes de a reposição chegar? Onde já faltou?</strong> Primeiro o que ainda vai acontecer (cobertura contra o lead time), "
+             "depois o que já aconteceu (rupturas).")
+        _bloco_cobertura(est)
+        _bloco_rupturas(d)
+    with t_volume:
+        note("<strong>Quanto dinheiro está parado em estoque e com que velocidade ele vira?</strong> Do total, para o giro e o retorno, até a lista do que gira devagar.")
+        _bloco_capital(d)
+        _bloco_giro_lento(est)
+    with t_cadastro:
+        note("<strong>Os dados que alimentam as outras áreas estão completos?</strong> Estoque mínimo, lead time, origem, papel e custo definem o risco e a "
+             "sugestão de compra: campo faltando aqui distorce as áreas anteriores. A correção é no Bling.")
+        _bloco_cadastro(est)
     if fr:
         detalhe_atualizacao(fr)

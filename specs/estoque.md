@@ -18,14 +18,23 @@ Pergunta: **"vou perder venda por ruptura, quanto preciso comprar agora e quanto
 | Lista de compra | `tb_sugestao_reposicao` + regras da rotina `sugestao-compras-reposicao` (3 blocos) |
 | Compras em aberto | `tb_compra` / `tb_agg_compra_produto` |
 
-## Blocos (ordem do maior problema ao menor)
-1. **Comprar agora:** produtos de revenda com risco 🆘 Rompido / 🛑 Urgente e venda em 60 dias > 0, ou ✅ Estável abaixo do mínimo com venda; qtd sugerida, custo, fornecedor, **custo acumulado contra o orçamento disponível do mês** (corte pelo caixa é decisão humana). Produtos do ciclo "Descontinuado/Em Saída" não entram em compra.
-2. **Produção própria abaixo do mínimo** (agrupada por família), separado da revenda.
-3. **Cobertura × lead time por papel** (Core / Complementar / Impulso): dias de cobertura atual e total (com compra pendente) contra o lead time do produto.
-4. **Capital em estoque:** valor a custo por papel × origem, giro anualizado, GMROI e estoque parado (`tb_giro_papel_mes`), com aviso de mês parcial.
-5. **Rupturas:** produtos com mais dias sem estoque no período e classe ABC deles (`tb_estoque_ruptura`).
-6. **Qualidade do cadastro:** sem estoque mínimo, sem lead time, sem origem, "Sem Classificação", sem custo — cada um com contagem e lista, porque o risco depende desses campos.
-7. **Girando devagar** (Encalhado, Sobreestoque, Sem Histórico): alerta para descontinuar/baixar mínimo/ação de marketing, **não** é recomendação de compra. Sobreposição com Gestão de Produtos (baixo giro): aqui só o valor de capital; a ação de vitrine fica lá.
+## Áreas (abas, na ordem do fluxo de decisão — reorganização de 29/09/2026, pedido do Hugo)
+Cada aba abre com uma pergunta de decisão; as análises foram agrupadas por essa pergunta, não por tabela de origem.
+
+1. **Compras** — *o que comprar ou produzir agora, e quanto do orçamento isso consome?*
+   - **Comprar agora (revenda):** `tb_sugestao_reposicao` na ordem de prioridade, custo acumulado contra o orçamento de mercadoria disponível; produtos em risco fora da lista, com o motivo. Ciclos Descontinuado/Em Saída nunca entram.
+   - **Produzir:** produção própria abaixo do mínimo, agrupada por família.
+   - **Compras já feitas:** compras em aberto no Bling; previsão vencida é alertada (conta como reposição a caminho na cobertura).
+2. **Cobertura e rupturas** — *vou ficar sem produto antes da reposição chegar? onde já faltou?*
+   - **Cobertura × lead time** por papel (Core/Complementar/Impulso) e gráfico dos 15 que mais vendem.
+   - **Rupturas:** dias sem estoque por produto na janela escolhida (30 dias, 60 dias ou desde 02/07), só com venda em 60 dias ou curva A/B.
+3. **Volume e giro** — *quanto dinheiro está parado e com que velocidade ele vira?*
+   - **Capital hoje:** valor a custo por papel, parcela em sobreestoque/encalhado.
+   - **Giro e retorno:** giro anualizado, GMROI, estoque parado, por papel × origem e por mês (`tb_giro_papel_mes`).
+   - **O que gira devagar:** lista de encalhados e sobreestoque por valor (alerta, não recomendação de compra; a ação na vitrine fica em Gestão de Produtos).
+4. **Cadastro** — *os dados que alimentam as outras áreas estão completos?* Sem estoque mínimo, lead time, origem, papel, custo ou classificação de risco, com lista por problema.
+
+Acima das abas: três cards de contexto (rompidos, urgentes, estoque a custo).
 
 ## Regras
 - Classificação de risco, cobertura, lead time e ABC: **as definidas em `tb_estoque_analitico`** (ver v1 abaixo); custo base = `vl_custo_cadastro` com fallback `vl_custo_ultima_compra`; não recalcular no Streamlit.
