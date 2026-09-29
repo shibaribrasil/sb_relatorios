@@ -268,19 +268,21 @@ def render():
         posicoes=("cd_produto_nuvemshop", "count"), cliques=("cliques_rateio", "sum"), score_medio=("score", "mean"),
         frios=("faixa", lambda s: int(s.isin(["Frio", "Sem sinal"]).sum())),
         estrelas=("faixa", lambda s: int(s.isin(["Quente", "Estrela"]).sum())),
-        sem_estoque=("tem_estoque", lambda s: int((~s).sum())), vendidas=("unidades_rateio", "sum")).reset_index()
+        sem_estoque=("tem_estoque", lambda s: int((~s).sum())), vendidas=("qt_unidades", "sum")).reset_index()
     prat["pct_cliques"] = prat["cliques"] / max(prat["cliques"].sum(), 1)
     prat["pct_posicoes"] = prat["posicoes"] / max(prat["posicoes"].sum(), 1)
     tabela = prat.rename(columns={"nm_bloco": "Prateleira", "posicoes": "Posições", "cliques": f"Cliques na home ({dias}d)",
                                   "pct_cliques": "% dos cliques", "pct_posicoes": "% das posições", "score_medio": "Score médio",
                                   "frios": "Produtos frios", "estrelas": "Quentes/Estrelas", "sem_estoque": "Sem estoque",
-                                  "vendidas": f"Unidades vendidas ({dias}d)"})
-    cols = ["Prateleira", "Posições", f"Cliques na home ({dias}d)", "% dos cliques", "% das posições", "Score médio", "Produtos frios", "Quentes/Estrelas", "Sem estoque", f"Unidades vendidas ({dias}d)"]
+                                  "vendidas": f"Unidades vendidas pelos produtos ({dias}d)"})
+    cols = ["Prateleira", "Posições", f"Cliques na home ({dias}d)", "% dos cliques", "% das posições", "Score médio", "Produtos frios", "Quentes/Estrelas", "Sem estoque", f"Unidades vendidas pelos produtos ({dias}d)"]
     st.dataframe(tabela[cols], hide_index=True, use_container_width=True, column_config={
         "% dos cliques": st.column_config.NumberColumn(format="percent"), "% das posições": st.column_config.NumberColumn(format="percent"),
-        "Score médio": st.column_config.NumberColumn(format="%.0f")})
+        "Score médio": st.column_config.NumberColumn(format="%.0f"),
+        f"Cliques na home ({dias}d)": st.column_config.NumberColumn(format="%.0f"),
+        f"Unidades vendidas pelos produtos ({dias}d)": st.column_config.NumberColumn(format="%.0f")})
     note("Uma prateleira rende bem quando o <b>% dos cliques</b> é maior que o <b>% das posições</b> que ela ocupa. Cliques na home só existem "
-         "para quem clicou no card da prateleira. Produto que aparece em duas prateleiras tem cliques e vendas divididos entre elas (o GA4 não diz de qual veio). A impressão da home não é registrada para todas as prateleiras, por isso não há CTR.")
+         "para quem clicou no card da prateleira. Produto que aparece em duas prateleiras tem os cliques divididos entre elas (o GA4 não diz de qual veio; a coluna arredonda). As unidades vendidas são as do produto inteiro, sem divisão, e por isso a soma de prateleiras repete produtos. A impressão da home não é registrada para todas as prateleiras, por isso não há CTR.")
 
     # ── 3. Onde erro / onde acerto ───────────────────────────────────────────────────────
     section_title("3 · Onde estou errando e onde estou acertando")

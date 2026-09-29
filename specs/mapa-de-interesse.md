@@ -20,7 +20,7 @@ Cada espaço nobre do site (prateleiras da home) está ocupado pelo produto que 
 - **Score 0–100** = posição percentil dos pontos entre os produtos publicados; 0 pontos = 0 (Sem sinal). Faixas: Sem sinal · Frio (>0) · Morno ≥30 · Quente ≥60 · Estrela ≥85. **Escala relativa ao nosso catálogo** (a distribuição por faixa é parcialmente determinada pelo percentil).
 - **Taxa de carrinho suavizada** = (carrinhos + 20 × média da loja) ÷ (visitas + 20).
 - **Quadrantes** (só produtos com ≥10 visitas): Estrela = score ≥60 e taxa ≥ média; Vitrine que não fecha = score ≥60 e taxa < média; Joia escondida = score <60 e taxa ≥ média; Cão = resto. Demais = "Poucos dados".
-- Cliques e vendas de produto em mais de uma prateleira são **divididos igualmente** entre elas nas somas por prateleira/posição (o GA4 não informa a prateleira do clique).
+- Cliques e vendas de produto em mais de uma prateleira os **cliques** são divididos igualmente entre elas nas somas por prateleira/posição (o GA4 não informa a prateleira do clique); as unidades vendidas na tabela por prateleira são as do produto inteiro (sem divisão), então produto em duas prateleiras aparece nas duas.
 
 ## Seções
 1. A home montada (prateleiras em cartões com foto, posição, faixa, score, visitas, cliques da home, vendas, alerta sem estoque).
