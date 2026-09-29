@@ -40,12 +40,33 @@ def carregar_orcamento():
     return o
 
 
+@st.cache_data(ttl=900)
+def carregar_ga4_campanhas():
+    """Compras do GA4 por campanha de Google pago (fonte google / meio cpc), por mês. O Google liga a sessão à campanha do Ads do lado dele
+    (vinculação GA4-Ads), sem depender do gclid da URL do pedido nem da tabela de cliques: é a 3ª fonte para comparar com os pedidos e
+    com as compras que o próprio Ads reporta. Dataset US, consulta separada."""
+    client = bq.get_client()
+    g = bq.query_df(client, f"""
+        SELECT DATE_TRUNC(s.dt_data, MONTH) AS mes, COALESCE(s.ds_canal_campanha, '(not set)') AS campanha,
+               COUNT(*) AS sessoes, SUM(COALESCE(c.qt_compras, 0)) AS compras, SUM(COALESCE(c.vl_receita, 0)) AS receita
+          FROM `{bq.PROJECT}.dbt_dw_us_az.tb_ga4_sessao` AS s
+          LEFT JOIN (SELECT cd_sessao, COUNT(*) AS qt_compras, SUM(vl_compra) AS vl_receita
+                       FROM `{bq.PROJECT}.dbt_dw_us_az.tb_ga4_compras` GROUP BY cd_sessao) AS c ON s.cd_sessao = c.cd_sessao
+         WHERE LOWER(s.ds_canal_fonte) = 'google' AND LOWER(s.ds_canal_meio) = 'cpc'
+         GROUP BY 1, 2
+    """)
+    g["mes"] = pd.to_datetime(g["mes"])
+    for c in ["sessoes", "compras", "receita"]:
+        g[c] = pd.to_numeric(g[c]).fillna(0.0)
+    return g
+
+
 def _orcamento_meses(orc, meses):
     """Soma do orçamento diário nos dias dos meses escolhidos (só dias que o Ads já tem: o mês corrente vai até o último dia carregado)."""
     return float(orc.loc[orc["dt_data"].dt.to_period("M").isin(meses), "vl_orcamento"].sum())
 
 
-def _campanhas_google(vendas, sel, ponte, perf):
+def _campanhas_google(vendas, sel, ponte, perf, ga4):
     """Uma linha por campanha do Google Ads: custo (Ads) x pedidos e clientes novos atribuídos pelo gclid x faturamento e margem dos pedidos.
     Sem regra de negócio nova: origem/mídia/gclid vêm da tb_atribuicao_pedido; custo, cliques e compras vêm do Ads por campanha."""
     v = vendas[vendas["mes"].dt.to_period("M").isin(sel)]
@@ -61,9 +82,14 @@ def _campanhas_google(vendas, sel, ponte, perf):
     custo = pf.groupby("cd_campanha", as_index=False).agg(nm=("nm_campanha", "last"), custo=("vl_custo", "sum"), cliques=("qt_cliques", "sum"), compras_ads=("qt_conversoes", "sum"))
     g = ag.merge(custo, on="cd_campanha", how="outer")
     g["campanha"] = g["campanha"].fillna(g["nm"])
-    for c in ["pedidos", "novos", "valor", "marg", "custo", "cliques", "compras_ads"]:
+    # GA4: compras por campanha, casadas pelo NOME (o GA4 usa o nome da campanha do Ads); "(not set)" = sem campanha identificada
+    gg = ga4[ga4["mes"].dt.to_period("M").isin(sel)].copy()
+    gg["campanha"] = gg["campanha"].replace({"(not set)": NAO_IDENTIFICADA})
+    gg = gg.groupby("campanha", as_index=False).agg(compras_ga4=("compras", "sum"))
+    g = g.merge(gg, on="campanha", how="outer")
+    for c in ["pedidos", "novos", "valor", "marg", "custo", "cliques", "compras_ads", "compras_ga4"]:
         g[c] = pd.to_numeric(g[c]).fillna(0)
-    g = g[(g["pedidos"] > 0) | (g["custo"] > 0)].sort_values("custo", ascending=False)
+    g = g[(g["pedidos"] > 0) | (g["custo"] > 0) | (g["compras_ga4"] > 0)].sort_values("custo", ascending=False)
     ident = int(g.loc[g["campanha"] != NAO_IDENTIFICADA, "pedidos"].sum())
     return g, ident, int(g["pedidos"].sum())
 
@@ -232,7 +258,12 @@ def render():
         dcamp = None
         st.warning(f"Campanhas indisponíveis: {e}")
     if dcamp is not None:
-        g, ident, total_ped = _campanhas_google(vendas, sel, dcamp["ponte"], dcamp["perf"])
+        try:
+            ga4 = carregar_ga4_campanhas()
+        except Exception as e:
+            ga4 = pd.DataFrame({"mes": pd.to_datetime([]), "campanha": [], "sessoes": [], "compras": [], "receita": []})
+            st.warning(f"Compras do GA4 indisponíveis: {e}")
+        g, ident, total_ped = _campanhas_google(vendas, sel, dcamp["ponte"], dcamp["perf"], ga4)
         if g.empty:
             st.info("Sem custo nem pedidos de Google pago nos meses escolhidos.")
         else:
@@ -241,7 +272,7 @@ def render():
             g["mc_custo"] = g["marg"] / g["custo"].where(g["custo"] > 0)
             g["amostra"] = ["pequena" if n < AMOSTRA_MIN else "ok" for n in g["pedidos"]]
             tot = {"campanha": "Total", "custo": g["custo"].sum(), "cliques": g["cliques"].sum(), "pedidos": g["pedidos"].sum(), "novos": g["novos"].sum(),
-                   "valor": g["valor"].sum(), "marg": g["marg"].sum(), "compras_ads": g["compras_ads"].sum()}
+                   "valor": g["valor"].sum(), "marg": g["marg"].sum(), "compras_ads": g["compras_ads"].sum(), "compras_ga4": g["compras_ga4"].sum()}
             tot["cac"] = tot["custo"] / tot["novos"] if tot["novos"] else None
             tot["roas"] = tot["valor"] / tot["custo"] if tot["custo"] else None
             tot["mc_custo"] = tot["marg"] / tot["custo"] if tot["custo"] else None
@@ -250,14 +281,15 @@ def render():
             st.dataframe(pd.DataFrame({
                 "Campanha": g["campanha"], "Custo (Ads)": g["custo"], "Cliques": g["cliques"], "Pedidos": g["pedidos"], "Clientes novos": g["novos"], "CAC": g["cac"],
                 "Faturamento atribuído": g["valor"], "ROAS real": g["roas"], "Margem de contrib.": g["marg"], "Margem ÷ custo": g["mc_custo"],
-                "Compras (Ads)": g["compras_ads"], "Amostra": g["amostra"],
+                "Compras (Ads)": g["compras_ads"], "Compras (GA4)": g["compras_ga4"], "Amostra": g["amostra"],
             }), hide_index=True, use_container_width=True,
                 column_config={"Campanha": st.column_config.TextColumn(width="large"), "Custo (Ads)": st.column_config.NumberColumn(format="R$ %.0f", width=100),
                                "Cliques": st.column_config.NumberColumn(format="%d", width=70), "Pedidos": st.column_config.NumberColumn(format="%d", width=70),
                                "Clientes novos": st.column_config.NumberColumn(format="%d", width=100), "CAC": st.column_config.NumberColumn(format="R$ %.0f", width=80),
                                "Faturamento atribuído": st.column_config.NumberColumn(format="R$ %.0f", width=140), "ROAS real": st.column_config.NumberColumn(format="%.1f×", width=90),
                                "Margem de contrib.": st.column_config.NumberColumn(format="R$ %.0f", width=130), "Margem ÷ custo": st.column_config.NumberColumn(format="%.1f×", width=110),
-                               "Compras (Ads)": st.column_config.NumberColumn(format="%.0f", width=110), "Amostra": st.column_config.TextColumn(width=80)})
+                               "Compras (Ads)": st.column_config.NumberColumn(format="%.0f", width=110),
+                               "Compras (GA4)": st.column_config.NumberColumn(format="%.0f", width=115), "Amostra": st.column_config.TextColumn(width=80)})
             note(f"<strong>Como ler:</strong> cada pedido de Google pago é ligado à campanha pelo <code>gclid</code> da URL de entrada (cruzado com os cliques do Ads). Neste período, "
                  f"<strong>{ident} de {total_ped} pedidos</strong> ({pct(ident / total_ped if total_ped else None, 0)}) têm campanha identificada; o resto fica em “{NAO_IDENTIFICADA}” "
                  "(clique sem <code>gclid</code>, como no iPhone, ou fora do histórico de cliques). <strong>CAC</strong> = custo da campanha ÷ clientes novos atribuídos a ela (1º pedido do cliente); "
@@ -266,7 +298,11 @@ def render():
                  f"<strong>Amostra pequena</strong> = menos de {AMOSTRA_MIN} pedidos: CAC e ROAS de poucos pedidos oscilam demais, leia como hipótese, não como conclusão. "
                  "O <strong>Remarketing</strong> (e a Marca) fecha a venda de quem já conhecia a loja: CAC baixo ali não quer dizer que a campanha sozinha traz gente nova, e parte do mérito é do "
                  "Shopping, da Pesquisa e do topo de funil, que apresentaram a loja antes (o último clique leva o crédito). Por isso leia o Total e compare campanhas de mesma função. "
-                 "“Compras (Ads)” não bate com “Pedidos” porque o Ads conta conversões que a nossa base não ligou ao <code>gclid</code>.")
+                 "<strong>Três fontes de compras por campanha, com critérios diferentes:</strong> <em>Pedidos</em> = pedidos reais da nossa base ligados pelo <code>gclid</code> da URL de entrada (piso: "
+                 "pedido com <code>gclid</code> que não aparece na tabela de cliques do Ads cai em “não identificada”); <em>Compras (Ads)</em> = o que o Google Ads credita à campanha (modelo dele, inclui "
+                 "conversões que a nossa base não ligou); <em>Compras (GA4)</em> = compras de sessões que o GA4 liga à campanha pela vinculação com o Ads (também é último clique não direto, então "
+                 "conta compras de quem voltou depois). Quando as três divergem muito, como no Shopping, o CAC e o ROAS da linha são um piso, não um veredito. "
+                 "Os últimos ~2 dias do GA4 ainda são reprocessados pelo Google.")
 
     # ═══ POR CANAL ═══
     section_title("De onde vêm os clientes novos")
@@ -282,6 +318,6 @@ def render():
         column_config={"Clientes novos": st.column_config.NumberColumn(width=110), "Já recompraram": st.column_config.NumberColumn(width=120),
                        "Valor médio hoje (R$)": st.column_config.NumberColumn(format="R$ %.2f", width=160),
                        "Investimento medido": st.column_config.NumberColumn(format="R$ %.0f", width=140), "CAC": st.column_config.NumberColumn(format="R$ %.0f", width=80)})
-    note("Origem detectada pela URL de entrada do 1º pedido. \"Investimento medido\" só existe para o <strong>Google pago (cpc)</strong>: as demais origens (orgânico, Shopping gratuito, "
+    note("Origem detectada pela URL de entrada do 1º pedido. \"Investimento medido\" só existe para o <strong>Google pago (cpc)</strong>: as demais origens (Google orgânico, "
          "direto, Instagram, e-mail) aparecem sem custo — Meta/Instagram pago não tem gasto na base (Melhorias Manuais, item 6). O Google inclui todo o gasto da conta, inclusive "
          "campanhas que trazem clientes que a URL não identifica como cpc, então o CAC do Google pago é um <strong>teto</strong>.")
