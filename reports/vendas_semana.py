@@ -31,9 +31,10 @@ def _segunda(serie):
     return serie.dt.normalize() - pd.to_timedelta(serie.dt.weekday, unit="D")
 
 
-def _rotulo(seg):
+def _rotulo(seg, ate=None):
+    """Rótulo da semana; `ate` encurta o fim (semana em andamento vai só até hoje)."""
     seg = pd.Timestamp(seg)
-    dom = seg + pd.Timedelta(days=6)
+    dom = min(seg + pd.Timedelta(days=6), pd.Timestamp(ate)) if ate is not None else seg + pd.Timedelta(days=6)
     iso = seg.isocalendar()
     return f"S{int(iso.week):02d}/{int(iso.year)} · {seg.strftime('%d/%m')}–{dom.strftime('%d/%m')}"
 
@@ -149,7 +150,7 @@ def render():
     """)
 
     semanas = sorted(set(df["semana"]) | {hoje_seg}, reverse=True)
-    seg = pd.Timestamp(st.selectbox("Semana", options=semanas, index=semanas.index(hoje_seg), format_func=lambda s: _rotulo(s) + (" (em andamento)" if s == hoje_seg else "")))
+    seg = pd.Timestamp(st.selectbox("Semana", options=semanas, index=semanas.index(hoje_seg), format_func=lambda s: _rotulo(s, hoje_ts if s == hoje_seg else None) + (" (em andamento, até hoje)" if s == hoje_seg else "")))
     parcial = seg == hoje_seg
     ate = min(seg + pd.Timedelta(days=6), hoje_ts)  # semana em andamento vai até hoje (dia parcial incluso)
     ant_ini = seg - pd.Timedelta(days=7)
@@ -167,7 +168,7 @@ def render():
         return _delta(cur, prev, rot_ant, tipo, fmt if tipo == "rel" else None)
 
     # ═══ NÚMEROS DA SEMANA ═══
-    section_title(f"Semana {_rotulo(seg)}" + (" — até hoje (parcial)" if parcial else ""))
+    section_title(f"Semana {_rotulo(seg, ate)}" + (" — até hoje (parcial)" if parcial else ""))
     t_f, c_f = d("vl_liquido_item")
     t_p, c_p = d("pedidos", fmt=lambda v: f"{int(v)}")
     t_t, c_t = d("ticket", "rel", "r")
@@ -255,7 +256,9 @@ def render():
             card("Entregues no prazo", pct(m["no_prazo"], 0) if m["no_prazo"] is not None else "—",
                  f"{m['n_prazo']} entregas com prazo estimado" if m["n_prazo"] else "sem entregas ainda"),
         ])
-        if sem_dado:
+        if sem_dado and parcial:
+            note("Semana em andamento: o rastreio de expedição e entrega chega com defasagem de ~1–2 semanas, então os indicadores de logística ainda ficam em branco.")
+        elif sem_dado:
             note("<strong>Rastreio ainda não carregado para esta semana:</strong> só "
                  f"{pct(m['cobertura'], 0)} dos pedidos enviados têm data de expedição (o dado de rastreio chega com defasagem de ~1–2 semanas). "
                  "Os indicadores ficam em branco até completar; escolha uma semana mais antiga.", variant="warn")
