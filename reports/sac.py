@@ -29,12 +29,10 @@ TIPO_CARRINHO = "carrinho_abandonado"
 TIPO_CANCELADO = "pedido_cancelado"
 TIPO_RECONTATO = "recontato_cupom"
 TIPO_PROXIMIDADE = "proximidade_pos_entrega"
-JANELA_PROXIMIDADE = 3  # dias: entregas de D-1 a D-3 entram na lista (D-3 é folga de segurança; sai só quando o Robson marca)
-# Carga inicial (pedido do Hugo, 28/09/2026): a lista nasceu com o modelo já rodando, então as recompras entregues nos 30 dias ANTES
-# do lançamento entram uma vez, como backlog, e ficam até serem tratadas (ou até completarem 30 dias de entrega). Depois do lançamento
-# vale só a janela normal de D-1 a D-3. Some sozinho a partir de RETROATIVO_ATE + 30 dias; pode apagar a constante depois disso.
-RETROATIVO_ATE = pd.Timestamp("2026-09-28")
-RETROATIVO_DIAS = 30
+# Proximidade: o registro nasce no dia seguinte à entrega (D+1) e FICA até o Robson tratar — não há prazo para sumir (decisão do Hugo,
+# 28/09/2026: fim de semana, folga ou imprevisto não podem fazer o contato desaparecer). PROXIMIDADE_DESDE = 1ª entrega considerada:
+# 30 dias antes do lançamento da lista (28/09/2026), para já contatar o que ficou para trás.
+PROXIMIDADE_DESDE = pd.Timestamp("2026-08-29")
 DIAS_RECONTATO = 7     # dias depois do 1º contato do SAC (marcado "Já tratei") para o recontato com cupom (decisão do Hugo, 28/09)
 DIAS_PARADO = 10        # mesmo limite usado no Pulso do Dia (decisão de apresentação)
 JANELA_CARRINHO = 15    # dias: carrinho mais velho que isso não vale mais contato
@@ -138,9 +136,9 @@ def carregar_proximidade():
           SELECT r.*, LOWER(r.ds_email_cliente) AS email
             FROM `{az}.tb_pedido_recompra_entregue` r
            WHERE NOT r.fg_teste
-             AND r.dt_entrega >= DATE_SUB(CURRENT_DATE('{FUSO}'), INTERVAL {max(JANELA_PROXIMIDADE + 1, RETROATIVO_DIAS + 1)} DAY)
+             AND r.dt_entrega >= DATE '{PROXIMIDADE_DESDE:%Y-%m-%d}'
         ), tarefa AS (
-          SELECT tipo_tarefa, chave, ds_resultado, fg_feito
+          SELECT tipo_tarefa, chave, ds_resultado, fg_feito, dt_atualizacao
             FROM `{TAB_TAREFAS}`
           QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_tarefa, chave ORDER BY dt_atualizacao DESC) = 1
         ), nao_retomar AS (
@@ -175,17 +173,24 @@ def carregar_proximidade():
           SELECT r.cd_contato, r.cd_codigo_interno
             FROM tarefa t JOIN `{az}.tb_pedido_recompra_entregue` r ON t.tipo_tarefa = '{TIPO_PROXIMIDADE}' AND t.chave = r.cd_codigo_interno
            WHERE t.fg_feito AND COALESCE(t.ds_resultado, '') != 'WhatsApp inválido'
+        ), atendimento AS (
+          -- quando o Robson tratou: 1ª vez que o check foi marcado (histórico); se for anterior ao histórico, a última atualização
+          SELECT t.chave,
+                 COALESCE((SELECT MIN(h.dt_evento) FROM `{TAB_HISTORICO}` h
+                            WHERE h.tipo_tarefa = t.tipo_tarefa AND h.chave = t.chave AND h.fg_feito), t.dt_atualizacao) AS ts_atendimento
+            FROM tarefa t WHERE t.tipo_tarefa = '{TIPO_PROXIMIDADE}' AND t.fg_feito
         )
         SELECT b.cd_codigo_interno, b.cd_pedido_loja, b.cd_contato, b.nm_cliente, b.ds_email_cliente, b.nr_telefone_cliente,
                b.dt_entrega, b.nr_pedido_cliente, b.vl_total_pedido, b.nm_produto_principal, b.fg_entrega_atrasada,
-               b.qt_dias_atraso_entrega,
+               b.qt_dias_atraso_entrega, a.ts_atendimento,
                EXISTS (SELECT 1 FROM nao_retomar n WHERE n.email = b.email
                           AND NOT (n.tipo_tarefa = '{TIPO_PROXIMIDADE}' AND n.chave = b.cd_codigo_interno)) AS fg_nao_retomar,
                EXISTS (SELECT 1 FROM contatado c WHERE c.cd_contato = b.cd_contato
                           AND c.cd_codigo_interno != b.cd_codigo_interno) AS fg_contatado_antes
-          FROM base b
+          FROM base b LEFT JOIN atendimento a ON a.chave = b.cd_codigo_interno
     """)
     df["dt_entrega"] = pd.to_datetime(df["dt_entrega"])
+    df["ts_atendimento"] = pd.to_datetime(df["ts_atendimento"], utc=True).dt.tz_convert(FUSO).dt.tz_localize(None)
     df["vl_total_pedido"] = pd.to_numeric(df["vl_total_pedido"]).fillna(0.0)
     for c in ["fg_entrega_atrasada", "fg_nao_retomar", "fg_contatado_antes"]:
         df[c] = df[c].fillna(False).astype(bool)
@@ -328,17 +333,17 @@ def _lista_recontato(df, cupons, agora=None):
     return el
 
 
-def elegivel_proximidade(df, hoje=None, janela=JANELA_PROXIMIDADE):
+def elegivel_proximidade(df, hoje=None):
     """Regra da lista Proximidade (decisão do Hugo, 28/09/2026): recompra (a base do dbt já garante 2º pedido em diante, entrega
-    confirmada e sem reembolso) entregue de D-1 a D-`janela` — a janela é só folga de segurança: o item some da lista quando o
-    atendente marca "Já tratei" (ou depois de `janela` dias). Exceção única: o backlog da carga inicial (RETROATIVO_*), que fica até ser tratado. Fora: cliente com "Não retomar contato" em qualquer lista e cliente que
-    já teve contato de proximidade em outro pedido. Cliente com mais de um pedido na janela entra uma vez (o mais recente)."""
+    confirmada e sem reembolso) entregue a partir de PROXIMIDADE_DESDE, de D-1 em diante. **Sem prazo para sair**: o registro existe
+    desde o dia seguinte à entrega e continua até o atendente tratar (o "Já tratei" marca o atendimento; o histórico fica). Fora:
+    cliente com "Não retomar contato" em qualquer lista do SAC e cliente que já teve contato de proximidade em outro pedido.
+    Cliente com mais de um pedido pendente entra uma vez (o mais recente); ao tratar esse, o outro sai (já foi contatado)."""
     if df.empty:
         return df
     hoje = (hoje or _agora()).normalize()
     dias = (hoje - df["dt_entrega"]).dt.days
-    retroativo = (dias <= RETROATIVO_DIAS) & (df["dt_entrega"] <= RETROATIVO_ATE)  # backlog da carga inicial (ver constantes)
-    ok = (dias >= 1) & ((dias <= janela) | retroativo) & ~df["fg_nao_retomar"] & ~df["fg_contatado_antes"]
+    ok = (dias >= 1) & (df["dt_entrega"] >= PROXIMIDADE_DESDE) & ~df["fg_nao_retomar"] & ~df["fg_contatado_antes"]
     out = df[ok].assign(dias_entrega=dias[ok])
     return out.sort_values(["dt_entrega", "cd_codigo_interno"], ascending=False).drop_duplicates("cd_contato", keep="first")
 
@@ -348,10 +353,11 @@ def _lista_proximidade(df, hoje=None):
     el = elegivel_proximidade(df, hoje)
     if el.empty:
         return el.assign(chave=pd.Series(dtype=str))
-    el = el.sort_values("dt_entrega").copy()  # o mais antigo primeiro: é o que está mais perto de sair da janela
+    el = el.sort_values("dt_entrega").copy()  # o mais antigo primeiro: é o que está esperando há mais tempo
     el["chave"] = el["cd_codigo_interno"].astype(str)
     el["codigo"] = "#" + el["cd_pedido_loja"].astype(str)
-    el["entregue_txt"] = el["dias_entrega"].map(lambda d: "ontem" if d <= 1 else f"há {int(d)} dias")
+    el["na_lista_desde"] = el["dt_entrega"] + pd.Timedelta(days=1)  # o registro nasce no dia seguinte à entrega
+    el["atendido_em"] = el["ts_atendimento"].dt.normalize()
     el["compra_txt"] = el["nr_pedido_cliente"].map(lambda n: f"{int(n)}ª compra")
     el["whatsapp"] = el.apply(lambda r: msg.link_whatsapp(r["nr_telefone_cliente"], msg.msg_proximidade(
         r["nm_cliente"], r["cd_pedido_loja"], r["nm_produto_principal"], r["nr_pedido_cliente"], r["dias_entrega"],
@@ -631,16 +637,21 @@ def render():
             TIPO_PROXIMIDADE, lst_prox,
             colunas={
                 "Cliente": "nm_cliente", "Pedido": "codigo", "Compra": "compra_txt", "Produto": "nm_produto_principal",
-                "Valor": "vl_total_pedido", "Entregue em": "dt_entrega", "Chegou": "entregue_txt", "WhatsApp": "whatsapp",
+                "Valor": "vl_total_pedido", "Entregue em": "dt_entrega", "Na lista desde": "na_lista_desde", "Atendido em": "atendido_em",
+                "WhatsApp": "whatsapp",
                 JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
             },
             column_config={
                 "WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS,
                 "Entregue em": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                "Na lista desde": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                "Atendido em": st.column_config.DateColumn(format="DD/MM/YYYY"),
             },
             nota="Contato amistoso, sem venda e sem cupom: pergunta como foi a experiência, se o produto cumpriu o que o cliente esperava "
-                 "e se ele tem algum feedback. Entra quem fez a <b>2ª compra ou mais</b> e teve a entrega confirmada de <b>ontem até "
-                 f"{JANELA_PROXIMIDADE} dias atrás</b> (a janela é só folga: o item sai da lista quando você marca \"Já tratei\"). "
+                 "e se ele tem algum feedback. Entra quem fez a <b>2ª compra ou mais</b> e teve a entrega confirmada, "
+                 "a partir do dia seguinte à entrega (\"Na lista desde\"). <b>O registro não some por tempo</b>: continua aqui até você "
+                 "tratar (fim de semana e folga não fazem o contato desaparecer); ao marcar \"Já tratei\" fica registrada a data em "
+                 "\"Atendido em\" (ative \"Mostrar também os já tratados\" para ver o histórico). O mais antigo aparece primeiro. "
                  "Cada cliente recebe esse contato <b>uma vez só</b>: se já foi contatado em outro pedido, ou tem \"Não retomar contato\" "
                  "em qualquer lista do SAC, não aparece. Entrega que atrasou leva uma mensagem que reconhece o atraso (ver Obs.). "
                  "O que o cliente responder vai na <b>Observação SAC</b>; se for reclamação, escolha \"Reclamação — abrir tratativa\". "
