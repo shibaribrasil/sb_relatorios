@@ -8,11 +8,7 @@ arquivo em reports/ + entrada aqui.
 """
 import streamlit as st
 
-from reports import canais_unit_economics, clientes, estoque, gestao_produtos, mapa_interesse, produtos_mix, pulso_dia, resultado_dre, sac, site_funil, trafego_conteudo, vendas_margem, vendas_semana
-
-# Google Ads fica oculto do menu por decisão do Hugo (22/set/2026) — ainda sobre tabelas rpt antigas,
-# não a `az`. O arquivo continua em reports/, só não entra em `pages`. Estoque foi refeito sobre a `az` (29/09/2026).
-# from reports import google_ads
+from reports import canais_unit_economics, clientes, estoque, gestao_produtos, giro_semanal, google_ads, mapa_interesse, produtos_mix, pulso_dia, resultado_dre, sac, site_funil, trafego_conteudo, vendas_margem, vendas_semana
 
 st.set_page_config(
     page_title="Relatórios — Shibari Brasil",
@@ -29,6 +25,8 @@ pages = {
     ],
     "Semanal": [
         st.Page(vendas_semana.render, title="Vendas da Semana", icon="📅", url_path="semana"),
+        st.Page(google_ads.render, title="Google Ads", icon="📣", url_path="google-ads"),
+        st.Page(giro_semanal.render, title="Giro Semanal", icon="🔄", url_path="giro-semanal"),
         st.Page(mapa_interesse.render, title="Mapa de Interesse", icon="🗺️", url_path="mapa-interesse"),
         st.Page(estoque.render, title="Estoque & Reposição", icon="🏷️", url_path="estoque"),
     ],
@@ -43,9 +41,6 @@ pages = {
         st.Page(canais_unit_economics.render, title="Canais & Unit Economics", icon="🧮", url_path="canais"),
         st.Page(trafego_conteudo.render, title="Tráfego & Conteúdo", icon="🧭", url_path="trafego"),
     ],
-    # "Marketing": [
-    #     st.Page(google_ads.render, title="Google Ads", icon="📊", url_path="google-ads"),
-    # ],
 }
 
 pg = st.navigation(pages)

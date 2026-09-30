@@ -14,7 +14,8 @@ sb_relatorios/
     design.py            # CSS e componentes (card, section_title, note, brl, pct) sobre o theme.py — compartilhado por todo relatório
     bigquery.py           # client BigQuery e helpers de query compartilhados
   reports/
-    google_ads.py         # lógica e layout do relatório de Google Ads
+    google_ads.py         # Google Ads semanal (sobre a az; ver specs/google-ads.md)
+    giro_semanal.py       # Giro Semanal: mídia → acesso → venda, com norteadores (ver specs/giro-semanal.md)
     vendas_margem.py      # Vendas & Margem de Contribuição (lê dbt_dw_az.tb_pedido; sem tabela rpt)
     estoque.py
     (futuro) pulso do dia, clientes, produtos, marketing
