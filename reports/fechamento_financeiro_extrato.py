@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from common import bigquery as bq
-from common.design import COLORS, inject_css, card, render_cards, section_title, note, brl, style_color, demonstrativo
+from common.design import COLORS, inject_css, card, render_cards, section_title, note, brl, style_color, demonstrativo, regras_aplicadas
 from common.frescor import carregar_frescor, detalhe_atualizacao
 from reports.fechamento_financeiro import (carregar_caixa, carregar_saidas, cabecalho, seletor_mes,
                                            rotulo_mes, tabela_saidas_mes)
@@ -144,3 +144,12 @@ def render():
          "O dinheiro que fica no saldo do Nuvem Pago não aparece no extrato até ser sacado.")
     if fr:
         detalhe_atualizacao(fr)
+    regras_aplicadas([
+        ("Visão", "financeira, regime de <strong>caixa</strong> — <strong>v2: entradas reais do extrato da conta PJ</strong>. Mesmas saídas da v1."),
+        ("Entradas", "repasses que caíram na conta PJ: Nuvem Pago (instituição \"FITS IP\") e Mercado Pago (conta do CNPJ da loja), menos estornos pagos a clientes pela conta."),
+        ("Não entram", "aporte de sócio (mostrado à parte), transferência a sócio (reembolsa despesas que já estão no Bling) e transferência entre contas da própria loja."),
+        ("Saídas", "contas a pagar do Bling pela data da baixa (sem baixa, o vencimento), até hoje; iguais às da v1."),
+        ("Classificação", "por regra de texto da descrição do banco; lançamento não reconhecido cai em \"outras entradas\" ou \"pagamento por Pix\" e deve ser revisado."),
+        ("Diferença v1 − v2", "entrada líquida estimada pelos pedidos − entrada real na conta: saldo parado no gateway, prazo de recebimento e descontos no saldo explicam a diferença."),
+        ("Limites", "só existem os meses com extrato importado (CSV do banco, importação manual), desde 09/2026; o dinheiro no saldo do Nuvem Pago só aparece quando é sacado."),
+    ], titulo="Regras aplicadas — v2 (extrato da conta PJ)")

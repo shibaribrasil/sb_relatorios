@@ -366,3 +366,14 @@ def demonstrativo(linhas, colunas, rotulo_coluna="Linha", casas=0, ocultar_zerad
       <table style="width:100%;border-collapse:collapse;font-family:inherit">
         <thead><tr>{cab}</tr></thead><tbody>{''.join(corpo)}</tbody>
       </table></div>""")
+
+
+def regras_aplicadas(itens, titulo="Regras aplicadas nesta página"):
+    """Resumo objetivo das regras de cálculo, no fim da página. `itens`: lista de (tema, regra em HTML curto)."""
+    C = COLORS
+    lis = "".join(
+        f'<li style="margin:0 0 6px 0"><strong style="color:{C["text"]}">{tema}:</strong> {regra}</li>' for tema, regra in itens)
+    section_title(titulo)
+    st.html(f'<div style="border:1px solid {C["border"]};border-left:4px solid {C["primary"]};border-radius:8px;'
+            f'background:{C["bg_secondary"]};padding:14px 18px;font-size:13px;color:{C["text_secondary"]};line-height:1.5">'
+            f'<ul style="margin:0;padding-left:18px">{lis}</ul></div>')

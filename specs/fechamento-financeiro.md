@@ -48,3 +48,6 @@ Pergunta: **quanto dinheiro entrou e saiu de fato no mês, e quanto sobrou?** É
 - Prazo de recebimento do cartão no Nuvem Pago é o do cadastro do Bling (2 dias), a confirmar.
 - A classificação do extrato é por texto do banco; lançamento novo de tipo desconhecido cai em `outras_entradas`/`pagamento_pix` e deve ser revisado.
 - Mês corrente parcial.
+
+## Tela
+Demonstrativos com cor por tipo de linha (`design.demonstrativo`: barra = tipo, número = sinal). No fim de cada página, bloco **"Regras aplicadas"** (`design.regras_aplicadas`) com o resumo objetivo das regras daquela versão — manter alinhado com esta spec ao mudar qualquer regra.

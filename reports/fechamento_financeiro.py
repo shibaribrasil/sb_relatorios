@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from common import bigquery as bq
-from common.design import COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct, demonstrativo
+from common.design import COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct, demonstrativo, regras_aplicadas
 from common.frescor import carregar_frescor, badge_atualizacao, detalhe_atualizacao, alerta_atraso
 from reports.vendas_margem import _hoje_brt
 
@@ -291,3 +291,12 @@ def render():
          "não quando o dinheiro é sacado para a conta PJ (isso é a v2). Mês corrente parcial.")
     if fr:
         detalhe_atualizacao(fr)
+    regras_aplicadas([
+        ("Visão", "financeira, regime de <strong>caixa</strong> — <strong>v1: entradas estimadas pelos pedidos</strong>. Entra quando o dinheiro fica disponível no gateway; sai quando a conta é paga."),
+        ("Entradas", "pedidos válidos; vendas (produtos líquidos de desconto + frete pago) menos a taxa que o gateway retém na venda."),
+        ("Data e origem do recebimento", "loja Nuvemshop: origem, meio e data de pagamento da Nuvemshop; outras lojas (marketplace): forma de pagamento do Bling. Data = pagamento do cliente + prazo (Nuvem Pago: Pix 0, cartão 2, boleto 2 dias; Mercado Pago: Pix 0, cartão 0, boleto 3)."),
+        ("Reembolsos", "parcial sai no mês em que aconteceu; pedido cancelado ou estornado por inteiro não entra."),
+        ("Saídas", "contas a pagar do Bling pela <strong>data da baixa</strong> (sem baixa, o vencimento), só até hoje. Tudo entra: mercadoria, fatura de frete, mídia (Google pago em M+1), investimento, suprimentos. Lançamento repetido (mesmo mês de pagamento e de competência, fornecedor e valor) conta uma vez; conta apagada no Bling não entra."),
+        ("Resultado de caixa", "entrada líquida − saídas. Mês negativo por compra grande não é ajustado."),
+        ("Limites", "desde 08/2026; gasto não lançado no Bling não existe aqui; o saldo parado no Nuvem Pago não aparece (ver v2, extrato); prazo do cartão a confirmar; mês corrente parcial."),
+    ], titulo="Regras aplicadas — v1 (estimado pelos pedidos)")

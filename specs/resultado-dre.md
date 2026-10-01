@@ -56,3 +56,6 @@ Substitui, para leitura gerencial, a `tb_resultado_final` (visão híbrida de ca
 
 ## Ponto de equilíbrio
 Faturamento necessário no mês = (despesas operacionais + mídia) ÷ (margem de contribuição ÷ faturamento). Calculado sobre a margem % do período; mostra também o faturamento realizado contra esse número.
+
+## Tela (01/10/2026)
+Demonstrativo com cor por tipo de linha (`design.demonstrativo`) e, no fim da página, bloco **"Regras aplicadas"** (`design.regras_aplicadas`) — manter alinhado com esta spec.

@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from common import bigquery as bq
-from common.design import COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct, demonstrativo
+from common.design import COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct, demonstrativo, regras_aplicadas
 from common.frescor import carregar_frescor, badge_atualizacao, detalhe_atualizacao, alerta_atraso
 from reports.vendas_margem import _hoje_brt
 
@@ -180,3 +180,13 @@ def render():
          "então o resultado é um <strong>teto</strong>. A mídia de Meta só existe quando é lançada no Bling. Imposto 0% até haver CNPJ; embalagem é estimada.")
     if fr:
         detalhe_atualizacao(fr)
+    regras_aplicadas([
+        ("Visão", "gerencial, regime de <strong>competência</strong>: receita no mês do pedido, despesa no mês de competência do Bling. Para o dinheiro que entrou e saiu, ver Fechamento Financeiro."),
+        ("Vendas", "pedidos válidos (pagos, não cancelados); faturamento = produtos líquidos de desconto + frete pago pelo cliente."),
+        ("Margem de contribuição", "receita líquida + resultado de frete (pago − real) − CMV − taxa real de pagamento − embalagem estimada (R$ 2,50/pedido) − imposto (0% hoje) − reembolsos no mês em que aconteceram."),
+        ("Mídia", "Google Ads pelo consumo do mês (dados do próprio Ads); Meta e outras pelo lançamento no Bling."),
+        ("Despesas", "contas a pagar do Bling por competência (paga, atrasada ou em aberto), sem meses futuros; conta apagada no Bling não entra."),
+        ("Fora do resultado", "compra de mercadoria (o CMV já está na margem), frete lançado (o frete real já está na margem), Google Ads lançado (usa-se o do Ads) e duplicados; investimentos e suprimentos aparecem só como memo."),
+        ("Resultado", "operacional, antes de imposto. Ponto de equilíbrio = (mídia + despesas) ÷ (margem ÷ faturamento)."),
+        ("Limites", "histórico desde 08/2026; despesa não lançada no Bling não existe aqui; mês corrente é parcial."),
+    ])
