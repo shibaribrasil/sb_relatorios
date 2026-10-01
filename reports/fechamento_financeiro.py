@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from common import bigquery as bq
-from common.design import COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct
+from common.design import COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct, demonstrativo
 from common.frescor import carregar_frescor, badge_atualizacao, detalhe_atualizacao, alerta_atraso
 from reports.vendas_margem import _hoje_brt
 
@@ -148,27 +148,25 @@ def tabela_saidas_mes(s, mes):
     })
 
 
-def _demonstrativo(d):
+def _linhas_caixa(d):
+    """Demonstrativo de caixa por mês, com o tipo de cada linha (cor)."""
     linhas = [
-        ("Vendas recebidas (produtos líquidos + frete pago)", "vl_faturamento_recebido", 1),
-        ("(−) Taxa de pagamento (retida na venda)", "vl_taxa", -1),
-        ("= Recebido dos pedidos", "vl_entrada_v1", 1),
-        ("(−) Reembolsos (no mês em que aconteceram)", "vl_reembolso_v1", -1),
-        ("= Entrada líquida", "vl_entrada_liquida_v1", 1),
-    ] + [(f"(−) {n}", c, -1) for n, c in LINHAS_SAIDA] + [
-        ("= Total de saídas", "vl_saida_total", -1),
-        ("= Resultado de caixa", "vl_resultado_caixa_v1", 1),
+        ("(+) Vendas recebidas (produtos líquidos + frete pago)", "entrada", "vl_faturamento_recebido", 1),
+        ("(−) Taxa de pagamento (retida na venda)", "saida", "vl_taxa", -1),
+        ("= Recebido dos pedidos", "subtotal", "vl_entrada_v1", 1),
+        ("(−) Reembolsos (no mês em que aconteceram)", "saida", "vl_reembolso_v1", -1),
+        ("= Entrada líquida", "subtotal", "vl_entrada_liquida_v1", 1),
+    ] + [(f"(−) {n}", "saida", c, -1) for n, c in LINHAS_SAIDA] + [
+        ("= Total de saídas", "subtotal", "vl_saida_total", -1),
+        ("= Resultado de caixa", "resultado", "vl_resultado_caixa_v1", 1),
     ]
-    out = {"Linha": [n for n, _, _ in linhas]}
-    for _, r in d.iterrows():
-        out[rotulo_mes(r["dt_mes"], r["fg_mes_parcial"])] = [sinal * float(r[col]) + 0.0 for _, col, sinal in linhas]
-    return pd.DataFrame(out)
+    return [(n, tipo, [sinal * float(v) for v in d[col]]) for n, tipo, col, sinal in linhas]
 
 
 def _grafico_meses(d):
     x = [rotulo_mes(m, p) for m, p in zip(d["dt_mes"], d["fg_mes_parcial"])]
     fig = go.Figure()
-    fig.add_bar(x=x, y=d["vl_entrada_liquida_v1"], name="Entrada líquida", marker_color=METRIC_COLORS["receita"],
+    fig.add_bar(x=x, y=d["vl_entrada_liquida_v1"], name="Entrada líquida", marker_color=COLORS["success"],
                 hovertemplate="%{x}<br>Entradas R$ %{y:,.0f}<extra></extra>")
     fig.add_bar(x=x, y=-d["vl_saida_total"], name="Saídas", marker_color=COLORS["danger"],
                 hovertemplate="%{x}<br>Saídas R$ %{y:,.0f}<extra></extra>")
@@ -245,11 +243,8 @@ def render():
     section_title("Mês a mês")
     with st.container(border=True):
         st.plotly_chart(_grafico_meses(d), use_container_width=True)
-    t = _demonstrativo(d)
-    cfg = {c: st.column_config.NumberColumn(format="R$ %.0f", width=130) for c in t.columns if c != "Linha"}
-    cfg["Linha"] = st.column_config.TextColumn(width=360)
-    st.dataframe(t, hide_index=True, use_container_width=True, column_config=cfg, height=38 + 35 * len(t))
-    note("Saídas em negativo. As saídas são o contas a pagar do Bling pela <strong>data da baixa</strong> (quando não há baixa, o vencimento), só até hoje; "
+    demonstrativo(_linhas_caixa(d), [rotulo_mes(m, p) for m, p in zip(d["dt_mes"], d["fg_mes_parcial"])], ocultar_zeradas=True)
+    note("Verde = entra, vermelho = sai (em negativo), azul = subtotais; o resultado fica verde ou vermelho pelo sinal. Linhas zeradas em todos os meses ficam ocultas. As saídas são o contas a pagar do Bling pela <strong>data da baixa</strong> (quando não há baixa, o vencimento), só até hoje; "
          "o mesmo gasto lançado duas vezes (mesmo mês de pagamento e de competência, fornecedor e valor) conta uma vez. Reembolso parcial sai no mês em que aconteceu; pedido cancelado ou estornado por inteiro não entra.")
 
     section_title("Ponte com a visão gerencial (DRE)")

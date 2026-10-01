@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from common import bigquery as bq
-from common.design import inject_css, card, render_cards, section_title, note, brl
+from common.design import COLORS, inject_css, card, render_cards, section_title, note, brl, style_color, demonstrativo
 from common.frescor import carregar_frescor, detalhe_atualizacao
 from reports.fechamento_financeiro import (carregar_caixa, carregar_saidas, cabecalho, seletor_mes,
                                            rotulo_mes, tabela_saidas_mes)
@@ -43,17 +43,19 @@ def carregar_extrato():
 
 
 def _comparativo(r):
-    """v1 (estimado pelos pedidos) × v2 (caiu na conta), por origem."""
-    linhas = [
-        ("Nuvem Pago", r["vl_entrada_v1_nuvem_pago"], r["vl_entrada_v2_nuvem_pago"]),
-        ("Mercado Pago", r["vl_entrada_v1_mercado_pago"], r["vl_entrada_v2_mercado_pago"]),
-        ("Outras origens (Pagamentos Personalizados, Pix direto...)", r["vl_entrada_v1_outras"], 0.0),
-        ("(−) Reembolsos / estornos", -r["vl_reembolso_v1"], -r["vl_estorno_v2"]),
-        ("= Entrada líquida", r["vl_entrada_liquida_v1"], r["vl_entrada_liquida_v2"]),
+    """v1 (estimado pelos pedidos) × v2 (caiu na conta), por origem — linhas com tipo (cor)."""
+    def l(rot, tipo, v1, v2):
+        v1, v2 = float(v1 or 0), float(v2 or 0)
+        return (rot, tipo, [v1, v2, v1 - v2])
+    return [
+        l("(+) Nuvem Pago", "entrada", r["vl_entrada_v1_nuvem_pago"], r["vl_entrada_v2_nuvem_pago"]),
+        l("(+) Mercado Pago", "entrada", r["vl_entrada_v1_mercado_pago"], r["vl_entrada_v2_mercado_pago"]),
+        l("(+) Outras origens (Pagamentos Personalizados, Pix direto...)", "entrada", r["vl_entrada_v1_outras"], 0.0),
+        l("(−) Reembolsos / estornos", "saida", -float(r["vl_reembolso_v1"] or 0), -float(r["vl_estorno_v2"] or 0)),
+        l("= Entrada líquida", "subtotal", r["vl_entrada_liquida_v1"], r["vl_entrada_liquida_v2"]),
+        l("(−) Saídas (contas pagas no Bling)", "saida", -float(r["vl_saida_total"] or 0), -float(r["vl_saida_total"] or 0)),
+        l("= Resultado de caixa", "resultado", r["vl_resultado_caixa_v1"], r["vl_resultado_caixa_v2"]),
     ]
-    t = pd.DataFrame(linhas, columns=["Origem", "v1 — estimado pelos pedidos", "v2 — caiu na conta PJ"])
-    t["v1 − v2"] = t["v1 — estimado pelos pedidos"] - t["v2 — caiu na conta PJ"]
-    return t
 
 
 def render():
@@ -102,9 +104,7 @@ def render():
          "Transferência a sócio também não é saída aqui: ela reembolsa despesas pagas no cartão pessoal, que já estão no Bling como contas pagas.")
 
     section_title("Estimado (v1) × caiu na conta (v2)")
-    t = _comparativo(r)
-    st.dataframe(t, hide_index=True, use_container_width=True,
-                 column_config={c: st.column_config.NumberColumn(format="R$ %.2f") for c in t.columns if c != "Origem"})
+    demonstrativo(_comparativo(r), ["v1 — estimado pelos pedidos", "v2 — caiu na conta PJ", "v1 − v2"], rotulo_coluna="Origem", casas=2, colunas_neutras=(2,))
     note("<strong>Por que divergem:</strong> (1) <strong>saldo parado no gateway</strong> — a venda só vira dinheiro na conta quando há saque/repasse do Nuvem Pago; "
          "(2) <strong>prazo</strong> — cartão pago no fim do mês cai no mês seguinte; "
          "(3) <strong>descontos no saldo do gateway</strong> — estorno ou fatura debitados direto no Nuvem Pago reduzem o repasse sem passar pelo Bling; "
@@ -117,7 +117,9 @@ def render():
         "Descrição do banco": xm["ds_descricao"],
         "Valor": xm["vl_lancamento"],
     })
-    st.dataframe(tx, hide_index=True, use_container_width=True, column_config={"Valor": st.column_config.NumberColumn(format="R$ %.2f")})
+    cor_valor = lambda v: f"color: {COLORS['success'] if v > 0 else COLORS['danger']}"
+    st.dataframe(style_color(tx.style, cor_valor, ["Valor"]), hide_index=True, use_container_width=True,
+                 column_config={"Valor": st.column_config.NumberColumn(format="R$ %.2f")})
     resumo = xm.groupby("ds_classe")["vl_lancamento"].agg(["count", "sum"]).reset_index()
     resumo["ds_classe"] = resumo["ds_classe"].map(ROTULO_CLASSE).fillna(resumo["ds_classe"])
     resumo.columns = ["Classe", "Lançamentos", "Total"]
