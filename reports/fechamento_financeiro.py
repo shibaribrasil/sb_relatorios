@@ -354,8 +354,8 @@ def render():
             "Valor": pv["vl_valor"],
             "Conta?": pv["ds_tratamento"].map({"saida": "sim", "excluido_duplicado": "não (duplicado)"}),
         })
-        amarelo = lambda _: f"background-color: {COLORS['warning_bg']}; color: {COLORS['text']}"
-        st.dataframe(style_color(tp.style, amarelo, list(tp.columns)), hide_index=True, use_container_width=True,
+        amarelo = lambda _: f"color: {COLORS['warning']}"
+        st.dataframe(style_color(tp.style, amarelo, ["Valor"]), hide_index=True, use_container_width=True,
                      column_config={"Valor": st.column_config.NumberColumn(format="R$ %.2f")})
         note("Só o que já está lançado no Bling e ainda não teve baixa, com vencimento do dia seguinte a hoje até o fim do 3º mês à frente. "
              "Gasto recorrente ainda não lançado (pró-labore, Google Ads do mês, assinaturas de 2027) não aparece: quanto mais longe o mês, mais incompleto.")
