@@ -43,6 +43,7 @@ Substitui, para leitura gerencial, a `tb_resultado_final` (visão híbrida de ca
 | Caixas e Embalagens, Materiais de Envio | suprimentos | **Não** (memo) — a embalagem já entra estimada na margem; soma dupla |
 
 - **Duplicados (regra):** o Bling tem o mesmo gasto lançado duas vezes por mês (um com o nome antigo, um com o novo; ex.: "Bling" e "Plataforma ERP (Bling)", R$ 200). Mesmo mês de competência + mesmo fornecedor + mesmo valor = **1 só conta** (`row_number`, preferindo o Pago). Referência 29/09: 24 grupos, ~R$ 3,1 mil de excedente (jul–out). Os excluídos ficam visíveis em `tb_despesa_dre` (`fg_duplicado_provavel`) e como coluna do mês (`vl_excl_duplicado`).
+- **Contas apagadas no Bling (01/10/2026):** a origem real dos "duplicados" eram lançamentos já **excluídos no Bling** que continuavam no BigQuery (o extrator nunca apagava). Desde 01/10 o `tb_contas_pagar` mantém só as contas da última listagem completa (169 lançamentos, R$ 20,3 mil, saíram). Com isso a regra de duplicados não encontra mais nada (ago e set: R$ 0) e fica como rede de segurança.
 - **Situação não importa:** competência conta Pago, Atrasado e Em Aberto (despesa incorrida). Meses futuros ficam de fora; o **mês corrente** entra com o que já foi lançado e é rotulado "em andamento" (receita parcial × despesa fixa cheia).
 - **Reconciliação:** para cada mês, total de contas a pagar = considerado + excluído por motivo (mercadoria, frete, Google Ads, suprimentos, investimento, duplicado). Teste singular no dbt.
 
