@@ -63,10 +63,11 @@ def carregar_entradas():
     client = bq.get_client()
     e = bq.query_df(client, f"""
         SELECT cd_codigo_interno, cd_pedido_nuvemshop, nm_loja, dt_pedido, ds_origem_recebimento, ds_meio_recebimento,
-               dt_pagamento_venda, qt_dias_recebimento, dt_recebimento, vl_faturamento, vl_taxa, vl_recebido, vl_reembolso, dt_reembolso
+               dt_pagamento_venda, qt_dias_recebimento, dt_recebimento, dt_recebimento_regra, fg_excecao_recebimento, vl_faturamento, vl_taxa, vl_recebido, vl_reembolso, dt_reembolso
           FROM `{bq.PROJECT}.dbt_dw_az.tb_caixa_entrada_pedido`
          WHERE dt_recebimento >= DATE '2026-08-01' OR dt_reembolso >= DATE '2026-08-01'""")
-    for c in ("dt_pedido", "dt_pagamento_venda", "dt_recebimento", "dt_reembolso"):
+    e["fg_excecao_recebimento"] = e["fg_excecao_recebimento"].fillna(False).astype(bool)
+    for c in ("dt_pedido", "dt_pagamento_venda", "dt_recebimento", "dt_recebimento_regra", "dt_reembolso"):
         e[c] = pd.to_datetime(e[c])
     for c in ("vl_faturamento", "vl_taxa", "vl_recebido", "vl_reembolso", "qt_dias_recebimento"):
         e[c] = pd.to_numeric(e[c]).fillna(0.0)
@@ -236,6 +237,11 @@ def render():
             "Vendas": st.column_config.NumberColumn(format="R$ %.2f"), "Taxa": st.column_config.NumberColumn(format="R$ %.2f"),
             "Recebido": st.column_config.NumberColumn(format="R$ %.2f"), "% do recebido": st.column_config.NumberColumn(format="percent"),
         })
+    exc = em[em["fg_excecao_recebimento"]] if not em.empty else em
+    if not exc.empty:
+        lista = ", ".join(f"{p} (regra: {d:%d/%m})" for p, d in zip(exc["cd_pedido_nuvemshop"].fillna("—"), exc["dt_recebimento_regra"]))
+        note(f"<strong>Exceção de fechamento:</strong> {len(exc)} pedido(s) feitos em setembro com recebimento em outubro foram contados como recebidos em 30/09 "
+             f"({brl(float(exc['vl_recebido'].sum()))}): {lista}. Decisão de 01/10/2026, só para o fechamento de setembro; de outubro em diante vale a data de recebimento.", variant="warn")
     note("Pedido da loja Nuvemshop: origem e meio vêm da Nuvemshop (o Bling marca tudo como \"[Nuvem] PIX\"); pedidos de outras lojas (marketplace) usam a forma de pagamento do Bling. "
          "Data de recebimento = dia em que o cliente pagou + prazo da origem × meio (Nuvem Pago: Pix 0, cartão 2, boleto 2 dias). "
          "<strong>O prazo do cartão é o do cadastro do Bling e precisa ser confirmado.</strong> É estimativa: o que caiu de fato na conta está na v2 (extrato).")
@@ -295,6 +301,7 @@ def render():
         ("Visão", "financeira, regime de <strong>caixa</strong> — <strong>v1: entradas estimadas pelos pedidos</strong>. Entra quando o dinheiro fica disponível no gateway; sai quando a conta é paga."),
         ("Entradas", "pedidos válidos; vendas (produtos líquidos de desconto + frete pago) menos a taxa que o gateway retém na venda."),
         ("Data e origem do recebimento", "loja Nuvemshop: origem, meio e data de pagamento da Nuvemshop; outras lojas (marketplace): forma de pagamento do Bling. Data = pagamento do cliente + prazo (Nuvem Pago: Pix 0, cartão 2, boleto 2 dias; Mercado Pago: Pix 0, cartão 0, boleto 3)."),
+        ("Exceção de set/2026", "pedidos feitos até 30/09/2026 com recebimento em outubro (cartão/boleto do fim do mês) contam como recebidos em 30/09; de outubro em diante vale a data de recebimento."),
         ("Reembolsos", "parcial sai no mês em que aconteceu; pedido cancelado ou estornado por inteiro não entra."),
         ("Saídas", "contas a pagar do Bling pela <strong>data da baixa</strong> (sem baixa, o vencimento), só até hoje. Tudo entra: mercadoria, fatura de frete, mídia (Google pago em M+1), investimento, suprimentos. Lançamento repetido (mesmo mês de pagamento e de competência, fornecedor e valor) conta uma vez; conta apagada no Bling não entra."),
         ("Resultado de caixa", "entrada líquida − saídas. Mês negativo por compra grande não é ajustado."),
