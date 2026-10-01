@@ -314,7 +314,7 @@ _DEMO_TIPOS = {
     "saida":     {"barra": COLORS["danger"], "valor": COLORS["danger"], "fundo": COLORS["bg"], "peso": 400, "rotulo": COLORS["text"]},
     "subtotal":  {"barra": COLORS["primary"], "valor": COLORS["primary_dark"], "fundo": COLORS["primary_light"], "peso": 700, "rotulo": COLORS["primary_dark"]},
     "resultado": {"barra": COLORS["primary_dark"], "valor": None, "fundo": None, "peso": 800, "rotulo": COLORS["text"]},
-    "previsto":  {"barra": COLORS["warning"], "valor": COLORS["warning"], "fundo": COLORS["warning_bg"], "peso": 700, "rotulo": COLORS["warning"]},
+    "previsto":  {"barra": COLORS["warning"], "valor": COLORS["warning"], "fundo": COLORS["bg"], "peso": 700, "rotulo": COLORS["text"]},
 }
 _DEMO_LEGENDA = [("entrada", "Entrada"), ("saida", "Saída"), ("subtotal", "Subtotal"), ("resultado", "Resultado / saldo")]
 
@@ -326,13 +326,27 @@ def demonstrativo(linhas, colunas, rotulo_coluna="Linha", casas=0, ocultar_zerad
     a `colunas`. Saídas já vêm negativas (o sinal é do dado). `ocultar_zeradas` some com entradas/saídas zeradas em
     todas as colunas (subtotais e resultado ficam sempre). `colunas_neutras`: índices de colunas sem cor de sinal
     (ex.: uma coluna de diferença, que não é ganho nem perda). `colunas_previstas`: índices de colunas de valores
-    PREVISTOS (ainda não aconteceram) — fundo amarelo e números em âmbar, sem cor de sinal."""
+    PREVISTOS (ainda não aconteceram) — números em âmbar (sem cor de sinal), fundo normal da linha."""
     C = COLORS
-    th = (f"padding:8px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;"
-          f"color:{C['text_secondary']};background:{C['bg_secondary']};border-bottom:1px solid {C['border']};white-space:nowrap")
-    cab = f'<th style="{th};text-align:left;position:sticky;left:0;z-index:2">{rotulo_coluna}</th>' + "".join(
-        f'<th style="{th};text-align:right' + (f";background:{C['warning_bg']};color:{C['warning']}" if k in colunas_previstas else "") + f'">{c}</th>'
+    th = (f"padding:8px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;vertical-align:bottom;"
+          f"color:{C['text_secondary']};background:{C['bg_secondary']};border-bottom:1px solid {C['border']}")
+
+    def _titulo(c):
+        """Título em 2 linhas de altura fixa: principal em cima, qualificação embaixo ('10/2026 (a pagar)' ->
+        '10/2026' / 'a pagar'; 'v1 — estimado' -> 'v1' / 'estimado'). Sem qualificação, a 2ª linha fica vazia."""
+        m = re.match(r"^(.*?)\s*\((.*)\)\s*$", c) or re.match(r"^(.*?)\s+—\s+(.*)$", c)
+        principal, sub = (m.group(1), m.group(2)) if m else (c, "")
+        return (f'<div style="white-space:nowrap">{principal}</div>'
+                f'<div style="font-size:10px;font-weight:600;text-transform:none;letter-spacing:0;opacity:.85;'
+                f'min-height:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{sub or "&nbsp;"}</div>')
+
+    cab = f'<th style="{th};text-align:left;position:sticky;left:0;z-index:2">{_titulo(rotulo_coluna)}</th>' + "".join(
+        f'<th style="{th};text-align:right' + (f";color:{C['warning']}" if k in colunas_previstas else "") + f'">{_titulo(c)}</th>'
         for k, c in enumerate(colunas))
+    # colunas de valor com a MESMA largura (table-layout fixed): a 1ª coluna tem largura própria e o resto divide igual;
+    # min-width da tabela garante ~120px por coluna de valor (no celular, rola de lado com a 1ª coluna fixa)
+    colgroup = '<colgroup><col style="width:clamp(180px,42vw,320px)">' + "".join("<col>" for _ in colunas) + "</colgroup>"
+    min_tabela = 320 + 120 * len(colunas)
     corpo = []
     for rotulo, tipo, valores in linhas:
         vals = [0.0 if v is None or v != v else float(v) for v in valores]
@@ -342,11 +356,11 @@ def demonstrativo(linhas, colunas, rotulo_coluna="Linha", casas=0, ocultar_zerad
         borda_topo = f"border-top:2px solid {C['primary_dark']};" if tipo == "resultado" else (f"border-top:1px solid {C['border']};" if tipo == "subtotal" else "")
         base = f"padding:7px 12px;font-size:13px;font-weight:{t['peso']};border-bottom:1px solid {C['grid']};{borda_topo}"
         fundo_linha = t["fundo"] or C["bg"]
-        celulas = [f'<td style="{base}background:{fundo_linha};color:{t["rotulo"]};border-left:4px solid {t["barra"]};min-width:170px;position:sticky;left:0;z-index:1">{rotulo}</td>']
+        celulas = [f'<td style="{base}background:{fundo_linha};color:{t["rotulo"]};border-left:4px solid {t["barra"]};position:sticky;left:0;z-index:1">{rotulo}</td>']
         for k, v in enumerate(vals):
-            if k in colunas_previstas:
+            if k in colunas_previstas:  # previsto: só o número em âmbar, fundo normal da linha
                 cor = C["warning"] if abs(v) >= 0.005 else C["text_muted"]
-                fundo = C["warning_bg"]
+                fundo = fundo_linha if tipo != "resultado" else C["bg"]
             elif k in colunas_neutras:
                 cor = C["text_secondary"] if abs(v) >= 0.005 else C["text_muted"]
                 fundo = fundo_linha if tipo != "resultado" else C["bg_secondary"]
@@ -370,8 +384,8 @@ def demonstrativo(linhas, colunas, rotulo_coluna="Linha", casas=0, ocultar_zerad
             for k, n in _DEMO_LEGENDA + ([("previsto", "Previsto (lançado no Bling, ainda a pagar)")] if colunas_previstas else []))
         leg = f'<div style="margin:0 0 8px 2px">{chips}</div>'
     st.html(f"""{leg}<div style="overflow-x:auto;border:1px solid {C['border']};border-radius:8px;background:{C['bg']}">
-      <table style="width:100%;border-collapse:collapse;font-family:inherit">
-        <thead><tr>{cab}</tr></thead><tbody>{''.join(corpo)}</tbody>
+      <table style="width:100%;min-width:{min_tabela}px;table-layout:fixed;border-collapse:collapse;font-family:inherit">
+        {colgroup}<thead><tr>{cab}</tr></thead><tbody>{''.join(corpo)}</tbody>
       </table></div>""")
 
 
