@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from common import bigquery as bq
-from common.design import COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct, demonstrativo, regras_aplicadas
+from common.design import COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct, demonstrativo, regras_aplicadas, style_color
 from common.frescor import carregar_frescor, badge_atualizacao, detalhe_atualizacao, alerta_atraso
 from reports.vendas_margem import _hoje_brt
 
@@ -52,7 +52,8 @@ def carregar_caixa():
     client = bq.get_client()
     d = bq.query_df(client, f"SELECT * EXCEPT(ts_load) FROM `{bq.PROJECT}.dbt_dw_az.tb_caixa_mes` ORDER BY dt_mes")
     d["dt_mes"] = pd.to_datetime(d["dt_mes"])
-    d = _num(d, ("dt_mes", "fg_mes_parcial", "fg_extrato_disponivel"))
+    d = _num(d, ("dt_mes", "fg_mes_parcial", "fg_extrato_disponivel", "fg_mes_futuro"))
+    d["fg_mes_futuro"] = d["fg_mes_futuro"].fillna(False).astype(bool)
     d["fg_mes_parcial"] = d["fg_mes_parcial"].fillna(False).astype(bool)
     d["fg_extrato_disponivel"] = d["fg_extrato_disponivel"].fillna(False).astype(bool)
     return d
@@ -79,7 +80,7 @@ def carregar_saidas():
     client = bq.get_client()
     s = bq.query_df(client, f"""
         SELECT id, dt_pagamento, ds_origem_data, dt_mes, dt_vencimento, dt_competencia, ds_descricao, nm_fornecedor, ds_subcategoria,
-               ds_situacao, nm_forma_pagamento, vl_valor, ds_linha_caixa, ds_tratamento
+               ds_situacao, nm_forma_pagamento, vl_valor, ds_linha_caixa, ds_tratamento, ds_status_caixa
           FROM `{bq.PROJECT}.dbt_dw_az.tb_caixa_saida`""")
     for c in ("dt_pagamento", "dt_mes", "dt_vencimento", "dt_competencia"):
         s[c] = pd.to_datetime(s[c])
@@ -108,7 +109,8 @@ def rotulo_mes(m, parcial):
 
 
 def seletor_mes(d, chave, so_com_extrato=False):
-    base = d[d["fg_extrato_disponivel"]] if so_com_extrato else d
+    base = d[~d["fg_mes_futuro"]]  # mês futuro só tem previsto: não é selecionável
+    base = base[base["fg_extrato_disponivel"]] if so_com_extrato else base
     if base.empty:
         return None
     fechados = base[~base["fg_mes_parcial"]]
@@ -136,7 +138,7 @@ def cabecalho(titulo, destaque, meta, fr):
 
 def tabela_saidas_mes(s, mes):
     """Lançamentos que saíram no mês (inclui duplicados excluídos, sinalizados)."""
-    m = s[s["dt_mes"] == mes].sort_values(["dt_pagamento", "vl_valor"], ascending=[True, False])
+    m = s[(s["dt_mes"] == mes) & (s["ds_status_caixa"] == "realizado")].sort_values(["dt_pagamento", "vl_valor"], ascending=[True, False])
     return pd.DataFrame({
         "Pago em": m["dt_pagamento"].dt.strftime("%d/%m/%Y"),
         "Data de": m["ds_origem_data"].map({"baixa": "baixa no Bling", "vencimento": "vencimento (sem baixa)"}),
@@ -149,8 +151,29 @@ def tabela_saidas_mes(s, mes):
     })
 
 
-def _linhas_caixa(d):
-    """Demonstrativo de caixa por mês, com o tipo de cada linha (cor)."""
+LINHAS_PREVISTO = {
+    "vl_saida_mercadoria": "vl_prev_mercadoria", "vl_saida_frete": "vl_prev_frete", "vl_saida_midia_google": "vl_prev_midia_google",
+    "vl_saida_midia_outras": "vl_prev_midia_outras", "vl_saida_pessoal": "vl_prev_pessoal", "vl_saida_ferramentas": "vl_prev_ferramentas",
+    "vl_saida_suprimentos": "vl_prev_suprimentos", "vl_saida_investimento": "vl_prev_investimento", "vl_saida_financeira": "vl_prev_financeira",
+    "vl_saida_adicionais": "vl_prev_adicionais", "vl_saida_sem_categoria": "vl_prev_sem_categoria", "vl_saida_total": "vl_saida_prevista_total",
+}
+
+
+def _colunas_caixa(d):
+    """Colunas do demonstrativo: meses realizados (até o corrente) + previsto (mês corrente 'a pagar' e meses futuros).
+    Devolve [(rótulo, linha do mês, é_previsto)]."""
+    cols = [(rotulo_mes(r["dt_mes"], r["fg_mes_parcial"]), r, False) for _, r in d[~d["fg_mes_futuro"]].iterrows()]
+    for _, r in d.iterrows():
+        if r["fg_mes_parcial"] and float(r["vl_saida_prevista_total"]) > 0:
+            cols.append((pd.Timestamp(r["dt_mes"]).strftime("%m/%Y") + " (a pagar)", r, True))
+        elif r["fg_mes_futuro"]:
+            cols.append((pd.Timestamp(r["dt_mes"]).strftime("%m/%Y") + " (previsto)", r, True))
+    return cols
+
+
+def _linhas_caixa(cols):
+    """Demonstrativo de caixa com o tipo de cada linha (cor). Nas colunas previstas só há saídas (as vendas ainda não
+    aconteceram): entradas e resultado ficam em branco e entra a linha 'entrada necessária para cobrir o previsto'."""
     linhas = [
         ("(+) Vendas recebidas (produtos líquidos + frete pago)", "entrada", "vl_faturamento_recebido", 1),
         ("(−) Taxa de pagamento (retida na venda)", "saida", "vl_taxa", -1),
@@ -161,17 +184,34 @@ def _linhas_caixa(d):
         ("= Total de saídas", "subtotal", "vl_saida_total", -1),
         ("= Resultado de caixa", "resultado", "vl_resultado_caixa_v1", 1),
     ]
-    return [(n, tipo, [sinal * float(v) for v in d[col]]) for n, tipo, col, sinal in linhas]
+    out = []
+    for n, tipo, col, sinal in linhas:
+        vals = []
+        for _, r, prev in cols:
+            if prev:
+                c2 = LINHAS_PREVISTO.get(col)
+                vals.append(sinal * float(r[c2]) if c2 else None)
+            else:
+                vals.append(sinal * float(r[col]))
+        out.append((n, tipo, vals))
+    if any(prev for _, _, prev in cols):
+        out.append(("→ Entrada necessária para cobrir o previsto", "previsto",
+                    [float(r["vl_entrada_necessaria"]) if prev else None for _, r, prev in cols]))
+    return out
 
 
 def _grafico_meses(d):
-    x = [rotulo_mes(m, p) for m, p in zip(d["dt_mes"], d["fg_mes_parcial"])]
+    x = [rotulo_mes(m, p) if not f else pd.Timestamp(m).strftime("%m/%Y") + " (previsto)"
+         for m, p, f in zip(d["dt_mes"], d["fg_mes_parcial"], d["fg_mes_futuro"])]
+    resultado = d["vl_resultado_caixa_v1"].where(~d["fg_mes_futuro"])
     fig = go.Figure()
     fig.add_bar(x=x, y=d["vl_entrada_liquida_v1"], name="Entrada líquida", marker_color=COLORS["success"],
                 hovertemplate="%{x}<br>Entradas R$ %{y:,.0f}<extra></extra>")
     fig.add_bar(x=x, y=-d["vl_saida_total"], name="Saídas", marker_color=COLORS["danger"],
                 hovertemplate="%{x}<br>Saídas R$ %{y:,.0f}<extra></extra>")
-    fig.add_scatter(x=x, y=d["vl_resultado_caixa_v1"], name="Resultado de caixa", mode="lines+markers",
+    fig.add_bar(x=x, y=-d["vl_saida_prevista_total"], name="A pagar (previsto, lançado no Bling)", marker_color=COLORS["warning"],
+                hovertemplate="%{x}<br>A pagar R$ %{y:,.0f}<extra></extra>")
+    fig.add_scatter(x=x, y=resultado, name="Resultado de caixa", mode="lines+markers",
                     line=dict(color=COLORS["text"], width=2), hovertemplate="%{x}<br>Resultado R$ %{y:,.0f}<extra></extra>")
     plotly_layout(fig, height=300, barmode="relative", yaxis=dict(tickprefix="R$ ", gridcolor=COLORS["grid"]))
     return fig
@@ -213,7 +253,9 @@ def render():
              f"{pct(float(r['vl_taxa']) / float(r['vl_faturamento_recebido']) if r['vl_faturamento_recebido'] else None)} das vendas recebidas"),
         card("Saídas", brl(float(r["vl_saida_total"])), "contas pagas no mês (Bling), inclusive mercadoria e mídia M+1"),
         card("Resultado de caixa", brl(res), "entrada líquida − saídas", variant="ok" if res > 0 else "bad"),
-    ])
+    ] + ([card("A pagar até o fim do mês", brl(float(r["vl_saida_prevista_total"])),
+               f"lançado no Bling, ainda não pago · cobrir exige {brl(float(r['vl_entrada_necessaria']), 0)} de entrada", variant="warn")]
+         if parcial and float(r["vl_saida_prevista_total"]) > 0 else []))
     note("<strong>Visão financeira</strong>, não gerencial: aqui a compra de mercadoria, a fatura de frete e o Google Ads entram <em>quando são pagos</em> "
          "(o Google de um mês é pago no seguinte). Para saber se a operação dá lucro, use <strong>Resultado (DRE)</strong>, que é por competência. "
          "Mês negativo por compra grande é resultado de caixa, não é ajustado.")
@@ -249,8 +291,10 @@ def render():
     section_title("Mês a mês")
     with st.container(border=True):
         st.plotly_chart(_grafico_meses(d), use_container_width=True)
-    demonstrativo(_linhas_caixa(d), [rotulo_mes(m, p) for m, p in zip(d["dt_mes"], d["fg_mes_parcial"])], ocultar_zeradas=True)
-    note("Verde = entra, vermelho = sai (em negativo), azul = subtotais; o resultado fica verde ou vermelho pelo sinal. Linhas zeradas em todos os meses ficam ocultas. As saídas são o contas a pagar do Bling pela <strong>data da baixa</strong> (quando não há baixa, o vencimento), só até hoje; "
+    cols = _colunas_caixa(d)
+    demonstrativo(_linhas_caixa(cols), [c for c, _, _ in cols], ocultar_zeradas=True,
+                  colunas_previstas=tuple(k for k, (_, _, prev) in enumerate(cols) if prev))
+    note("Verde = entra, vermelho = sai (em negativo), azul = subtotais; o resultado fica verde ou vermelho pelo sinal. Linhas zeradas em todos os meses ficam ocultas. <strong>Amarelo = previsto:</strong> contas já lançadas no Bling, ainda sem baixa, com vencimento até 3 meses à frente (só o que está no Bling: pró-labore ou Google Ads ainda não lançados não aparecem); nos meses futuros não há entrada nem resultado, e a última linha mostra quanto precisa entrar para cobrir o previsto (no mês corrente, descontado o que já sobrou). As saídas realizadas são o contas a pagar do Bling pela <strong>data da baixa</strong> (quando não há baixa, o vencimento), só até hoje; "
          "o mesmo gasto lançado duas vezes (mesmo mês de pagamento e de competência, fornecedor e valor) conta uma vez. Reembolso parcial sai no mês em que aconteceu; pedido cancelado ou estornado por inteiro não entra.")
 
     section_title("Ponte com a visão gerencial (DRE)")
@@ -293,6 +337,29 @@ def render():
         if sem_baixa:
             note(f"<strong>{sem_baixa} lançamento(s) sem baixa no Bling</strong> entraram pela data de vencimento. Dê baixa com a data real do pagamento para o caixa ficar exato.", variant="warn")
 
+    section_title("A pagar nos próximos meses (previsto)")
+    pv = s[s["ds_status_caixa"] == "previsto"].sort_values(["dt_pagamento", "vl_valor"], ascending=[True, False])
+    if pv.empty:
+        st.info("Nenhuma conta lançada no Bling a vencer no horizonte.")
+    else:
+        por_mes = pv[pv["ds_tratamento"] == "saida"].groupby("dt_mes")["vl_valor"].sum().sort_index()
+        render_cards([card(pd.Timestamp(m).strftime("%m/%Y"), brl(float(v)), "lançado no Bling, a pagar", variant="warn")
+                      for m, v in por_mes.items()])
+        tp = pd.DataFrame({
+            "Vence em": pv["dt_pagamento"].dt.strftime("%d/%m/%Y"),
+            "Linha": pv["ds_linha_caixa"].map(ROTULO_LINHA).fillna(pv["ds_linha_caixa"]),
+            "Fornecedor": pv["nm_fornecedor"].fillna("—"),
+            "Descrição": pv["ds_descricao"].fillna(""),
+            "Forma de pagamento": pv["nm_forma_pagamento"].fillna("—"),
+            "Valor": pv["vl_valor"],
+            "Conta?": pv["ds_tratamento"].map({"saida": "sim", "excluido_duplicado": "não (duplicado)"}),
+        })
+        amarelo = lambda _: f"background-color: {COLORS['warning_bg']}; color: {COLORS['text']}"
+        st.dataframe(style_color(tp.style, amarelo, list(tp.columns)), hide_index=True, use_container_width=True,
+                     column_config={"Valor": st.column_config.NumberColumn(format="R$ %.2f")})
+        note("Só o que já está lançado no Bling e ainda não teve baixa, com vencimento do dia seguinte a hoje até o fim do 3º mês à frente. "
+             "Gasto recorrente ainda não lançado (pró-labore, Google Ads do mês, assinaturas de 2027) não aparece: quanto mais longe o mês, mais incompleto.")
+
     note("<strong>Limites:</strong> só existe o que foi lançado no Bling; saídas desde 08/2026. O saldo parado no Nuvem Pago não aparece aqui: a entrada é contada quando o pedido é recebido no gateway, "
          "não quando o dinheiro é sacado para a conta PJ (isso é a v2). Mês corrente parcial.")
     if fr:
@@ -304,6 +371,7 @@ def render():
         ("Exceção de set/2026", "pedidos feitos até 30/09/2026 com recebimento em outubro (cartão/boleto do fim do mês) contam como recebidos em 30/09; de outubro em diante vale a data de recebimento."),
         ("Reembolsos", "parcial sai no mês em que aconteceu; pedido cancelado ou estornado por inteiro não entra."),
         ("Saídas", "contas a pagar do Bling pela <strong>data da baixa</strong> (sem baixa, o vencimento), só até hoje. Tudo entra: mercadoria, fatura de frete, mídia (Google pago em M+1), investimento, suprimentos. Lançamento repetido (mesmo mês de pagamento e de competência, fornecedor e valor) conta uma vez; conta apagada no Bling não entra."),
-        ("Resultado de caixa", "entrada líquida − saídas. Mês negativo por compra grande não é ajustado."),
+        ("Resultado de caixa", "entrada líquida − saídas realizadas. Mês negativo por compra grande não é ajustado."),
+        ("Previsto (amarelo)", "contas já lançadas no Bling, sem baixa, com vencimento depois de hoje, no mês corrente e nos 3 meses seguintes. Só o que está no Bling, sem estimativas. Meses futuros não têm entrada nem resultado; mostram a entrada necessária para cobrir o previsto (no mês corrente, descontado o que já sobrou)."),
         ("Limites", "desde 08/2026; gasto não lançado no Bling não existe aqui; o saldo parado no Nuvem Pago não aparece (ver v2, extrato); prazo do cartão a confirmar; mês corrente parcial."),
     ], titulo="Regras aplicadas — v1 (estimado pelos pedidos)")

@@ -314,21 +314,25 @@ _DEMO_TIPOS = {
     "saida":     {"barra": COLORS["danger"], "valor": COLORS["danger"], "fundo": COLORS["bg"], "peso": 400, "rotulo": COLORS["text"]},
     "subtotal":  {"barra": COLORS["primary"], "valor": COLORS["primary_dark"], "fundo": COLORS["primary_light"], "peso": 700, "rotulo": COLORS["primary_dark"]},
     "resultado": {"barra": COLORS["primary_dark"], "valor": None, "fundo": None, "peso": 800, "rotulo": COLORS["text"]},
+    "previsto":  {"barra": COLORS["warning"], "valor": COLORS["warning"], "fundo": COLORS["warning_bg"], "peso": 700, "rotulo": COLORS["warning"]},
 }
 _DEMO_LEGENDA = [("entrada", "Entrada"), ("saida", "Saída"), ("subtotal", "Subtotal"), ("resultado", "Resultado / saldo")]
 
 
-def demonstrativo(linhas, colunas, rotulo_coluna="Linha", casas=0, ocultar_zeradas=False, legenda=True, colunas_neutras=()):
+def demonstrativo(linhas, colunas, rotulo_coluna="Linha", casas=0, ocultar_zeradas=False, legenda=True, colunas_neutras=(), colunas_previstas=()):
     """Renderiza um demonstrativo (DRE, caixa, comparativos) como tabela HTML com cor por tipo de linha.
 
     `linhas`: lista de (rotulo, tipo, valores) — tipo em entrada | saida | subtotal | resultado; `valores` alinhados
     a `colunas`. Saídas já vêm negativas (o sinal é do dado). `ocultar_zeradas` some com entradas/saídas zeradas em
     todas as colunas (subtotais e resultado ficam sempre). `colunas_neutras`: índices de colunas sem cor de sinal
-    (ex.: uma coluna de diferença, que não é ganho nem perda)."""
+    (ex.: uma coluna de diferença, que não é ganho nem perda). `colunas_previstas`: índices de colunas de valores
+    PREVISTOS (ainda não aconteceram) — fundo amarelo e números em âmbar, sem cor de sinal."""
     C = COLORS
     th = (f"padding:8px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;"
           f"color:{C['text_secondary']};background:{C['bg_secondary']};border-bottom:1px solid {C['border']};white-space:nowrap")
-    cab = f'<th style="{th};text-align:left;position:sticky;left:0;z-index:2">{rotulo_coluna}</th>' + "".join(f'<th style="{th};text-align:right">{c}</th>' for c in colunas)
+    cab = f'<th style="{th};text-align:left;position:sticky;left:0;z-index:2">{rotulo_coluna}</th>' + "".join(
+        f'<th style="{th};text-align:right' + (f";background:{C['warning_bg']};color:{C['warning']}" if k in colunas_previstas else "") + f'">{c}</th>'
+        for k, c in enumerate(colunas))
     corpo = []
     for rotulo, tipo, valores in linhas:
         vals = [0.0 if v is None or v != v else float(v) for v in valores]
@@ -340,7 +344,10 @@ def demonstrativo(linhas, colunas, rotulo_coluna="Linha", casas=0, ocultar_zerad
         fundo_linha = t["fundo"] or C["bg"]
         celulas = [f'<td style="{base}background:{fundo_linha};color:{t["rotulo"]};border-left:4px solid {t["barra"]};min-width:170px;position:sticky;left:0;z-index:1">{rotulo}</td>']
         for k, v in enumerate(vals):
-            if k in colunas_neutras:
+            if k in colunas_previstas:
+                cor = C["warning"] if abs(v) >= 0.005 else C["text_muted"]
+                fundo = C["warning_bg"]
+            elif k in colunas_neutras:
                 cor = C["text_secondary"] if abs(v) >= 0.005 else C["text_muted"]
                 fundo = fundo_linha if tipo != "resultado" else C["bg_secondary"]
             elif tipo == "resultado":
@@ -360,7 +367,7 @@ def demonstrativo(linhas, colunas, rotulo_coluna="Linha", casas=0, ocultar_zerad
         chips = "".join(
             f'<span style="display:inline-flex;align-items:center;gap:6px;margin-right:16px;font-size:11px;color:{C["text_secondary"]}">'
             f'<span style="width:10px;height:10px;border-radius:2px;background:{_DEMO_TIPOS[k]["barra"]}"></span>{n}</span>'
-            for k, n in _DEMO_LEGENDA)
+            for k, n in _DEMO_LEGENDA + ([("previsto", "Previsto (lançado no Bling, ainda a pagar)")] if colunas_previstas else []))
         leg = f'<div style="margin:0 0 8px 2px">{chips}</div>'
     st.html(f"""{leg}<div style="overflow-x:auto;border:1px solid {C['border']};border-radius:8px;background:{C['bg']}">
       <table style="width:100%;border-collapse:collapse;font-family:inherit">
