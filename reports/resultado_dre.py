@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from common import bigquery as bq
-from common.design import COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct
+from common.design import COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct, demonstrativo, regras_aplicadas
 from common.frescor import carregar_frescor, badge_atualizacao, detalhe_atualizacao, alerta_atraso
 from reports.vendas_margem import _hoje_brt
 
@@ -46,31 +46,28 @@ def _rotulo(m, parcial):
     return pd.Timestamp(m).strftime("%m/%Y") + (" (em andamento)" if parcial else "")
 
 
-def _tabela_dre(d):
-    """Demonstrativo por mês: deduções negativas, subtotais com '='. Valores do dbt, sem recálculo (exceto Ads)."""
+def _linhas_dre(d):
+    """Demonstrativo por mês, com o tipo de cada linha (cor). Valores do dbt, sem recálculo (exceto Ads)."""
     linhas = [
-        ("Receita líquida de produtos", "vl_receita_liquida_produto", 1),
-        ("(+) Resultado de frete (frete pago − frete real)", "vl_resultado_frete", 1),
-        ("(−) CMV (custo dos produtos vendidos)", "vl_cmv", -1),
-        ("(−) Taxa de pagamento", "vl_taxa_pagamento", -1),
-        ("(−) Embalagem (estimada)", "vl_embalagem", -1),
-        ("(−) Imposto (0% sem CNPJ)", "vl_imposto", -1),
-        ("(−) Reembolsos (no mês em que aconteceram)", "vl_reembolso", -1),
-        ("= Margem de contribuição (antes de mídia)", "vl_margem_contribuicao", 1),
-        ("(−) Google Ads", "vl_google_ads", -1),
-        ("(−) Meta e outras mídias (lançadas no Bling)", "vl_midia_bling", -1),
-        ("= Margem depois da mídia", "vl_margem_apos_midia", 1),
-        ("(−) Pró-labore", "vl_pessoal", -1),
-        ("(−) Ferramentas e tecnologia", "vl_ferramentas", -1),
-        ("(−) Despesas adicionais", "vl_adicionais", -1),
-        ("(−) Despesas financeiras", "vl_financeira", -1),
-        ("(−) Sem categoria", "vl_sem_categoria", -1),
-        ("= Resultado operacional (antes de imposto)", "vl_resultado_operacional", 1),
+        ("(+) Receita líquida de produtos", "entrada", "vl_receita_liquida_produto", 1),
+        ("(+) Resultado de frete (frete pago − frete real)", "entrada", "vl_resultado_frete", 1),
+        ("(−) CMV (custo dos produtos vendidos)", "saida", "vl_cmv", -1),
+        ("(−) Taxa de pagamento", "saida", "vl_taxa_pagamento", -1),
+        ("(−) Embalagem (estimada)", "saida", "vl_embalagem", -1),
+        ("(−) Imposto (0% sem CNPJ)", "saida", "vl_imposto", -1),
+        ("(−) Reembolsos (no mês em que aconteceram)", "saida", "vl_reembolso", -1),
+        ("= Margem de contribuição (antes de mídia)", "subtotal", "vl_margem_contribuicao", 1),
+        ("(−) Google Ads", "saida", "vl_google_ads", -1),
+        ("(−) Meta e outras mídias (lançadas no Bling)", "saida", "vl_midia_bling", -1),
+        ("= Margem depois da mídia", "subtotal", "vl_margem_apos_midia", 1),
+        ("(−) Pró-labore", "saida", "vl_pessoal", -1),
+        ("(−) Ferramentas e tecnologia", "saida", "vl_ferramentas", -1),
+        ("(−) Despesas adicionais", "saida", "vl_adicionais", -1),
+        ("(−) Despesas financeiras", "saida", "vl_financeira", -1),
+        ("(−) Sem categoria", "saida", "vl_sem_categoria", -1),
+        ("= Resultado operacional (antes de imposto)", "resultado", "vl_resultado_operacional", 1),
     ]
-    out = {"Linha": [n for n, _, _ in linhas]}
-    for _, r in d.iterrows():
-        out[_rotulo(r["dt_mes"], r["fg_mes_parcial"])] = [sinal * float(r[col]) + 0.0 for _, col, sinal in linhas]
-    return pd.DataFrame(out)
+    return [(n, tipo, [sinal * float(v) for v in d[col]]) for n, tipo, col, sinal in linhas]
 
 
 def _grafico_cascata(r):
@@ -153,11 +150,9 @@ def render():
         st.plotly_chart(_grafico_cascata(r), use_container_width=True)
 
     section_title("Demonstrativo por mês")
-    t = _tabela_dre(d.sort_values("dt_mes"))
-    cfg = {c: st.column_config.NumberColumn(format="R$ %.0f", width=140) for c in t.columns if c != "Linha"}
-    cfg["Linha"] = st.column_config.TextColumn(width=330)
-    st.dataframe(t, hide_index=True, use_container_width=True, column_config=cfg, height=38 + 35 * len(t))
-    note("Deduções em negativo. Do topo até a <strong>margem de contribuição</strong> é a mesma conta de Vendas & Margem (vem pronta do dbt, <code>tb_pedido</code>). "
+    dd = d.sort_values("dt_mes")
+    demonstrativo(_linhas_dre(dd), [_rotulo(m, p) for m, p in zip(dd["dt_mes"], dd["fg_mes_parcial"])])
+    note("Verde = o que entra, vermelho = o que sai (em negativo), azul = subtotais; o resultado fica verde quando positivo e vermelho quando negativo. Do topo até a <strong>margem de contribuição</strong> é a mesma conta de Vendas & Margem (vem pronta do dbt, <code>tb_pedido</code>). "
          "<strong>Google Ads</strong> vem do próprio Ads por mês de consumo (o lançamento no Bling sai um mês depois). "
          "As <strong>despesas</strong> vêm do contas a pagar do Bling por <em>competência</em>, contando Pago, Atrasado e Em Aberto, sem meses futuros.")
 
@@ -185,3 +180,13 @@ def render():
          "então o resultado é um <strong>teto</strong>. A mídia de Meta só existe quando é lançada no Bling. Imposto 0% até haver CNPJ; embalagem é estimada.")
     if fr:
         detalhe_atualizacao(fr)
+    regras_aplicadas([
+        ("Visão", "gerencial, regime de <strong>competência</strong>: receita no mês do pedido, despesa no mês de competência do Bling. Para o dinheiro que entrou e saiu, ver Fechamento Financeiro."),
+        ("Vendas", "pedidos válidos (pagos, não cancelados); faturamento = produtos líquidos de desconto + frete pago pelo cliente."),
+        ("Margem de contribuição", "receita líquida + resultado de frete (pago − real) − CMV − taxa real de pagamento − embalagem estimada (R$ 2,50/pedido) − imposto (0% hoje) − reembolsos no mês em que aconteceram."),
+        ("Mídia", "Google Ads pelo consumo do mês (dados do próprio Ads); Meta e outras pelo lançamento no Bling."),
+        ("Despesas", "contas a pagar do Bling por competência (paga, atrasada ou em aberto), sem meses futuros; conta apagada no Bling não entra."),
+        ("Fora do resultado", "compra de mercadoria (o CMV já está na margem), frete lançado (o frete real já está na margem), Google Ads lançado (usa-se o do Ads) e duplicados; investimentos e suprimentos aparecem só como memo."),
+        ("Resultado", "operacional, antes de imposto. Ponto de equilíbrio = (mídia + despesas) ÷ (margem ÷ faturamento)."),
+        ("Limites", "histórico desde 08/2026; despesa não lançada no Bling não existe aqui; mês corrente é parcial."),
+    ])

@@ -303,3 +303,77 @@ def plotly_layout(fig, **kwargs):
     fig.update_layout(**layout)
     fig.update_traces(marker_cornerradius=4, selector=dict(type="bar"))
     return fig
+
+
+# ── Demonstrativo (DRE / caixa) com cor por tipo de linha ───────────────────
+# Barra lateral = tipo (entrada verde · saida vermelho · subtotal azul · resultado azul-escuro). Número = sinal
+# (positivo verde, negativo vermelho); subtotal em azul negrito; resultado com fundo pelo sinal.
+# A cor nunca é o único sinal: o rótulo leva (+)/(−)/=, e o valor leva o sinal.
+_DEMO_TIPOS = {
+    "entrada":   {"barra": COLORS["success"], "valor": COLORS["success"], "fundo": COLORS["bg"], "peso": 400, "rotulo": COLORS["text"]},
+    "saida":     {"barra": COLORS["danger"], "valor": COLORS["danger"], "fundo": COLORS["bg"], "peso": 400, "rotulo": COLORS["text"]},
+    "subtotal":  {"barra": COLORS["primary"], "valor": COLORS["primary_dark"], "fundo": COLORS["primary_light"], "peso": 700, "rotulo": COLORS["primary_dark"]},
+    "resultado": {"barra": COLORS["primary_dark"], "valor": None, "fundo": None, "peso": 800, "rotulo": COLORS["text"]},
+}
+_DEMO_LEGENDA = [("entrada", "Entrada"), ("saida", "Saída"), ("subtotal", "Subtotal"), ("resultado", "Resultado / saldo")]
+
+
+def demonstrativo(linhas, colunas, rotulo_coluna="Linha", casas=0, ocultar_zeradas=False, legenda=True, colunas_neutras=()):
+    """Renderiza um demonstrativo (DRE, caixa, comparativos) como tabela HTML com cor por tipo de linha.
+
+    `linhas`: lista de (rotulo, tipo, valores) — tipo em entrada | saida | subtotal | resultado; `valores` alinhados
+    a `colunas`. Saídas já vêm negativas (o sinal é do dado). `ocultar_zeradas` some com entradas/saídas zeradas em
+    todas as colunas (subtotais e resultado ficam sempre). `colunas_neutras`: índices de colunas sem cor de sinal
+    (ex.: uma coluna de diferença, que não é ganho nem perda)."""
+    C = COLORS
+    th = (f"padding:8px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;"
+          f"color:{C['text_secondary']};background:{C['bg_secondary']};border-bottom:1px solid {C['border']};white-space:nowrap")
+    cab = f'<th style="{th};text-align:left;position:sticky;left:0;z-index:2">{rotulo_coluna}</th>' + "".join(f'<th style="{th};text-align:right">{c}</th>' for c in colunas)
+    corpo = []
+    for rotulo, tipo, valores in linhas:
+        vals = [0.0 if v is None or v != v else float(v) for v in valores]
+        if ocultar_zeradas and tipo in ("entrada", "saida") and all(abs(v) < 0.005 for v in vals):
+            continue
+        t = _DEMO_TIPOS[tipo]
+        borda_topo = f"border-top:2px solid {C['primary_dark']};" if tipo == "resultado" else (f"border-top:1px solid {C['border']};" if tipo == "subtotal" else "")
+        base = f"padding:7px 12px;font-size:13px;font-weight:{t['peso']};border-bottom:1px solid {C['grid']};{borda_topo}"
+        fundo_linha = t["fundo"] or C["bg"]
+        celulas = [f'<td style="{base}background:{fundo_linha};color:{t["rotulo"]};border-left:4px solid {t["barra"]};min-width:170px;position:sticky;left:0;z-index:1">{rotulo}</td>']
+        for k, v in enumerate(vals):
+            if k in colunas_neutras:
+                cor = C["text_secondary"] if abs(v) >= 0.005 else C["text_muted"]
+                fundo = fundo_linha if tipo != "resultado" else C["bg_secondary"]
+            elif tipo == "resultado":
+                cor = C["success"] if v > 0 else C["danger"] if v < 0 else C["text_muted"]
+                fundo = C["success_bg"] if v > 0 else C["danger_bg"] if v < 0 else C["bg"]
+            elif tipo == "subtotal":
+                cor = (C["danger"] if v < 0 else t["valor"]) if abs(v) >= 0.005 else C["text_muted"]
+                fundo = fundo_linha
+            else:  # entrada/saida: a barra diz o tipo; o número, o sinal (entrada negativa sai vermelha)
+                cor = C["success"] if v >= 0.005 else C["danger"] if v <= -0.005 else C["text_muted"]
+                fundo = fundo_linha
+            texto = brl(v, casas) if abs(v) >= 0.005 else "—"
+            celulas.append(f'<td style="{base}background:{fundo};color:{cor};text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap">{texto}</td>')
+        corpo.append("<tr>" + "".join(celulas) + "</tr>")
+    leg = ""
+    if legenda:
+        chips = "".join(
+            f'<span style="display:inline-flex;align-items:center;gap:6px;margin-right:16px;font-size:11px;color:{C["text_secondary"]}">'
+            f'<span style="width:10px;height:10px;border-radius:2px;background:{_DEMO_TIPOS[k]["barra"]}"></span>{n}</span>'
+            for k, n in _DEMO_LEGENDA)
+        leg = f'<div style="margin:0 0 8px 2px">{chips}</div>'
+    st.html(f"""{leg}<div style="overflow-x:auto;border:1px solid {C['border']};border-radius:8px;background:{C['bg']}">
+      <table style="width:100%;border-collapse:collapse;font-family:inherit">
+        <thead><tr>{cab}</tr></thead><tbody>{''.join(corpo)}</tbody>
+      </table></div>""")
+
+
+def regras_aplicadas(itens, titulo="Regras aplicadas nesta página"):
+    """Resumo objetivo das regras de cálculo, no fim da página. `itens`: lista de (tema, regra em HTML curto)."""
+    C = COLORS
+    lis = "".join(
+        f'<li style="margin:0 0 6px 0"><strong style="color:{C["text"]}">{tema}:</strong> {regra}</li>' for tema, regra in itens)
+    section_title(titulo)
+    st.html(f'<div style="border:1px solid {C["border"]};border-left:4px solid {C["primary"]};border-radius:8px;'
+            f'background:{C["bg_secondary"]};padding:14px 18px;font-size:13px;color:{C["text_secondary"]};line-height:1.5">'
+            f'<ul style="margin:0;padding-left:18px">{lis}</ul></div>')
