@@ -29,6 +29,7 @@ EXTRATORES = ("bling_orders", "bling_products")
 # Pesos do score (soma 1). Cada componente é a posição percentil entre as novidades COTADAS e ainda não implementadas.
 PESOS = {"margem": 0.35, "venda": 0.25, "demanda": 0.20, "capital": 0.20}
 FAIXAS = [("Implementar já", 70), ("Boa", 50), ("Avaliar", 30), ("Deixar", 0)]
+LINHAS_RANKING = 15       # linhas visíveis do ranking; o resto fica na barra de rolagem
 DIAS_GA4 = 30            # janela do GA4 de produto (eventos por produto existem desde 29/08/2026)
 DIAS_BUSCA = 90          # janela da busca interna
 CONF_ALTA, CONF_MEDIA = 20, 10   # pedidos da família em 12 meses
@@ -56,7 +57,7 @@ def carregar_dados():
         SELECT DISTINCT nm_produto, ds_subcategoria FROM {az}.tb_preco_produto`
          WHERE NOT STARTS_WITH(COALESCE(ds_categoria, ''), '[Interno]')""")
     busca = bq.query_df(client, f"""
-        SELECT ds_termo_normalizado AS termo, COUNT(DISTINCT cd_sessao) AS qt_sessoes
+        SELECT ds_termo_normalizado AS termo, COUNT(*) AS qt_buscas, COUNT(DISTINCT cd_sessao) AS qt_sessoes
           FROM {us}.tb_ga4_busca_interna` WHERE dt_data >= DATE_SUB(CURRENT_DATE('America/Sao_Paulo'), INTERVAL {DIAS_BUSCA} DAY)
          GROUP BY 1""", )
     gsc = bq.query_df(client, f"""
@@ -225,7 +226,7 @@ def render():
         "Pedidos da família 12m": t["nr_pedidos_familia_12m"], "Pedidos 90d": t["nr_pedidos_90d"],
         "Preço vs família": t["ds_posicao_preco_familia"], "Avisos": t["avisos"],
     })
-    st.dataframe(tab, hide_index=True, use_container_width=True, height=min(760, 38 + 35 * max(len(tab), 1)), column_config={
+    st.dataframe(tab, hide_index=True, use_container_width=True, height=min(38 + 35 * LINHAS_RANKING, 38 + 35 * max(len(tab), 1)), column_config={
         "Score": st.column_config.ProgressColumn(format="%.0f", min_value=0, max_value=100),
         "Custo (à vista)": st.column_config.NumberColumn(format="R$ %.2f"), "Preço sugerido": st.column_config.NumberColumn(format="R$ %.2f"),
         "MC unitária (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
@@ -381,25 +382,44 @@ def _detalhe(r, cot, prem):
 
 def _lacunas(dados):
     atr, busca, gsc, cat = dados["atr"], dados["busca"], dados["gsc"], dados["catalogo"]
-    vocab = set(re.findall(r"[a-z]{4,}", " ".join(cat["nm_produto"].map(_n).tolist() + cat["ds_subcategoria"].fillna("").map(_n).tolist())))
+    vocab = set(re.findall(r"[a-z]{3,}", " ".join(cat["nm_produto"].map(_n).tolist() + cat["ds_subcategoria"].fillna("").map(_n).tolist())))
     rxs = [re.compile(x) for x in atr["ds_regex_busca"].dropna().unique()]
 
     def coberto(t):
-        ws = re.findall(r"[a-z]{4,}", t)
+        ws = re.findall(r"[a-z]{3,}", t)
         return bool(ws) and all(w in vocab or any(w[:5] == v[:5] for v in vocab) for w in ws)
 
-    b = busca.assign(t=busca["termo"].map(_n)).groupby("t", as_index=False)["qt_sessoes"].sum()
+    b = busca.assign(t=busca["termo"].map(_n)).groupby("t", as_index=False).agg(qt_buscas=("qt_buscas", "sum"), qt_sessoes=("qt_sessoes", "sum"))
     g = gsc.assign(t=gsc["termo"].map(_n)).groupby("t", as_index=False).agg(qt_impressoes=("qt_impressoes", "sum"), qt_cliques=("qt_cliques", "sum"))
     m = b.merge(g, on="t", how="outer").fillna(0)
-    m = m[~m["t"].map(lambda x: bool(MARCA.search(x)))]
+    m = m[~m["t"].map(lambda t: bool(MARCA.search(t)))]
     m["tem_produto"] = m["t"].map(coberto)
     m["na_lista"] = m["t"].map(lambda t: any(x.search(t) for x in rxs))
-    m["demanda"] = m["qt_sessoes"] + m["qt_impressoes"] / 20
-    sem = m[~m["tem_produto"]].sort_values("demanda", ascending=False).head(25)
-    sem = sem.assign(Situação=np.where(sem["na_lista"], "tema já coberto por novidade da lista", "fora da lista de novidades"))
-    st.dataframe(sem.rename(columns={"t": "Termo", "qt_sessoes": f"Busca interna ({DIAS_BUSCA}d, sessões)", "qt_impressoes": "Google (impressões)", "qt_cliques": "Google (cliques)"})
-                 [["Termo", f"Busca interna ({DIAS_BUSCA}d, sessões)", "Google (impressões)", "Google (cliques)", "Situação"]],
-                 hide_index=True, use_container_width=True)
-    note("Termos buscados no site ou no Google <b>sem nenhum produto parecido no catálogo</b> (ignorados os da marca e da frente Shibari). "
-         "É um <b>radar, não uma recomendação</b>: os volumes são muito pequenos (a maioria tem 1 ou 2 sessões) e o Search Console só tem alguns dias. "
-         "O que dá para afirmar hoje é o tema com demanda repetida; \"fora da lista de novidades\" é onde vale olhar se falta um tipo de item. Ganha força com 8 a 12 semanas de histórico.")
+    m["demanda"] = m["qt_buscas"] + m["qt_impressoes"] / 20
+    total_b = int(busca["qt_buscas"].sum())
+    render_cards([
+        card("Buscas no site", f"{total_b}", sub=f"{int(busca['qt_sessoes'].sum())} sessões · {len(busca)} termos · {DIAS_BUSCA}d", ref="mesma base do Tráfego & Conteúdo"),
+        card("Termos sem produto parecido", f"{int((~m['tem_produto'] & (m['qt_buscas'] > 0)).sum())}", sub="buscados no site, sem produto no catálogo"),
+        card("Google (impressões)", f"{int(gsc['qt_impressoes'].sum())}", sub="todas as consultas, marca incluída"),
+    ])
+
+    def _tabela(df, n=15):
+        out = pd.DataFrame({
+            "Termo": df["t"], "Buscas no site": df["qt_buscas"], "Sessões": df["qt_sessoes"], "Google (impressões)": df["qt_impressoes"],
+            "Google (cliques)": df["qt_cliques"],
+            "Produto no catálogo": np.where(df["tem_produto"], "sim", "não"), "Novidade na lista": np.where(df["na_lista"], "sim", "não")}).head(n)
+        st.dataframe(out, hide_index=True, use_container_width=True, height=min(38 + 35 * 10, 38 + 35 * max(len(out), 1)), column_config={
+            c: st.column_config.NumberColumn(format="%d") for c in ["Buscas no site", "Sessões", "Google (impressões)", "Google (cliques)"]})
+
+    st.markdown("**Mais procurados (site e Google), com ou sem produto**")
+    _tabela(m.sort_values("demanda", ascending=False))
+    st.markdown("**Procurados sem produto parecido no catálogo**")
+    sem = m[~m["tem_produto"]].sort_values("demanda", ascending=False)
+    if sem.empty:
+        st.info("Todo termo buscado tem produto parecido no catálogo.")
+    else:
+        _tabela(sem)
+    note("Mesma base da busca interna do Tráfego & Conteúdo (eventos de busca no GA4; \"Buscas\" = eventos, \"Sessões\" = sessões distintas) e do Search Console, "
+         "sem os termos da marca e da frente Shibari (que não são demanda por item de Curadoria). <b>Produto no catálogo</b> = todas as palavras do termo aparecem no nome ou na "
+         "subcategoria de algum produto; <b>Novidade na lista</b> = o termo cai nos termos de busca de alguma novidade. É um <b>radar, não uma recomendação</b>: o volume é pequeno e o "
+         "Search Console só tem alguns dias. O que dá para afirmar é o tema com demanda repetida; \"sem produto\" e \"novidade na lista = não\" é onde vale olhar se falta um tipo de item.")

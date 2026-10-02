@@ -30,7 +30,7 @@ Das novidades mapeadas na aba `produto_novidade`, quais implementar primeiro, co
 - **Exceção à regra "score só na az"**: a az (us-east4) e o GA4/Search Console (US) não se juntam em SQL; o score é ranking de apresentação calculado no pandas (mesma exceção do Mapa de Interesse). Nenhum número financeiro é recalculado na página.
 
 ## Seções
-Resumo do Kimba (texto automático **sem IA**), cartões, 1 Ranking (filtro por faixa), 2 Detalhe de uma novidade (componentes do score, custo por fornecedor com data e link, piso × sugerido, família e demanda), 3 Radar de lacunas, 4 Já implementadas, Última cotação por fornecedor, Regras aplicadas, De quando são os dados.
+Resumo do Kimba (texto automático **sem IA**), cartões, 1 Ranking (filtro por faixa; ~15 linhas visíveis, o resto na rolagem), 2 Detalhe de uma novidade (componentes do score, custo por fornecedor com data e link, piso × sugerido, família e demanda), 3 Radar de lacunas (cartões; "mais procurados, com ou sem produto" e "sem produto parecido", mesma base de busca interna do Tráfego & Conteúdo: Buscas = eventos, Sessões = distintas), 4 Já implementadas, Última cotação por fornecedor, Regras aplicadas, De quando são os dados.
 
 ## Limites (mostrar sempre)
 - ~1 pedido por dia: leia faixas, não posições exatas. Vendas e demanda são **da família**, não da novidade.
