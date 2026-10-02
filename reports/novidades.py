@@ -143,8 +143,10 @@ def avisos(r):
         a.append("preço acima da faixa da família")
     if r.fg_acima_teto_impulso:
         a.append("Impulso acima de R$ 30")
-    if r.ds_fonte_meta == "fallback complementar":
-        a.append("meta do Impulso = Complementar (cadastro sem meta)")
+    if r.ds_fonte_meta == "markup impulso":
+        a.append("Impulso sem meta no cadastro: preço = custo × 2,5")
+    elif r.ds_fonte_meta == "fallback complementar":
+        a.append("sem meta no cadastro: usa a do Complementar")
     if pd.notna(r.nr_pedidos_familia_12m) and r.nr_pedidos_familia_12m < CONF_MEDIA:
         a.append(f"família com só {int(r.nr_pedidos_familia_12m)} pedidos")
     return "; ".join(a)
@@ -231,7 +233,7 @@ def render():
         "Lote (R$)": st.column_config.NumberColumn(format="R$ %.0f"), "Payback (meses)": st.column_config.NumberColumn(format="%.1f"),
         "Pedidos da família 12m": st.column_config.NumberColumn(format="%.0f"), "Pedidos 90d": st.column_config.NumberColumn(format="%.0f")})
     note("<b>Custo</b> = menor custo regular à vista entre Sexy e Vip (Gall só se for a única fonte); a promoção da Sexy nunca entra. "
-         "<b>Preço sugerido</b> = o menor preço que entrega a <b>meta de margem do cadastro</b> (papel pretendido × Revenda Nacional) depois de desconto, taxa, "
+         "<b>Preço sugerido</b> = o menor preço que entrega a <b>meta de margem do cadastro</b> (papel pretendido × Revenda Nacional; Impulso, sem meta, = custo × 2,5) depois de desconto, taxa, "
          "embalagem, reembolso e frete médios realizados na <code>tb_pedido</code>, arredondado para terminar em ,90. "
          "<b>Score</b> é relativo às novidades cotadas desta lista (posição percentil de margem 35% · vendas da família 25% · demanda do site 20% · capital e payback 20%), "
          "não uma nota absoluta. <b>Payback</b> usa o giro de um produto médio da família: ordem de grandeza, não previsão. A amostra é pequena (cerca de 1 pedido por dia): leia faixas, não posições exatas.")
@@ -279,7 +281,7 @@ def render():
         st.markdown(
             f"- **Premissas de margem** (da `tb_pedido`, {int(prem['nr_pedidos'])} pedidos nos últimos 12 meses): desconto {pct(prem['pr_desconto'])} sobre o bruto; "
             f"taxa de pagamento {pct(prem['pr_taxa'])}, embalagem {pct(prem['pr_embalagem'])}, reembolso {pct(prem['pr_reembolso'])} e resultado de frete {pct(prem['pr_resultado_frete'])} da receita líquida; imposto {pct(prem['pr_imposto'])}.\n"
-            "- **Meta de margem**: a do cadastro por papel pretendido × Revenda Nacional. O Impulso não tem meta no cadastro e usa a do Complementar.\n"
+            "- **Meta de margem**: a do cadastro por papel pretendido × Revenda Nacional. O Impulso não tem meta no cadastro: o preço é o custo × 2,5 (decisão do Hugo, 02/10/2026) e a MC projetada é só informativa.\n"
             "- **Papel pretendido e família** de cada novidade: rascunho do agente no dbt (`stg_novidade_atributo`), a revisar. Novidade nova na planilha aparece como \"Sem mapeamento\" até ser mapeada.\n"
             "- **Limites**: ~1 pedido/dia; GA4 de produto desde 29/08/2026; Google com poucos dias; só se vendeu o que já escolhemos (viés de sobrevivência); correlação não é causa.")
     section_title("De quando são os dados")
@@ -334,7 +336,7 @@ def _detalhe(r, cot, prem):
         st.markdown(
             f"- Faixa: **{r['faixa']}**" + (f" · score {r['score']:.0f} · confiança {r['confianca']}" if pd.notna(r["score"]) else "") + "\n"
             f"- Papel pretendido: {r['ds_papel_pretendido']} · família: {r['ds_familia'] if pd.notna(r['ds_familia']) else '—'}\n"
-            f"- Meta de margem: {pct(r['pr_meta_margem'], 0)} ({r['ds_fonte_meta']})")
+            f"- Meta de margem: {pct(r['pr_meta_margem'], 0) if pd.notna(r['pr_meta_margem']) else 'sem meta (markup 2,5 sobre o custo)'} ({r['ds_fonte_meta']})")
         if pd.notna(r["score"]):
             comp = pd.DataFrame({"Componente": ["Margem (35%)", "Vendas da família (25%)", "Demanda do site (20%)", "Capital e payback (20%)"],
                                  "Posição (0–100)": [100 * r["c_margem"], 100 * r["c_venda"], 100 * r["c_demanda"], 100 * r["c_capital"]]})

@@ -22,7 +22,7 @@ Das novidades mapeadas na aba `produto_novidade`, quais implementar primeiro, co
 - **Custo de referência** = menor custo regular entre Sexy e Vip; Gall só se nenhuma das duas tem cotação disponível. Link com várias variações usa o menor custo (aviso quando o maior passa de 5% acima).
 - **Preço piso** = custo ÷ (fator variável − meta), dividido por (1 − desconto médio), onde fator variável = 1 − taxa − embalagem − reembolso − imposto + resultado de frete (todos % da receita líquida realizados na `tb_pedido` em 12 meses). **Preço sugerido** = piso arredondado para cima terminando em ,90. Teste dbt garante que a MC projetada no preço sugerido nunca fica abaixo da meta.
 - **MC projetada** = receita líquida × fator variável − custo; % sobre a receita líquida (mesma definição da margem realizada).
-- **Meta**: a do cadastro. O cadastro **não tem linha para Impulso**; usa a do Complementar e a linha mostra o aviso (`ds_fonte_meta = fallback complementar`).
+- **Meta**: a do cadastro. O cadastro **não tem linha para Impulso**; por decisão do Hugo (02/10/2026) o preço do Impulso é **custo × 2,5** (`ds_fonte_meta = markup impulso`, `pr_meta_margem` nulo, MC projetada só informativa). Impulso acima de R$ 30 segue com aviso.
 - **Lote de teste** = 3 un (5 para Impulso) × custo; **payback** (meses) = lote ÷ (MC unitária × unidades/mês de um produto médio da família). Ordem de grandeza, não previsão.
 - **Faixa de preço da família** = P25/mediana/P75 do preço médio vendido por produto (12m, Curadoria). O preço sugerido é **conferido** contra ela (abaixo / dentro / acima), nunca usado como piso.
 - **Score 0–100** (pandas, só entre novidades abertas, cotadas e mapeadas): média ponderada de posições percentuais — margem (MC R$/un) 35%, vendas da família 25% (70% pedidos 12m + 30% tendência 90d), demanda do site 20% (média das posições de busca interna, impressões do Google sem marca e carrinhos GA4 da família), capital e payback 20% (lote menor e payback menor). Valor ausente conta como posição 0,5. Faixas: Implementar já ≥ 70 · Boa ≥ 50 · Avaliar ≥ 30 · Deixar. **Escala relativa a esta lista**, não nota absoluta.
@@ -40,6 +40,6 @@ Resumo do Kimba (texto automático **sem IA**), cartões, 1 Ranking (filtro por 
 - **Kimba com IA** exige o ranking dentro do dbt (o Kimba só redige sobre sinais calculados lá) e a chave da Anthropic válida no app; hoje a demanda está em outra região do BigQuery e a chave do Streamlit está inválida. Por isso o resumo é automático (template).
 
 ## Pendências
-- Hugo revisar `stg_novidade_atributo` (papel pretendido e família de cada novidade) e definir a meta do Impulso no cadastro.
+- Hugo revisar `stg_novidade_atributo` (papel pretendido e família de cada novidade) (a meta do Impulso, quando existir no cadastro, passa a valer sozinha no lugar do markup).
 - Cotação real das novidades (hoje sem dados de produção).
 - Fase 6: ligar novidade implementada ao SKU para medir o desempenho real e recalibrar os pesos depois do 1º ciclo de testes (90 dias).
