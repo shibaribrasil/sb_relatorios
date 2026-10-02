@@ -322,7 +322,8 @@ _DEMO_LEGENDA = [("entrada", "Entrada"), ("saida", "Saída"), ("subtotal", "Subt
 def demonstrativo(linhas, colunas, rotulo_coluna="Linha", casas=0, ocultar_zeradas=False, legenda=True, colunas_neutras=(), colunas_previstas=()):
     """Renderiza um demonstrativo (DRE, caixa, comparativos) como tabela HTML com cor por tipo de linha.
 
-    `linhas`: lista de (rotulo, tipo, valores) — tipo em entrada | saida | subtotal | resultado; `valores` alinhados
+    `linhas`: lista de (rotulo, tipo, valores[, previstas]) — tipo em entrada | saida | subtotal | resultado | previsto;
+    `previstas` (opcional) é uma lista de bool por coluna: célula com valor ainda a pagar, número em âmbar. `valores` alinhados
     a `colunas`. Saídas já vêm negativas (o sinal é do dado). `ocultar_zeradas` some com entradas/saídas zeradas em
     todas as colunas (subtotais e resultado ficam sempre). `colunas_neutras`: índices de colunas sem cor de sinal
     (ex.: uma coluna de diferença, que não é ganho nem perda). `colunas_previstas`: índices de colunas de valores
@@ -348,7 +349,9 @@ def demonstrativo(linhas, colunas, rotulo_coluna="Linha", casas=0, ocultar_zerad
     colgroup = '<colgroup><col style="width:clamp(180px,42vw,320px)">' + "".join("<col>" for _ in colunas) + "</colgroup>"
     min_tabela = 320 + 120 * len(colunas)
     corpo = []
-    for rotulo, tipo, valores in linhas:
+    for linha in linhas:
+        rotulo, tipo, valores = linha[:3]
+        mascara = linha[3] if len(linha) > 3 else [False] * len(valores)
         vals = [0.0 if v is None or v != v else float(v) for v in valores]
         if ocultar_zeradas and tipo in ("entrada", "saida") and all(abs(v) < 0.005 for v in vals):
             continue
@@ -358,7 +361,7 @@ def demonstrativo(linhas, colunas, rotulo_coluna="Linha", casas=0, ocultar_zerad
         fundo_linha = t["fundo"] or C["bg"]
         celulas = [f'<td style="{base}background:{fundo_linha};color:{t["rotulo"]};border-left:4px solid {t["barra"]};position:sticky;left:0;z-index:1">{rotulo}</td>']
         for k, v in enumerate(vals):
-            if k in colunas_previstas:  # previsto: só o número em âmbar, fundo normal da linha
+            if k in colunas_previstas or (mascara[k] and tipo != "resultado"):  # previsto: só o número em âmbar
                 cor = C["warning"] if abs(v) >= 0.005 else C["text_muted"]
                 fundo = fundo_linha if tipo != "resultado" else C["bg"]
             elif k in colunas_neutras:
