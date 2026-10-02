@@ -160,14 +160,16 @@ LINHAS_PREVISTO = {
 
 
 def _colunas_caixa(d):
-    """Colunas do demonstrativo: meses realizados (até o corrente) + previsto (mês corrente 'a pagar' e meses futuros).
-    Devolve [(rótulo, linha do mês, é_previsto)]."""
-    cols = [(rotulo_mes(r["dt_mes"], r["fg_mes_parcial"]), r, False) for _, r in d[~d["fg_mes_futuro"]].iterrows()]
+    """Colunas do demonstrativo: meses fechados, o mês corrente (UMA coluna: pago + a pagar) e os meses futuros
+    (só previsto). Devolve [(rótulo, linha do mês, modo)] com modo em fechado | corrente | futuro."""
+    cols = []
     for _, r in d.iterrows():
-        if r["fg_mes_parcial"] and float(r["vl_saida_prevista_total"]) > 0:
-            cols.append((pd.Timestamp(r["dt_mes"]).strftime("%m/%Y") + " (a pagar)", r, True))
-        elif r["fg_mes_futuro"]:
-            cols.append((pd.Timestamp(r["dt_mes"]).strftime("%m/%Y") + " (previsto)", r, True))
+        if r["fg_mes_futuro"]:
+            cols.append((pd.Timestamp(r["dt_mes"]).strftime("%m/%Y") + " (previsto)", r, "futuro"))
+        elif r["fg_mes_parcial"]:
+            cols.append((rotulo_mes(r["dt_mes"], True), r, "corrente"))
+        else:
+            cols.append((rotulo_mes(r["dt_mes"], False), r, "fechado"))
     return cols
 
 
@@ -184,19 +186,30 @@ def _linhas_caixa(cols):
         ("= Total de saídas", "subtotal", "vl_saida_total", -1),
         ("= Resultado de caixa", "resultado", "vl_resultado_caixa_v1", 1),
     ]
+    # mês corrente: cada saída = pago + a pagar no mês; a célula fica âmbar se ainda há parte a pagar e vermelha
+    # quando a linha já foi toda paga. O resultado do mês corrente desconta também o que falta pagar.
     out = []
     for n, tipo, col, sinal in linhas:
-        vals = []
-        for _, r, prev in cols:
-            if prev:
-                c2 = LINHAS_PREVISTO.get(col)
+        vals, mascara = [], []
+        c2 = LINHAS_PREVISTO.get(col)
+        for _, r, modo in cols:
+            if modo == "futuro":
                 vals.append(sinal * float(r[c2]) if c2 else None)
+                mascara.append(False)
+            elif modo == "corrente" and c2:
+                a_pagar = float(r[c2])
+                vals.append(sinal * (float(r[col]) + a_pagar))
+                mascara.append(a_pagar > 0.005)
+            elif modo == "corrente" and col == "vl_resultado_caixa_v1":
+                vals.append(float(r["vl_resultado_caixa_v1"]) - float(r["vl_saida_prevista_total"]))
+                mascara.append(False)
             else:
                 vals.append(sinal * float(r[col]))
-        out.append((n, tipo, vals))
-    if any(prev for _, _, prev in cols):
+                mascara.append(False)
+        out.append((n, tipo, vals, mascara))
+    if any(modo != "fechado" for _, _, modo in cols):
         out.append(("→ Entrada necessária para cobrir o previsto", "previsto",
-                    [float(r["vl_entrada_necessaria"]) if prev else None for _, r, prev in cols]))
+                    [float(r["vl_entrada_necessaria"]) if modo != "fechado" else None for _, r, modo in cols]))
     return out
 
 
@@ -293,8 +306,8 @@ def render():
         st.plotly_chart(_grafico_meses(d), use_container_width=True)
     cols = _colunas_caixa(d)
     demonstrativo(_linhas_caixa(cols), [c for c, _, _ in cols], ocultar_zeradas=True,
-                  colunas_previstas=tuple(k for k, (_, _, prev) in enumerate(cols) if prev))
-    note("Verde = entra, vermelho = sai (em negativo), azul = subtotais; o resultado fica verde ou vermelho pelo sinal. Linhas zeradas em todos os meses ficam ocultas. <strong>Amarelo = previsto:</strong> contas já lançadas no Bling, ainda sem baixa, com vencimento até 3 meses à frente (só o que está no Bling: pró-labore ou Google Ads ainda não lançados não aparecem); nos meses futuros não há entrada nem resultado, e a última linha mostra quanto precisa entrar para cobrir o previsto (no mês corrente, descontado o que já sobrou). As saídas realizadas são o contas a pagar do Bling pela <strong>data da baixa</strong> (quando não há baixa, o vencimento), só até hoje; "
+                  colunas_previstas=tuple(k for k, (_, _, modo) in enumerate(cols) if modo == "futuro"))
+    note("Verde = entra, vermelho = sai (em negativo), azul = subtotais; o resultado fica verde ou vermelho pelo sinal. Linhas zeradas em todos os meses ficam ocultas. <strong>Amarelo = ainda a pagar:</strong> contas já lançadas no Bling, sem baixa, com vencimento até 3 meses à frente (só o que está no Bling: pró-labore ou Google Ads ainda não lançados não aparecem). No <strong>mês corrente</strong>, cada saída soma o que já foi pago e o que ainda vence no mês: fica amarela se ainda tem parte a pagar e vermelha quando já foi toda paga; o resultado do mês desconta também o que falta pagar. Nos meses futuros não há entrada nem resultado, e a última linha mostra quanto precisa entrar para cobrir o previsto. As saídas realizadas são o contas a pagar do Bling pela <strong>data da baixa</strong> (quando não há baixa, o vencimento), só até hoje; "
          "o mesmo gasto lançado duas vezes (mesmo mês de pagamento e de competência, fornecedor e valor) conta uma vez. Reembolso parcial sai no mês em que aconteceu; pedido cancelado ou estornado por inteiro não entra.")
 
     section_title("Ponte com a visão gerencial (DRE)")
@@ -372,6 +385,6 @@ def render():
         ("Reembolsos", "parcial sai no mês em que aconteceu; pedido cancelado ou estornado por inteiro não entra."),
         ("Saídas", "contas a pagar do Bling pela <strong>data da baixa</strong> (sem baixa, o vencimento), só até hoje. Tudo entra: mercadoria, fatura de frete, mídia (Google pago em M+1), investimento, suprimentos. Lançamento repetido (mesmo mês de pagamento e de competência, fornecedor e valor) conta uma vez; conta apagada no Bling não entra."),
         ("Resultado de caixa", "entrada líquida − saídas realizadas. Mês negativo por compra grande não é ajustado."),
-        ("Previsto (amarelo)", "contas já lançadas no Bling, sem baixa, com vencimento depois de hoje, no mês corrente e nos 3 meses seguintes. Só o que está no Bling, sem estimativas. Meses futuros não têm entrada nem resultado; mostram a entrada necessária para cobrir o previsto (no mês corrente, descontado o que já sobrou)."),
+        ("Previsto (amarelo)", "contas já lançadas no Bling, sem baixa, com vencimento depois de hoje, no mês corrente e nos 3 meses seguintes. Só o que está no Bling, sem estimativas. No mês corrente cada saída soma pago + a pagar (amarela se ainda tem parte a pagar, vermelha se já foi toda paga) e o resultado desconta o que falta pagar. Meses futuros não têm entrada nem resultado; mostram a entrada necessária para cobrir o previsto."),
         ("Limites", "desde 08/2026; gasto não lançado no Bling não existe aqui; o saldo parado no Nuvem Pago não aparece (ver v2, extrato); prazo do cartão a confirmar; mês corrente parcial."),
     ], titulo="Regras aplicadas — v1 (estimado pelos pedidos)")
