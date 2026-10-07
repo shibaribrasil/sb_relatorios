@@ -33,6 +33,7 @@ TIPO_RECOMPRA = "recompra_piloto"  # piloto do Ecossistema de Pós-Venda: últim
 CAMPANHA_LISTA_RECOMPRA = "perdido_ultimo_contato"
 TAB_LISTA = f"{bq.PROJECT}.raw_control.posvenda_lista"  # lista operacional montada à mão e liberada em ondas (fg_liberado)
 LIMITE_CUPONS_POR_CLIQUE = 30  # trava de segurança do botão "Gerar cupons pendentes"
+LOTE_DIARIO_RECOMPRA = 20  # clientes sem contato registrado que a lista mantém (Hugo, 07/10/2026): o lote do dia completa até este número
 # Proximidade: o registro nasce no dia seguinte à entrega (D+1) e FICA até o Robson tratar — não há prazo para sumir (decisão do Hugo,
 # 28/09/2026: fim de semana, folga ou imprevisto não podem fazer o contato desaparecer). PROXIMIDADE_DESDE = 1ª entrega considerada:
 # 30 dias antes do lançamento da lista (28/09/2026), para já contatar o que ficou para trás.
@@ -259,6 +260,81 @@ def carregar_recompra_piloto_seguro():
     except Exception as e:
         st.warning(f"Não consegui montar a lista de recompra (piloto) agora: {e}")
         return None
+
+
+def _sql_completar_lote(az: str, lote: int) -> str:
+    """UPDATE que libera (`fg_liberado`) os próximos clientes da fila para completar `lote` clientes SEM contato registrado.
+
+    Regras (decisão do Hugo, 07/10/2026): todo dia a lista carrega novos clientes que ainda não foram contatados e completa até `lote`
+    — se sobraram contatos que o atendente não conseguiu fazer ontem, só entra a diferença. Detalhes:
+    - roda no máximo UMA vez por dia (se alguém já foi liberado hoje, não faz nada): tratar tudo de manhã não puxa mais gente no mesmo dia;
+    - "sem contato registrado" = liberado, visível (consentimento 'true', sem "Não retomar contato" em outra lista, sem compra depois
+      da criação da lista nem com o cupom) e SEM o check "Já tratei" em `sac_tarefas`;
+    - a fila é a ordem (`ordem`) dos clientes com `ds_consentimento = 'true'` ainda não liberados: quem não tem consentimento conferido
+      nunca entra;
+    - linhas de teste (chave que começa com 'teste') ficam fora da conta e da liberação.
+    Devolve o SQL; quem chama executa e lê `num_dml_affected_rows`."""
+    return f"""
+        UPDATE `{TAB_LISTA}` l
+           SET fg_liberado = TRUE, dt_liberacao = CURRENT_TIMESTAMP(),
+               onda = (SELECT COALESCE(MAX(x.onda), 0) + 1 FROM `{TAB_LISTA}` x WHERE x.campanha = '{CAMPANHA_LISTA_RECOMPRA}' AND NOT STARTS_WITH(x.chave, 'teste'))
+         WHERE l.campanha = '{CAMPANHA_LISTA_RECOMPRA}' AND NOT l.fg_liberado AND l.ds_consentimento = 'true'
+           AND NOT STARTS_WITH(l.chave, 'teste')
+           AND NOT EXISTS (SELECT 1 FROM `{TAB_LISTA}` y WHERE y.campanha = '{CAMPANHA_LISTA_RECOMPRA}' AND NOT STARTS_WITH(y.chave, 'teste')
+                              AND DATE(y.dt_liberacao, '{FUSO}') = CURRENT_DATE('{FUSO}'))
+           AND l.chave IN (
+             WITH tarefa AS (
+               SELECT tipo_tarefa, chave, ds_resultado, fg_feito, dt_atualizacao
+                 FROM `{TAB_TAREFAS}`
+               QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_tarefa, chave ORDER BY dt_atualizacao DESC) = 1
+             ), {_sql_nao_retomar(az)}, cupom AS (
+               SELECT referencia, codigo FROM `{cup.TABELA}` WHERE campanha = '{cup.CAMPANHA_RETORNO_PERDIDO}'
+               QUALIFY ROW_NUMBER() OVER (PARTITION BY referencia ORDER BY criado_em DESC) = 1
+             ), base AS (
+               SELECT b.chave, b.ordem, b.fg_liberado,
+                      EXISTS (SELECT 1 FROM nao_retomar n WHERE n.email = LOWER(b.email)
+                                 AND NOT (n.tipo_tarefa = '{TIPO_RECOMPRA}' AND n.chave = b.chave)) AS fg_nao_retomar,
+                      COALESCE((SELECT MAX(c.dt_ult_pedido) FROM `{az}.tb_cliente` c WHERE LOWER(c.ds_email) = LOWER(b.email))
+                               >= DATE(b.criado_em, '{FUSO}'), FALSE) AS fg_comprou_depois,
+                      EXISTS (SELECT 1 FROM cupom k JOIN `{az}.tb_pedido` p ON p.ds_codigo_cupom_nuvemshop = k.codigo
+                               WHERE k.referencia = b.chave) AS fg_comprou_com_cupom,
+                      EXISTS (SELECT 1 FROM tarefa t WHERE t.tipo_tarefa = '{TIPO_RECOMPRA}' AND t.chave = b.chave AND t.fg_feito) AS fg_tratado
+                 FROM `{TAB_LISTA}` b
+                WHERE b.campanha = '{CAMPANHA_LISTA_RECOMPRA}' AND b.ds_consentimento = 'true' AND NOT STARTS_WITH(b.chave, 'teste')
+             ), pendentes AS (
+               SELECT COUNT(*) AS n FROM base
+                WHERE fg_liberado AND NOT fg_tratado AND NOT fg_nao_retomar AND NOT fg_comprou_depois AND NOT fg_comprou_com_cupom
+             ), fila AS (
+               SELECT chave, ROW_NUMBER() OVER (ORDER BY ordem) AS posicao FROM base
+                WHERE NOT fg_liberado AND NOT fg_nao_retomar AND NOT fg_comprou_depois AND NOT fg_comprou_com_cupom
+             )
+             SELECT f.chave FROM fila f CROSS JOIN pendentes p WHERE f.posicao <= GREATEST(0, {int(lote)} - p.n)
+           )
+    """
+
+
+def completar_lote_diario_recompra() -> int:
+    """Libera os clientes que faltam para a lista ter `LOTE_DIARIO_RECOMPRA` sem contato registrado (1x por dia). Devolve quantos
+    foram liberados. Escreve em `raw_control.posvenda_lista` (a mesma conta que grava os checks do SAC)."""
+    client = bq.get_client()
+    job = client.query(_sql_completar_lote(f"{bq.PROJECT}.dbt_dw_az", LOTE_DIARIO_RECOMPRA))
+    job.result()
+    return int(job.num_dml_affected_rows or 0)
+
+
+def _completar_lote_seguro():
+    """Roda o lote do dia na 1ª abertura da página (e só 1x por sessão e dia). Falha aqui não derruba o resto da página."""
+    hoje = _agora().date()
+    if st.session_state.get("lote_recompra_dia") == hoje:
+        return
+    try:
+        liberados = completar_lote_diario_recompra()
+    except Exception as e:
+        st.warning(f"Não consegui completar o lote do dia da recompra (piloto): {e}")
+        return
+    st.session_state["lote_recompra_dia"] = hoje
+    if liberados:
+        carregar_recompra_piloto.clear()
 
 
 def elegivel_recompra_piloto(df):
@@ -784,6 +860,7 @@ def render():
                  + aviso_link,
         )
 
+    _completar_lote_seguro()
     df_rec = carregar_recompra_piloto_seguro()
     if df_rec is not None and not df_rec.empty:
         lst_rec = _lista_recompra_piloto(df_rec, cup.carregar_cupons(cup.CAMPANHA_RETORNO_PERDIDO))
@@ -800,8 +877,8 @@ def render():
                 "Última compra": st.column_config.DateColumn(format="DD/MM/YYYY"),
             },
             nota="Piloto do Ecossistema de Pós-Venda: contato humano para quem não compra há mais de 1 ano e <b>já aceitou receber "
-                 "mensagens</b> (consentimento conferido na Nuvemshop). A lista é liberada em ondas pelo sócio; aqui aparece só o que foi "
-                 "liberado. Cada cliente leva um <b>crédito de retorno pessoal</b> (uso único, 21 dias, com valor mínimo de compra): clique em "
+                 "mensagens</b> (consentimento conferido na Nuvemshop). <b>Todo dia</b>, na 1ª abertura da página, a lista é completada até "
+                 f"<b>{LOTE_DIARIO_RECOMPRA} clientes sem contato registrado</b>: quem sobrou de ontem continua aqui e só entra a diferença. Cada cliente leva um <b>crédito de retorno pessoal</b> (uso único, 21 dias, com valor mínimo de compra): clique em "
                  "\"Gerar cupons pendentes\" e depois use o link \"Mensagem\" de cada linha — o crédito já entra aplicado no carrinho. "
                  "Quem responder <b>SAIR</b> ou pedir para não receber: marque a Resolução \"Não retomar contato\" (vale para todas as listas). "
                  "Quem comprar (com o cupom ou não) sai sozinho da lista. <b>Pare e avise o Hugo</b> se mais de 3% pedirem para sair, se o "
