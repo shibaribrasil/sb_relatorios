@@ -656,6 +656,13 @@ def carregar_recontato_seguro():
 def _form_gerar_cupom(recontato):
     """Gera o cupom (function) para 1 cliente da lista que ainda não tem cupom. A validade de 48h conta a partir do clique."""
     sem_cupom = recontato[recontato["cupom"].str.startswith("—")] if not recontato.empty else recontato
+    if not sem_cupom.empty:
+        # O Robson pode registrar uma negativa na Resolução da própria repescagem ("Sem interesse", "WhatsApp inválido", "Não retomar contato")
+        # ANTES de gerar o cupom: decidiu não gerar. Depois de salvar, o cliente sai da lista de geração (a Resolução fica gravada em
+        # sac_tarefas com a chave = referência do recontato). O restante da tabela segue como está.
+        resolucao = carregar_tarefas(TIPO_RECONTATO).set_index("chave")["ds_resultado"] if not sem_cupom.empty else pd.Series(dtype=str)
+        negativa = sem_cupom["chave"].map(lambda c: resolucao.get(c) in msg.RESOLUCOES_SEM_CUPOM)
+        sem_cupom = sem_cupom[~negativa]
     if sem_cupom.empty:
         return
     rotulos = {r["referencia"]: f"{r['nm_cliente']} — {r['origem_txt']} — {brl(r['vl_total'])}" for _, r in sem_cupom.iterrows()}

@@ -311,3 +311,7 @@ RESOLUCOES_SEM_RECONTATO = {
     "Não retomar contato", "WhatsApp inválido", "Telefone inválido / sem WhatsApp",
     "Comprou", "Refez o pedido", "Estorno confirmado", "Estorno pendente — resolver",
 }
+
+# Resolução da REPESCAGEM (recontato_cupom) que cancela a geração do cupom: o Robson decidiu não gerar. Ao salvar, o cliente sai da lista
+# "Gerar cupom" na próxima execução (Hugo, 07/10/2026). "Vai pensar" e "Sem resposta" NÃO cancelam (ainda dá para gerar).
+RESOLUCOES_SEM_CUPOM = {"Sem interesse", "WhatsApp inválido", "Não retomar contato"}
