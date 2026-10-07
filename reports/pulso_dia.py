@@ -214,11 +214,11 @@ def render():
     dm = ped[ped["mes"] == mes]
     fat_mes = float(dm["vl_liquido"].sum())
     mm = metas[metas["mes"] == mes]
-    t_mes = tempo[tempo["dt_prim_dia_mes"] == mes]
-    total_uteis = int(t_mes["fg_dia_util"].sum())
-    uteis_fechados = int(t_mes[(t_mes["dt_data"] < pd.Timestamp(hoje))]["fg_dia_util"].sum())
+    total_dias = mes.days_in_month  # dias corridos (decisão do Hugo, 07/10/2026)
+    dias_fechados = hoje.day - 1
     fat_fechado = float(dm.loc[dm["dt_pedido"] < pd.Timestamp(hoje), "vl_liquido"].sum())
-    proj = (fat_fechado / uteis_fechados * total_uteis) if uteis_fechados else None
+    media_dia = (fat_fechado / dias_fechados) if dias_fechados else None
+    proj = (media_dia * total_dias) if media_dia is not None else None
     meta_total = float(mm["vl_objetivo_total"].iloc[0]) if not mm.empty else None
     linha = mm[mm["dt_data"] == pd.Timestamp(hoje)]
     meta_acum = float(linha["vl_meta_dia_acumulado"].iloc[0]) if not linha.empty else None
@@ -227,10 +227,10 @@ def render():
         card("Meta acumulada até hoje", brl(meta_acum) if meta_acum else "—",
              f"atingimento {pct(fat_mes / meta_acum, 0)}" if meta_acum else "sem meta cadastrada",
              variant=("ok" if meta_acum and fat_mes >= meta_acum else "bad" if meta_acum else "neutral")),
-        card("Dias úteis", f"{uteis_fechados} de {total_uteis}", "fechados no mês (sem hoje) · calendário tb_tempo"),
-        card("Faturamento por dia útil", brl(fat_fechado / uteis_fechados) if uteis_fechados else "—", "dias fechados ÷ dias úteis fechados"),
+        card("Dias do mês", f"{dias_fechados} de {total_dias}", "dias corridos fechados no mês (sem hoje)"),
+        card("Média de vendas por dia", brl(media_dia) if media_dia is not None else "—", "dias fechados ÷ dias corridos fechados"),
         card("Projeção do mês", brl(proj) if proj else "—",
-             f"{pct(proj / meta_total, 0)} da meta do mês ({brl(meta_total)})" if proj and meta_total else "ritmo atual × dias úteis do mês",
+             f"{pct(proj / meta_total, 0)} da meta do mês ({brl(meta_total)})" if proj and meta_total else "média por dia × dias do mês",
              variant=("ok" if proj and meta_total and proj >= meta_total else "bad" if proj and meta_total else "neutral")),
     ])
     fig = _grafico_meta_acumulada(ped, metas, mes, hoje)
