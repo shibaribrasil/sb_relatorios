@@ -23,6 +23,7 @@ from plotly.subplots import make_subplots
 from common import bigquery as bq
 from common.ga4 import carregar_ga4, sessoes as ga4_sessoes, INICIO_GA4
 from reports.origem_campanha import drill_campanhas
+from reports.vendas_acao import secao_acao
 from reports.perfil_pedidos import secao_perfil, pedidos_de_linhas
 from common.design import (
     COLORS, METRIC_COLORS, CATEGORICAL, inject_css, card, render_cards,
@@ -688,6 +689,9 @@ def render():
 
     # ═══ PERFIL DOS PEDIDOS ═══
     secao_perfil(pedidos_de_linhas(sel), pedidos_de_linhas(ant) if ant is not None else None, rot or "")
+
+    # ═══ VENDAS COM AÇÃO OU PROMOÇÃO ═══
+    secao_acao(meses_sel, hoje)
 
     # ═══ CONVERSÃO DO SITE (GA4) ═══
     try:
