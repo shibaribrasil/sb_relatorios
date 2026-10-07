@@ -20,6 +20,8 @@ PADRÃO DAS MENSAGENS (decisão do Hugo, 07/10/2026 — vale para TODA mensagem 
   o **cupom/código**, a **vantagem oferecida** (% ou valor de crédito, sticker, Pix), o **prazo/validade**, o **valor mínimo** e a
   **pergunta ou ação principal** pedida ao cliente. Nome do cliente, saudação e o resto do texto ficam sem negrito. Não pôr negrito
   colado em link.
+- **Quebra de linha:** a mensagem é escrita em blocos curtos separados por linha em branco (helper `_p`): saudação, contexto,
+  pergunta/oferta, link (sempre sozinho na linha, depois de dois-pontos) e, por último, o rodapé. Nada de parágrafo corrido.
 """
 import re
 from urllib.parse import quote
@@ -49,7 +51,10 @@ def telefone_whatsapp(telefone) -> str | None:
 
 def _sem_emoji(texto: str) -> str:
     """Remove emoji (regra de texto) e arruma os espaços que sobrarem."""
-    return re.sub(r"\s{2,}", " ", _EMOJI.sub("", texto)).strip()
+    t = _EMOJI.sub("", texto)
+    t = re.sub(r"[ \t]+", " ", t)           # espaços repetidos (sem mexer nas quebras de linha)
+    t = re.sub(r" *\n *", "\n", t)          # espaço sobrando em volta da quebra
+    return re.sub(r"\n{3,}", "\n\n", t).strip()
 
 
 def _neg(texto) -> str:
@@ -60,7 +65,12 @@ def _neg(texto) -> str:
 def _fecha(texto: str) -> str:
     """Põe o rodapé obrigatório (SAIR) no fim da mensagem. Idempotente: não duplica se já estiver lá."""
     texto = texto.rstrip()
-    return texto if texto.endswith(RODAPE_SAIR) else f"{texto} {RODAPE_SAIR}"
+    return texto if texto.endswith(RODAPE_SAIR) else f"{texto}\n\n{RODAPE_SAIR}"
+
+
+def _p(*blocos) -> str:
+    """Junta os blocos da mensagem separados por linha em branco (ignora blocos vazios)."""
+    return "\n\n".join(b.strip() for b in blocos if b and str(b).strip())
 
 
 def link_whatsapp(telefone, mensagem: str) -> str | None:
@@ -84,10 +94,14 @@ def _oi(nome) -> str:
 def msg_carrinho(nome, recorrente: bool, url_recuperacao) -> str:
     n = primeiro_nome(nome)
     if recorrente:
-        return _fecha(f"Oi {n}, tudo bem? Aqui é o {ATENDENTE}, da {LOJA}. Você já comprou com a gente e começou um novo pedido "
-                      f"que acabou não sendo finalizado. {_neg('Ainda tem interesse?')} Se quiser, te ajudo a fechar por aqui: {url_recuperacao}")
-    return _fecha(f"Oi {n}, aqui é o {ATENDENTE}, da {LOJA}. Vi que você montou um pedido com a gente e não chegou a finalizar. "
-                  f"Ficou alguma dúvida sobre frete ou forma de pagamento? {_neg('Está tudo salvo aqui')}, é só finalizar por este link: {url_recuperacao}")
+        return _fecha(_p(
+            f"Oi {n}, tudo bem? Aqui é o {ATENDENTE}, da {LOJA}.",
+            f"Você já comprou com a gente e começou um novo pedido que acabou não sendo finalizado. {_neg('Ainda tem interesse?')}",
+            f"Se quiser, te ajudo a fechar por aqui:\n{url_recuperacao}"))
+    return _fecha(_p(
+        f"Oi {n}, aqui é o {ATENDENTE}, da {LOJA}.",
+        "Vi que você montou um pedido com a gente e não chegou a finalizar. Ficou alguma dúvida sobre frete ou forma de pagamento?",
+        f"{_neg('Está tudo salvo aqui')}, é só finalizar por este link:\n{url_recuperacao}"))
 
 
 # --- Pedido cancelado (por tipo de cancelamento — ds_motivo_cancelamento da tb_pedido_cancelado) ----------------
@@ -98,23 +112,32 @@ _MEIO = {"pix": "Pix", "boleto": "boleto", "credit_card": "cartão"}
 def msg_cancelado(nome, numero, valor, motivo, estorno_a_conferir: bool, meio_pagamento=None) -> str:
     pedido = f"pedido #{numero}"
     if estorno_a_conferir:
-        return _fecha(f"{_oi(nome)} Estou acompanhando o cancelamento do seu {pedido} ({_valor(valor)}) e queria confirmar com você: "
-                      f"{_neg('o valor já voltou para a sua conta ou cartão?')} Se ainda não apareceu, me avisa que eu resolvo por aqui.")
+        return _fecha(_p(
+            _oi(nome),
+            f"Estou acompanhando o cancelamento do seu {pedido} ({_valor(valor)}) e queria confirmar com você: "
+            f"{_neg('o valor já voltou para a sua conta ou cartão?')}",
+            "Se ainda não apareceu, me avisa que eu resolvo por aqui."))
     if motivo in ("automatic", "expired"):
         meio = _MEIO.get(meio_pagamento, "pagamento")
-        dificuldade = _neg("Teve alguma dificuldade com o " + meio + "?")
-        return _fecha(f"{_oi(nome)} Vi que o pagamento do seu {pedido} ({_valor(valor)}) não chegou a ser concluído e o sistema "
-                      f"cancelou o pedido automaticamente. {dificuldade} Se ainda tiver interesse, "
-                      f"te ajudo a refazer o pedido por aqui.")
+        return _fecha(_p(
+            _oi(nome),
+            f"Vi que o pagamento do seu {pedido} ({_valor(valor)}) não chegou a ser concluído e o sistema cancelou o pedido automaticamente.",
+            _neg("Teve alguma dificuldade com o " + meio + "?"),
+            "Se ainda tiver interesse, te ajudo a refazer o pedido por aqui."))
     if motivo == "customer":
-        return _fecha(f"{_oi(nome)} Seu {pedido} foi cancelado e eu queria entender com você: "
-                      f"{_neg('aconteceu alguma coisa que a gente possa melhorar?')} Se quiser rever algum item ou tirar alguma dúvida, "
-                      f"é só me chamar por aqui.")
+        return _fecha(_p(
+            _oi(nome),
+            f"Seu {pedido} foi cancelado e eu queria entender com você: {_neg('aconteceu alguma coisa que a gente possa melhorar?')}",
+            "Se quiser rever algum item ou tirar alguma dúvida, é só me chamar por aqui."))
     if motivo == "inventory":
-        return _fecha(f"{_oi(nome)} Precisamos cancelar o seu {pedido} porque um dos itens ficou sem estoque — desculpa pelo "
-                      f"transtorno. {_neg('Posso te sugerir uma alternativa parecida ou te avisar assim que o item voltar?')}")
-    return _fecha(f"{_oi(nome)} Estou passando para falar sobre o cancelamento do seu {pedido}. "
-                  f"{_neg('Ficou alguma pendência ou dúvida que eu possa resolver por aqui?')}")
+        return _fecha(_p(
+            _oi(nome),
+            f"Precisamos cancelar o seu {pedido} porque um dos itens ficou sem estoque — desculpa pelo transtorno.",
+            _neg("Posso te sugerir uma alternativa parecida ou te avisar assim que o item voltar?")))
+    return _fecha(_p(
+        _oi(nome),
+        f"Estou passando para falar sobre o cancelamento do seu {pedido}.",
+        _neg("Ficou alguma pendência ou dúvida que eu possa resolver por aqui?")))
 
 
 def acao_cancelado(motivo, estorno_a_conferir: bool) -> str:
@@ -133,16 +156,27 @@ def acao_cancelado(motivo, estorno_a_conferir: bool) -> str:
 
 def msg_entrega(nome, numero, rastreio, url_rastreio, problema: bool, atrasado: bool, dias_parado) -> str:
     pedido = f"pedido #{numero}"
-    acompanhe = f" Rastreio: {_neg(rastreio) if isinstance(rastreio, str) else rastreio}" + (f" — {url_rastreio}" if isinstance(url_rastreio, str) and url_rastreio else "") if isinstance(rastreio, str) and rastreio else ""
+    acompanhe = ""
+    if isinstance(rastreio, str) and rastreio:
+        acompanhe = f"Rastreio: {_neg(rastreio)}" + (f"\n{url_rastreio}" if isinstance(url_rastreio, str) and url_rastreio else "")
     if problema:
-        return _fecha(f"{_oi(nome)} A transportadora registrou um problema na entrega do seu {pedido}. "
-                      f"{_neg('Pode confirmar se o endereço está certo e se tem alguém para receber?')} Assim a gente resolve rapidinho.{acompanhe}")
+        return _fecha(_p(
+            _oi(nome),
+            f"A transportadora registrou um problema na entrega do seu {pedido}.",
+            _neg("Pode confirmar se o endereço está certo e se tem alguém para receber?") + " Assim a gente resolve rapidinho.",
+            acompanhe))
     if atrasado:
-        return _fecha(f"{_oi(nome)} Seu {pedido} {_neg('passou do prazo estimado de entrega')} e já estamos acompanhando com a transportadora. "
-                      f"{_neg('Você chegou a receber?')} Qualquer novidade eu te aviso por aqui.{acompanhe}")
+        return _fecha(_p(
+            _oi(nome),
+            f"Seu {pedido} {_neg('passou do prazo estimado de entrega')} e já estamos acompanhando com a transportadora.",
+            f"{_neg('Você chegou a receber?')} Qualquer novidade eu te aviso por aqui.",
+            acompanhe))
     parado = _neg("sem atualização há " + str(int(dias_parado)) + " dias")
-    return _fecha(f"{_oi(nome)} O rastreio do seu {pedido} está {parado} e estamos verificando "
-                  f"com a transportadora. {_neg('Você chegou a receber?')} Qualquer novidade eu te aviso por aqui.{acompanhe}")
+    return _fecha(_p(
+        _oi(nome),
+        f"O rastreio do seu {pedido} está {parado} e estamos verificando com a transportadora.",
+        f"{_neg('Você chegou a receber?')} Qualquer novidade eu te aviso por aqui.",
+        acompanhe))
 
 
 # --- Recontato com cupom (última tentativa, 7 dias depois do contato do SAC) ---------------------------------------
@@ -152,12 +186,17 @@ def msg_recontato_cupom(nome, origem, numero_pedido, codigo, valor_pct, expira_e
     da mensagem (48 horas) só é verdadeira porque o cupom nasce na hora do envio e vence de fato nesse horário."""
     assunto = f"o seu pedido #{numero_pedido}" if origem == "cancelado" else "a sua compra"
     quando = expira_em.strftime("%d/%m às %H:%M")
-    link = f" O carrinho continua salvo aqui: {url_recuperacao}" if origem == "carrinho" and isinstance(url_recuperacao, str) and url_recuperacao else ""
     vantagem = _neg("cupom de " + str(int(valor_pct)) + "% de desconto")
     prazo = _neg("48 horas, até " + quando)
-    return _fecha(f"{_oi(nome)} Passei para te avisar de uma última cortesia: separei um {vantagem} para você "
-                  f"concluir {assunto}. O código é {_neg(codigo)}, de uso único, e vale só por {prazo}. Depois disso ele expira. "
-                  f"É só aplicar o código no checkout.{link} Qualquer dúvida, me chama por aqui.")
+    checkout = "É só aplicar o código no checkout."
+    if origem == "carrinho" and isinstance(url_recuperacao, str) and url_recuperacao:
+        checkout += f"\nO carrinho continua salvo aqui:\n{url_recuperacao}"
+    return _fecha(_p(
+        _oi(nome),
+        f"Passei para te avisar de uma última cortesia: separei um {vantagem} para você concluir {assunto}.",
+        f"O código é {_neg(codigo)}, de uso único, e vale só por {prazo}. Depois disso ele expira.",
+        checkout,
+        "Qualquer dúvida, me chama por aqui."))
 
 
 # --- Recompra: último contato dos "Perdido" (piloto do Ecossistema de Pós-Venda, 07/10/2026) ---------------------
@@ -166,15 +205,18 @@ def msg_recompra_ultimo_contato(nome, link, valor, minimo, expira_em) -> str:
     """Contato humano para quem não compra há mais de 1 ano: pergunta como tem sido a prática, oferece o crédito de retorno pessoal
     (uso único, validade REAL de `expira_em`, valor mínimo `minimo`), lembra o sticker exclusivo e os 3% de desconto no Pix e dá a saída
     ("SAIR"). Sem urgência artificial. Texto aprovado pelo Hugo em 07/10/2026 (com o complemento "curtir nossas novidades" e a frase do
-    sticker e do Pix). O cupom COMBINA com outros descontos (decisão do Hugo, 07/10/2026) justamente para o desconto de 3% do Pix valer junto;
-    antes da onda 1, confirmar num pedido de teste (cupom + Pix) que o Pix aparece no checkout."""
+    sticker e do Pix); a forma em blocos (quebras de linha) é só de apresentação. O cupom COMBINA com outros descontos (decisão do Hugo,
+    07/10/2026) justamente para o desconto de 3% do Pix valer junto; antes da onda 1, confirmar num pedido de teste (cupom + Pix) que o
+    Pix aparece no checkout."""
     ate = expira_em.strftime("%d/%m")
-    # *negrito* é a marcação do WhatsApp (asteriscos colados no texto, sem espaço por dentro): destaca só o que importa na leitura rápida.
-    return _fecha(f"{_oi(nome)} Faz um tempo desde a sua última compra com a gente e eu queria saber como tem sido a sua prática com o "
-            f"que você levou. Se quiser voltar a explorar, separei um *crédito de {_valor(valor)}* só para você curtir nossas novidades: "
-            f"é de uso único e vale *até {ate}*, em compras a partir de *{_valor(minimo)}*. É só abrir este link, que o crédito já entra "
-            f"aplicado no carrinho: {link} Na compra, você ainda leva um *sticker exclusivo* e tem *3% de desconto pagando no Pix*. "
-            f"Qualquer dúvida, me chama por aqui.")
+    return _fecha(_p(
+        _oi(nome),
+        "Faz um tempo desde a sua última compra com a gente e eu queria saber como tem sido a sua prática com o que você levou.",
+        f"Se quiser voltar a explorar, separei um {_neg('crédito de ' + _valor(valor))} só para você curtir nossas novidades: "
+        f"é de uso único e vale {_neg('até ' + ate)}, em compras a partir de {_neg(_valor(minimo))}.",
+        f"É só abrir este link, que o crédito já entra aplicado no carrinho:\n{link}",
+        f"Na compra, você ainda leva um {_neg('sticker exclusivo')} e tem {_neg('3% de desconto pagando no Pix')}.",
+        "Qualquer dúvida, me chama por aqui."))
 
 
 # --- Proximidade: contato amistoso depois da entrega de uma recompra --------------------------------------------
@@ -186,10 +228,13 @@ def msg_proximidade(nome, numero_pedido, produto, nr_pedido_cliente, dias_desde_
     # até 3 dias: fala o prazo exato; acima disso (o registro ficou aguardando o atendimento) não cravamos o número de dias
     chegou = "chegou ontem" if d <= 1 else (f"chegou há {d} dias" if d <= 3 else "chegou faz alguns dias")
     item = f" ({produto})" if isinstance(produto, str) and produto.strip() else ""
-    desculpa = "Sei que a entrega demorou mais do que o combinado e peço desculpa por isso. " if atrasado else ""
+    desculpa = "Sei que a entrega demorou mais do que o combinado e peço desculpa por isso." if atrasado else ""
     volta = "Obrigado por voltar a comprar com a gente." if int(nr_pedido_cliente) == 2 else "Obrigado por continuar comprando com a gente."
-    return _fecha(f"{_oi(nome)} Vi que o seu pedido #{numero_pedido}{item} {chegou} e queria saber {_neg('como foi a sua experiência')}. {desculpa}"
-                  f"O que você recebeu cumpriu o que esperava? Se tiver qualquer feedback, elogio ou sugestão, eu gosto muito de ouvir. {volta}")
+    return _fecha(_p(
+        _oi(nome),
+        f"Vi que o seu pedido #{numero_pedido}{item} {chegou} e queria saber {_neg('como foi a sua experiência')}. {desculpa}",
+        "O que você recebeu cumpriu o que esperava? Se tiver qualquer feedback, elogio ou sugestão, eu gosto muito de ouvir.",
+        volta))
 
 
 # --- Resultado do contato (coluna "Resultado" de cada lista; editável, cada troca vai para o histórico) ---------
