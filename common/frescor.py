@@ -23,6 +23,10 @@ ROTULOS_EXTRACAO = {
     "nuvemshop_fulfillments": "Rastreio de envio (Nuvemshop)",
     "nuvemshop_customers": "Clientes e carrinhos (Nuvemshop)",
     "nuvemshop_storefront": "Vitrine do site (home de hora em hora; sugestões e ranking 1×/dia)",
+    "instagram_midia": "Instagram: peças, insights e comentários (3×/dia)",
+    "instagram_conta": "Instagram: métricas da conta e público (3×/dia)",
+    "instagram_concorrentes": "Instagram: concorrentes (1×/dia)",
+    "meta_ads": "Meta Ads: anúncios e gasto (3×/dia)",
 }
 
 

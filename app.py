@@ -8,7 +8,7 @@ arquivo em reports/ + entrada aqui.
 """
 import streamlit as st
 
-from reports import cadastro_produtos, canais_unit_economics, clientes, estoque, fechamento_financeiro, fechamento_financeiro_extrato, gestao_produtos, giro_semanal, google_ads, mapa_interesse, novidades, produtos_mix, pulso_dia, resultado_dre, sac, site_funil, trafego_conteudo, vendas_margem, vendas_semana
+from reports import cadastro_produtos, canais_unit_economics, clientes, estoque, fechamento_financeiro, fechamento_financeiro_extrato, gestao_produtos, giro_semanal, google_ads, instagram, mapa_interesse, novidades, produtos_mix, pulso_dia, resultado_dre, sac, site_funil, trafego_conteudo, vendas_margem, vendas_semana
 
 st.set_page_config(
     page_title="Relatórios — Shibari Brasil",
@@ -27,6 +27,7 @@ pages = {
         st.Page(vendas_semana.render, title="Vendas da Semana", icon="📅", url_path="semana"),
         st.Page(google_ads.render, title="Google Ads", icon="📣", url_path="google-ads"),
         st.Page(giro_semanal.render, title="Giro Semanal", icon="🔄", url_path="giro-semanal"),
+        st.Page(instagram.render, title="Instagram", icon="📸", url_path="instagram"),
         st.Page(mapa_interesse.render, title="Mapa de Interesse", icon="🗺️", url_path="mapa-interesse"),
         st.Page(estoque.render, title="Estoque & Reposição", icon="🏷️", url_path="estoque"),
     ],
