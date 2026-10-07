@@ -34,7 +34,7 @@ Cupom que não casa com nenhum padrão aparece no expansor "Cupons sem ação ma
 
 ## Blocos da tela
 1. **Cards gerais** (meses selecionados, desde ago/2025): pedidos com ação (e % do total), faturamento com ação, desconto concedido (e % da receita bruta desses pedidos), margem de contribuição com ação × sem ação (diferença em p.p.), ticket médio com × sem ação.
-2. **Ações mapeadas do SAC e do pós-venda:** pedidos e faturamento com cupom de ação, cupons gerados no mês e quantos foram usados (conversão), margem dessas vendas; tabela por campanha (gerados, usados, conversão, receita, margem, desconto dos usados).
+2. **Ações mapeadas do SAC e do pós-venda:** pedidos e faturamento com cupom de ação, cupons gerados no mês e quantos foram usados (conversão), margem dessas vendas; tabela por campanha que parte dos **pedidos** (mesma base do card) e cruza com os cupons gerados pelo prefixo: cupons gerados, usados (gerados pela function), conversão, pedidos com o cupom, usados fora da function (cupom recriado à mão), faturamento, margem e desconto.
 3. **Vendas por ação:** pedidos, % dos pedidos, faturamento, ticket, desconto, desconto ÷ receita bruta, margem R$ e %; linhas das ações mapeadas em destaque âmbar; linha de referência "Sem ação".
 4. **Pedidos com ação no período:** tabela com data, pedido, cliente, ação, cupom, descontos, faturamento, margem %, pagamento, novo/recorrente; filtro por grupo ("Só SAC e pós-venda" incluso).
 5. **Cupons sem ação mapeada** (expansor).

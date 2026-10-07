@@ -139,22 +139,40 @@ def secao_acao(meses_sel, hoje):
         card("Margem de contribuição dessas vendas", pct(sa["margem_pct"]) if sa["margem_pct"] is not None else "—",
              f"{brl(sa['mc'])} de margem · desconto {brl(sa['desc'])}" if sa["n"] else "sem vendas ainda"),
     ])
-    if len(g):
-        por_camp = (g.groupby(["campanha", "prefixo"]).agg(Gerados=("codigo", "count"), Usados=("fg_comprou", "sum"),
-                                                          Receita=("vl_receita_liquida_produto", "sum"), Margem=("vl_margem_contribuicao", "sum"),
-                                                          Desconto=("vl_desconto_cupom", "sum")).reset_index())
-        por_camp["Conversão"] = por_camp["Usados"] / por_camp["Gerados"]
-        st.dataframe(por_camp.rename(columns={"campanha": "Campanha", "prefixo": "Prefixo do cupom", "Receita": "Receita líq. (usados)",
-                                              "Margem": "Margem (usados)", "Desconto": "Desconto (usados)"}),
-                     hide_index=True, use_container_width=True,
-                     column_config={"Receita líq. (usados)": st.column_config.NumberColumn(format="R$ %.2f"),
-                                    "Margem (usados)": st.column_config.NumberColumn(format="R$ %.2f"),
-                                    "Desconto (usados)": st.column_config.NumberColumn(format="R$ %.2f"),
+    # A tabela parte dos PEDIDOS (a mesma base do card) e cruza com os cupons gerados pela function: o prefixo de cada campanha liga um ao outro.
+    # Cupom recriado à mão na Nuvemshop vende com o mesmo prefixo, mas não passou pela function: vira "usado fora da function".
+    codigo = sac["ds_codigo_cupom"].fillna("").str.upper()
+    cobertos = pd.Series(False, index=sac.index)
+    linhas = []
+
+    def _linha(acao, prefixo, gx, ped):
+        x = _agrega(ped)
+        usados = int(gx["fg_comprou"].sum()) if gx is not None else 0
+        n_g = len(gx) if gx is not None else 0
+        return {"Ação": acao, "Prefixo do cupom": prefixo, "Cupons gerados": n_g, "Usados (gerados)": usados,
+                "Conversão": (usados / n_g) if n_g else None, "Pedidos com o cupom": x["n"],
+                "Usados fora da function": max(x["n"] - usados, 0) if n_g else x["n"], "Faturamento": x["fat"],
+                "Margem de contribuição": x["mc"], "Desconto": x["desc"]}
+
+    for (camp, pref), _ in gerados.groupby(["campanha", "prefixo"]):
+        gx = g[(g["campanha"] == camp) & (g["prefixo"] == pref)]
+        ped = sac[codigo.str.startswith(pref.upper())]
+        cobertos.loc[ped.index] = True
+        if len(gx) or len(ped):
+            linhas.append(_linha(camp, pref, gx, ped))
+    for acao, ped in sac[~cobertos].groupby("ds_acao"):  # ação mapeada que não tem cupom gerado pela function
+        linhas.append(_linha(acao, "—", None, ped))
+    if linhas:
+        st.dataframe(pd.DataFrame(linhas), hide_index=True, use_container_width=True,
+                     column_config={"Faturamento": st.column_config.NumberColumn(format="R$ %.2f"),
+                                    "Margem de contribuição": st.column_config.NumberColumn(format="R$ %.2f"),
+                                    "Desconto": st.column_config.NumberColumn(format="R$ %.2f"),
                                     "Conversão": st.column_config.NumberColumn(format="percent")})
     note("Ações mapeadas = cupons cujo prefixo está em <code>stg_acao_cupom</code> como SAC e pós-venda: <code>SEGUNDACHANCE</code> (recontato com cupom), "
          "<code>RETORNO…</code> (crédito de retorno da recompra), <code>CASHBACKPOSCOMPRA</code> e <code>EXPLORAR20</code>. Cupons gerados vêm da function "
          "<code>nuvemshop-criar-cupom</code> (<code>raw_control.cupons_gerados</code>); a conversão conta o cupom gerado no mês que foi usado em compra, mesmo depois do mês. "
-         "Volume pequeno: leia como sinal, não como taxa estável.")
+         "<strong>Pedidos com o cupom</strong> conta toda venda com o prefixo (mesma base do card de cima); <strong>Usados (gerados)</strong> conta só os cupons que a function criou; a diferença "
+         "(<strong>usados fora da function</strong>) são cupons recriados à mão na Nuvemshop. Volume pequeno: leia como sinal, não como taxa estável.")
 
     # ═══ por ação ═══
     st.html('<div class="c-label" style="margin:18px 0 8px">Vendas por ação (linhas em destaque = ação mapeada do SAC / pós-venda)</div>')
