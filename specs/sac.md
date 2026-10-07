@@ -198,3 +198,8 @@ Para conferir o consentimento de novos clientes: consultar a Nuvemshop (`accepts
 ### Convenção de prefixos de cupom (padrão de 07/10/2026)
 O **prefixo identifica a ação** que gerou o cupom, para medir as vendas de cada ação sem cruzar tabelas: no painel da Nuvemshop, em `tb_pedido.ds_codigo_cupom_nuvemshop` (`LIKE 'RETORNOPERDIDO%'`) e em `raw_control.cupons_gerados.campanha`. Regras (também no código da function, com validação no import): MAIÚSCULAS e dígitos, palavra legível da ação, **um prefixo por ação**, e **nenhum prefixo é começo de outro**. Em uso: `SEGUNDACHANCE` (recuperação de venda) e `RETORNOPERDIDO` (crédito de retorno, piloto dos "Perdido"). Reservados: `RETORNOJANELA`, `RETORNODORMENTE`, `RETORNOREATIVACAO`. Código universal fora da function: `EXPLORAR20` (Área VIP).
 Medição por ação: view `raw_control.vw_vendas_cupom_acao` (uma linha por cupom gerado, com o pedido, a data, o valor, o desconto de cupom, o desconto de pagamento e a margem de contribuição quando houve compra).
+
+## Supressão "Não retomar contato" (07/10/2026)
+
+O bloco `nao_retomar` das consultas de Proximidade, Recompra (piloto) e do lote diário lê `raw_control.vw_tarefa_pessoa` (sb_data_pipeline, `sql/raw_control/views_contato_cliente.sql`) em vez de repetir 8 JOINs. A mesma view alimenta o motor de pós-venda (`vw_supressao_contato`). Lista nova do SAC = 1 ramo novo na view. Comportamento idêntico ao anterior.
+

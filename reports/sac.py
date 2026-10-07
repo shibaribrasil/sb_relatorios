@@ -132,38 +132,15 @@ def carregar_recontato():
 def _sql_nao_retomar(az: str) -> str:
     """Bloco `nao_retomar AS (...)` das queries do SAC: (tipo_tarefa, chave, e-mail) de quem tem "Não retomar contato" em QUALQUER lista.
     Precisa de uma CTE `tarefa` (último estado de cada item) antes dele. Uma só definição para a Proximidade e para a Recompra (piloto)
-    nunca divergirem sobre quem pediu para não ser contatado."""
+    nunca divergirem sobre quem pediu para não ser contatado.
+
+    O mapeamento tarefa -> e-mail mora na view `raw_control.vw_tarefa_pessoa` (sb_data_pipeline, `sql/raw_control/views_contato_cliente.sql`),
+    a MESMA que o motor de pós-venda usa para a supressão (`vw_supressao_contato`): lista nova do SAC = um ramo novo na view, e o SAC e o
+    motor passam a enxergar o "Não retomar contato" juntos. Equivalência com a versão anterior (8 JOINs repetidos aqui) conferida por consulta
+    em 07/10/2026 para todos os resultados existentes. O parâmetro `az` fica por compatibilidade com quem chama."""
     return f"""nao_retomar AS (
-          SELECT t.tipo_tarefa, t.chave, LOWER(cr.ds_email_cliente) AS email
-            FROM tarefa t JOIN `{az}.tb_carrinho_abandonado` cr ON t.tipo_tarefa = '{TIPO_CARRINHO}' AND t.chave = CAST(cr.cd_carrinho AS STRING)
-           WHERE t.ds_resultado = 'Não retomar contato'
-          UNION ALL
-          SELECT t.tipo_tarefa, t.chave, LOWER(pc.ds_email_cliente)
-            FROM tarefa t JOIN `{az}.tb_pedido_cancelado` pc ON t.tipo_tarefa = '{TIPO_CANCELADO}' AND t.chave = CAST(pc.cd_pedido_nuvemshop AS STRING)
-           WHERE t.ds_resultado = 'Não retomar contato'
-          UNION ALL
-          SELECT t.tipo_tarefa, t.chave, LOWER(lp.ds_email_cliente)
-            FROM tarefa t JOIN `{az}.tb_logistica_pedido` lp ON t.tipo_tarefa = '{TIPO_ENTREGA_PROBLEMA}' AND t.chave = lp.cd_codigo_interno
-           WHERE t.ds_resultado = 'Não retomar contato'
-          UNION ALL
-          SELECT t.tipo_tarefa, t.chave, LOWER(cr.ds_email_cliente)
-            FROM tarefa t JOIN `{az}.tb_carrinho_abandonado` cr
-              ON t.tipo_tarefa = '{TIPO_RECONTATO}' AND STARTS_WITH(t.chave, '{TIPO_CARRINHO}:')
-             AND SUBSTR(t.chave, LENGTH('{TIPO_CARRINHO}:') + 1) = CAST(cr.cd_carrinho AS STRING)
-           WHERE t.ds_resultado = 'Não retomar contato'
-          UNION ALL
-          SELECT t.tipo_tarefa, t.chave, LOWER(pc.ds_email_cliente)
-            FROM tarefa t JOIN `{az}.tb_pedido_cancelado` pc
-              ON t.tipo_tarefa = '{TIPO_RECONTATO}' AND STARTS_WITH(t.chave, '{TIPO_CANCELADO}:')
-             AND SUBSTR(t.chave, LENGTH('{TIPO_CANCELADO}:') + 1) = CAST(pc.cd_pedido_nuvemshop AS STRING)
-           WHERE t.ds_resultado = 'Não retomar contato'
-          UNION ALL
-          SELECT t.tipo_tarefa, t.chave, LOWER(r.ds_email_cliente)
-            FROM tarefa t JOIN `{az}.tb_pedido_recompra_entregue` r ON t.tipo_tarefa = '{TIPO_PROXIMIDADE}' AND t.chave = r.cd_codigo_interno
-           WHERE t.ds_resultado = 'Não retomar contato'
-          UNION ALL
-          SELECT t.tipo_tarefa, t.chave, LOWER(l.email)
-            FROM tarefa t JOIN `{TAB_LISTA}` l ON t.tipo_tarefa = '{TIPO_RECOMPRA}' AND t.chave = l.chave
+          SELECT t.tipo_tarefa, t.chave, p.email
+            FROM tarefa t JOIN `{bq.PROJECT}.raw_control.vw_tarefa_pessoa` p ON p.tipo_tarefa = t.tipo_tarefa AND p.chave = t.chave
            WHERE t.ds_resultado = 'Não retomar contato'
         )"""
 
