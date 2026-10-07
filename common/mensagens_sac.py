@@ -134,6 +134,22 @@ def msg_recontato_cupom(nome, origem, numero_pedido, codigo, valor_pct, expira_e
             f"É só aplicar o código no checkout.{link} Qualquer dúvida, me chama por aqui.")
 
 
+# --- Recompra: último contato dos "Perdido" (piloto do Ecossistema de Pós-Venda, 07/10/2026) ---------------------
+
+def msg_recompra_ultimo_contato(nome, link, valor, minimo, expira_em) -> str:
+    """Contato humano para quem não compra há mais de 1 ano: pergunta como tem sido a prática, oferece o crédito de retorno pessoal
+    (uso único, validade REAL de `expira_em`, valor mínimo `minimo`), lembra o sticker exclusivo e os 3% de desconto no Pix e dá a saída
+    ("SAIR"). Sem urgência artificial. Texto aprovado pelo Hugo em 07/10/2026 (com o complemento "curtir nossas novidades" e a frase do
+    sticker e do Pix). O cupom COMBINA com outros descontos (decisão do Hugo, 07/10/2026) justamente para o desconto de 3% do Pix valer junto;
+    antes da onda 1, confirmar num pedido de teste (cupom + Pix) que o Pix aparece no checkout."""
+    ate = expira_em.strftime("%d/%m")
+    return (f"{_oi(nome)} Faz um tempo desde a sua última compra com a gente e eu queria saber como tem sido a sua prática com o "
+            f"que você levou. Se quiser voltar a explorar, separei um crédito de {_valor(valor)} só para você curtir nossas novidades: "
+            f"é de uso único e vale até {ate}, em compras a partir de {_valor(minimo)}. É só abrir este link, que o crédito já entra "
+            f"aplicado no carrinho: {link} Na compra, você ainda leva um sticker exclusivo e tem 3% de desconto pagando no Pix. "
+            f"Qualquer dúvida, me chama por aqui. Se preferir não receber mais mensagens, é só responder SAIR.")
+
+
 # --- Proximidade: contato amistoso depois da entrega de uma recompra --------------------------------------------
 
 def msg_proximidade(nome, numero_pedido, produto, nr_pedido_cliente, dias_desde_entrega, atrasado: bool) -> str:
@@ -193,6 +209,15 @@ RESULTADOS = {
         "Respondeu — satisfeito",
         "Respondeu — com feedback",
         "Reclamação — abrir tratativa",
+        "Sem resposta",
+        "WhatsApp inválido",
+        "Não retomar contato",
+    ],
+    # recompra: último contato dos "Perdido" (piloto). Quem responder SAIR vira "Não retomar contato".
+    "recompra_piloto": [
+        "Comprou com o cupom",
+        "Respondeu — quer ver produtos",
+        "Respondeu — sem interesse",
         "Sem resposta",
         "WhatsApp inválido",
         "Não retomar contato",

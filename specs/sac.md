@@ -108,3 +108,89 @@ Lista nova (tipo de tarefa `recontato_cupom`), paralela a carrinhos e cancelados
 - **Uma vez por cliente:** fora quem já teve contato de proximidade tratado em OUTRO pedido (exceto "WhatsApp inválido", que não chegou ao cliente) e quem tem **"Não retomar contato" em qualquer lista** do SAC (cruzado por e-mail: carrinho, cancelado, entrega, recontato e a própria proximidade em outro pedido). Cliente com 2 pedidos na janela entra uma vez (o mais recente).
 - **Mensagem** (`msg.msg_proximidade`): pergunta como foi a experiência, se o produto cumpriu o esperado, se há feedback; cita pedido e produto principal; "chegou ontem" (1 dia), "chegou há N dias" (2 e 3) e "chegou faz alguns dias" (acima disso, registro que ficou aguardando); variante que **reconhece o atraso e pede desculpa** quando `fg_entrega_atrasada`; agradece a 2ª compra ("voltar a comprar") ou as seguintes ("continuar comprando"). Sem emoji, "Shibari Brasil".
 - **Resoluções:** "Respondeu — satisfeito", "Respondeu — com feedback", "Reclamação — abrir tratativa", "Sem resposta", "WhatsApp inválido", "Não retomar contato". O texto do feedback vai na **Observação SAC**.
+
+## Recompra — último contato dos "Perdido" (piloto, 07/10/2026, pedido do Hugo)
+Lista nova de **WhatsApp**, parte do Ecossistema de Pós-Venda (`sb_admin_team/planejamento/Ecossistema de Pós-Venda.md` e `Plano de Ação — Ecossistema de Pós-Venda.md`). É o **piloto do WhatsApp**, e sai dos clientes "Perdido" (última compra há mais de 365 dias) de propósito: é a base de menor valor futuro, então um erro de texto, de link ou de cupom custa o mínimo e protege a base "Dormente". Roda **sem esperar o motor**: a lista é montada à mão e liberada em ondas.
+
+**Esta lista é uma exceção à regra "regra de negócio mora no dbt"**, por ser operacional e temporária: a seleção é uma decisão do sócio e do analista, gravada em tabela de controle; o Streamlit só mostra o que foi liberado. Quando o motor (`tb_cliente_ciclo`) existir, a seleção passa a ser calculada lá e esta tabela vira a fila do dia.
+
+- **Fonte:** `raw_control.posvenda_lista` (não gerenciada pelo dbt, mesma natureza de `sac_tarefas` e `cupons_gerados`). Uma linha por (`campanha`, cliente). Colunas: `campanha` (`perdido_ultimo_contato`), `chave` (id do cliente na Nuvemshop, texto; é a chave do checklist e a referência do cupom), `id_nuvemshop`, `email`, `nm_cliente`, `nr_telefone`, `dt_ultima_compra`, `vl_total_gasto`, `qt_pedidos` (do DW; nulo para quem comprou só antes de nov/2023), `ordem`, `onda`, `fg_liberado`, `ds_consentimento` (`pendente`, `true` ou `false`), `dt_verificacao_consentimento`, `ds_origem`, `criado_em`.
+- **Quem entra na tabela (carga de 07/10/2026):** contatos **ativos** no Perfit (fora descadastrado, rebote e spam), cuja **última compra na Nuvemshop** (data que o Perfit traz da Nuvemshop, que cobre antes do DW) é de mais de 365 dias, com telefone de tamanho válido e sem "Não retomar contato" no SAC. Total na carga: 1.030.
+- **Quem aparece na tela:** só `fg_liberado` **e** `ds_consentimento = 'true'`. A liberação é feita por onda (`UPDATE ... SET fg_liberado = TRUE WHERE onda = n`), no ritmo definido pelo Hugo (piloto: 20 clientes). **Consentimento:** o campo `tn_accepts_marketing` do Perfit está **defasado** (12 de 17 clientes conferidos divergem da Nuvemshop), então o consentimento vale só depois de conferido na Nuvemshop (`accepts_marketing` do cliente) e gravado com data. Onda 1: 20 clientes, todos conferidos em 07/10/2026.
+- **Some da tela:** cliente com "Não retomar contato" em **qualquer** lista do SAC (cruzado por e-mail; inclui "SAIR" respondido pelo cliente, que o atendente registra como "Não retomar contato"); cliente que **comprou com o cupom**; cliente que **comprou depois** da criação da lista (`tb_cliente.dt_ult_pedido >= data de criação`). O item tratado continua visível em "Mostrar também os já tratados".
+- **Cupom (`RETORNOPERDIDO` + 4 caracteres):** preset `cupom_retorno_perdido` na Cloud Function `nuvemshop-criar-cupom`: **R$ 20 fixo, uso único, validade de 21 dias, **combina com outros descontos** (decisão do Hugo, 07/10/2026: o desconto de 3% do Pix só vale junto se o cupom combinar), valor mínimo de compra de R$ 120** (confirmado pelo Hugo em 07/10/2026; o mesmo valor está em `MIN_COMPRA_RETORNO`, em `common/cupom.py`, porque entra no texto). Criado pelo botão **Gerar cupons pendentes**; a validade começa no clique, então gere na hora de enviar. 1 cupom por cliente (referência = `chave`; repetir o clique devolve o mesmo cupom). Estado em `raw_control.cupons_gerados`. **A function precisa de redeploy** para conhecer o preset novo.
+- **Link:** `https://shibaribrasil.com.br/discount/<código>` aplica o cupom ao entrar na loja (documentação da Nuvemshop). **Ainda não testado nesta loja**: a primeira mensagem do piloto é o teste (conferir com carrinho vazio e com item, valor mínimo e uso único).
+- **Mensagem:** `msg.msg_recompra_ultimo_contato`: pergunta humana sobre a prática, crédito de R$ 20 pessoal "para curtir nossas novidades" com validade e valor mínimo (R$ 120, confirmado pelo Hugo em 07/10/2026), link que aplica o cupom, lembrete do **sticker exclusivo** e de **3% de desconto pagando no Pix**, e saída por "SAIR". Sem emoji, "Shibari Brasil", sem urgência artificial (a validade é a real). **Texto aprovado pelo Hugo em 07/10/2026.** **Pendência antes da onda 1:** o cupom é criado com `combina_com_outros = True` (decisão do Hugo, 07/10/2026), porque o único pedido histórico com um cupom que não combina (SEGUNDACHANCE) pagou no Pix sem o desconto de pagamento. Conferir num pedido de teste (cupom + Pix) que o desconto do Pix aparece.
+- **Resoluções** (`RESULTADOS["recompra_piloto"]`): "Comprou com o cupom", "Respondeu — quer ver produtos", "Respondeu — sem interesse", "Sem resposta", "WhatsApp inválido", "Não retomar contato". Quem responder SAIR vira "Não retomar contato".
+- **Medição:** cupom usado = `tb_pedido.ds_codigo_cupom_nuvemshop` igual ao código gerado (a lista mostra "Comprou com o cupom" em Obs.). Comparação com a taxa histórica de recompra do mesmo recorte; ~10% de cada onda pode ficar sem contato como comparação (decisão do Hugo).
+- **Gatilho de parada:** mais de 3% de respostas "SAIR" em uma onda, bloqueios percebidos ou aviso do WhatsApp: o Robson para e o Hugo revisa o texto antes da onda seguinte.
+- **Quem faz o quê:** a seleção e a liberação são do sócio e do analista; o envio é do Robson, na página SAC; nada sai sozinho.
+
+### Carga da tabela (SQL usado em 07/10/2026)
+A exportação do Perfit ("Contatos da Nuvemshop") foi carregada em `raw_control.perfit_export_20261007` (colunas mínimas: e-mail, nome, estado, qualidade, último envio, última atividade, estágio, aceite do Perfit, total gasto e última compra; **sem CPF**, sobrenome, gênero, aniversário nem interesses). A tabela da lista foi criada por:
+
+```sql
+-- Lista operacional do pós-venda (piloto "último contato" dos Perdido). Criada em 07/10/2026 a partir da exportação do Perfit.
+-- Perdido = última compra na Nuvemshop há mais de 365 dias (data que o Perfit traz da Nuvemshop; o DW só começa em nov/2023).
+-- Entram só contatos ATIVOS no Perfit (fora descadastrado, rebote e spam), com telefone de tamanho válido e sem "Não retomar contato" no SAC.
+-- Consentimento nasce 'pendente': é conferido na Nuvemshop (accepts_marketing) antes de liberar cada cliente.
+CREATE OR REPLACE TABLE `igneous-sandbox-381622.raw_control.posvenda_lista` AS
+WITH p AS (
+  SELECT LOWER(TRIM(email)) AS email, estado, SAFE.PARSE_DATE('%Y-%m-%d', ultima_compra) AS dt_ultima_compra,
+         SAFE_CAST(total_gastado AS FLOAT64) AS vl_total_gasto
+    FROM `igneous-sandbox-381622.raw_control.perfit_export_20261007`
+), n AS (
+  SELECT LOWER(TRIM(email)) AS email, ANY_VALUE(id) AS id_nuvemshop, ANY_VALUE(name) AS nm_cliente, ANY_VALUE(phone) AS nr_telefone
+    FROM `igneous-sandbox-381622.raw_nuvemshop.customers` GROUP BY 1
+), c AS (
+  SELECT LOWER(TRIM(ds_email)) AS email, ANY_VALUE(qt_pedido) AS qt_pedidos
+    FROM `igneous-sandbox-381622.dbt_dw_az.tb_cliente` GROUP BY 1
+), tarefa AS (
+  SELECT tipo_tarefa, chave, ds_resultado
+    FROM `igneous-sandbox-381622.raw_control.sac_tarefas`
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_tarefa, chave ORDER BY dt_atualizacao DESC) = 1
+), nao_retomar AS (
+  SELECT LOWER(cr.ds_email_cliente) AS email FROM tarefa t JOIN `igneous-sandbox-381622.dbt_dw_az.tb_carrinho_abandonado` cr
+    ON t.tipo_tarefa = 'carrinho_abandonado' AND t.chave = CAST(cr.cd_carrinho AS STRING) WHERE t.ds_resultado = 'Não retomar contato'
+  UNION ALL
+  SELECT LOWER(pc.ds_email_cliente) FROM tarefa t JOIN `igneous-sandbox-381622.dbt_dw_az.tb_pedido_cancelado` pc
+    ON t.tipo_tarefa = 'pedido_cancelado' AND t.chave = CAST(pc.cd_pedido_nuvemshop AS STRING) WHERE t.ds_resultado = 'Não retomar contato'
+  UNION ALL
+  SELECT LOWER(lp.ds_email_cliente) FROM tarefa t JOIN `igneous-sandbox-381622.dbt_dw_az.tb_logistica_pedido` lp
+    ON t.tipo_tarefa = 'entrega_problema' AND t.chave = lp.cd_codigo_interno WHERE t.ds_resultado = 'Não retomar contato'
+  UNION ALL
+  SELECT LOWER(r.ds_email_cliente) FROM tarefa t JOIN `igneous-sandbox-381622.dbt_dw_az.tb_pedido_recompra_entregue` r
+    ON t.tipo_tarefa = 'proximidade_pos_entrega' AND t.chave = r.cd_codigo_interno WHERE t.ds_resultado = 'Não retomar contato'
+)
+SELECT
+  'perdido_ultimo_contato' AS campanha,
+  CAST(n.id_nuvemshop AS STRING) AS chave,
+  n.id_nuvemshop,
+  p.email,
+  n.nm_cliente,
+  n.nr_telefone,
+  p.dt_ultima_compra,
+  p.vl_total_gasto,
+  c.qt_pedidos,
+  ROW_NUMBER() OVER (ORDER BY p.dt_ultima_compra DESC, p.vl_total_gasto DESC) AS ordem,
+  CAST(NULL AS INT64) AS onda,
+  FALSE AS fg_liberado,
+  'pendente' AS ds_consentimento,
+  CAST(NULL AS TIMESTAMP) AS dt_verificacao_consentimento,
+  'perfit_export_20261007' AS ds_origem,
+  CURRENT_TIMESTAMP() AS criado_em
+FROM p
+JOIN n USING (email)
+LEFT JOIN c USING (email)
+WHERE p.estado = 'ACTIVE'
+  AND DATE_DIFF(CURRENT_DATE('America/Sao_Paulo'), p.dt_ultima_compra, DAY) > 365
+  AND LENGTH(REGEXP_REPLACE(IFNULL(n.nr_telefone, ''), r'\D', '')) BETWEEN 10 AND 13
+  AND p.email NOT IN (SELECT email FROM nao_retomar WHERE email IS NOT NULL);
+```
+
+Para liberar uma onda: `UPDATE raw_control.posvenda_lista SET fg_liberado = TRUE WHERE campanha = 'perdido_ultimo_contato' AND onda = 1 AND ds_consentimento = 'true';`
+Para conferir o consentimento de novos clientes: consultar a Nuvemshop (`accepts_marketing`) e gravar `ds_consentimento` e `dt_verificacao_consentimento` antes de marcar `onda`.
+
+### Convenção de prefixos de cupom (padrão de 07/10/2026)
+O **prefixo identifica a ação** que gerou o cupom, para medir as vendas de cada ação sem cruzar tabelas: no painel da Nuvemshop, em `tb_pedido.ds_codigo_cupom_nuvemshop` (`LIKE 'RETORNOPERDIDO%'`) e em `raw_control.cupons_gerados.campanha`. Regras (também no código da function, com validação no import): MAIÚSCULAS e dígitos, palavra legível da ação, **um prefixo por ação**, e **nenhum prefixo é começo de outro**. Em uso: `SEGUNDACHANCE` (recuperação de venda) e `RETORNOPERDIDO` (crédito de retorno, piloto dos "Perdido"). Reservados: `RETORNOJANELA`, `RETORNODORMENTE`, `RETORNOREATIVACAO`. Código universal fora da function: `EXPLORAR20` (Área VIP).
+Medição por ação: view `raw_control.vw_vendas_cupom_acao` (uma linha por cupom gerado, com o pedido, a data, o valor, o desconto de cupom, o desconto de pagamento e a margem de contribuição quando houve compra).
