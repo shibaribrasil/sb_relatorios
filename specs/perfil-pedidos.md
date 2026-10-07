@@ -12,7 +12,7 @@ Bloco único, reutilizado nas três camadas de vendas: **Pulso do Dia** (último
 | Ticket de produtos | receita líq. de produtos ÷ pedidos (sem frete) |
 | Valor médio por item | receita líq. de produtos ÷ itens vendidos (sem brindes) |
 | Itens por pedido | itens ÷ pedidos com produto; mostra também mediana e % de pedidos com 1 item |
-| Só Shibari / Só Curadoria / Misto | classificação do **pedido** pelas frentes dos itens (`ds_frente`); % de pedidos + ticket de cada grupo |
+| Só Shibari / Só Curadoria / Misto | classificação do **pedido** pelas frentes dos itens (`ds_frente`); % de pedidos + valor faturado e ticket de cada grupo |
 | Clientes recorrentes | % dos pedidos com `fg_cliente_recorrente` |
 | Frete grátis / frete médio pago | pedidos com frete pago = 0 (% e, na legenda, "N de M pedidos"); média de `vl_frete_pago_rateio` por pedido |
 | Pedidos com desconto / desconto médio | pedidos com desconto ≠ 0; descontos ÷ receita bruta de produtos |

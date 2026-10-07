@@ -55,7 +55,7 @@ def resumo(p):
     mix = {}
     for t in TIPOS:
         x = p[tipo == t]
-        mix[t] = {"n": len(x), "share": len(x) / len(com_prod) if len(com_prod) else 0,
+        mix[t] = {"n": len(x), "fat": float((x["vl_produtos"] + x["vl_frete"]).sum()), "share": len(x) / len(com_prod) if len(com_prod) else 0,
                   "ticket": float((x["vl_produtos"] + x["vl_frete"]).mean()) if len(x) else None,
                   "itens": float(x["qt_item"].mean()) if len(x) else None,
                   "receita": float(x["vl_produtos"].sum()),
@@ -138,7 +138,7 @@ def secao_perfil(p, ant=None, rot_ant="", titulo="Perfil dos pedidos", contexto=
 
     render_cards([
         card(t, pct(mix[t]["share"], 0),
-             f"{mix[t]['n']} {'pedido' if mix[t]['n'] == 1 else 'pedidos'} · ticket {brl(mix[t]['ticket'])}" if mix[t]["n"] else "nenhum pedido",
+             f"{mix[t]['n']} {'pedido' if mix[t]['n'] == 1 else 'pedidos'} · {brl(mix[t]['fat'])} faturados · ticket {brl(mix[t]['ticket'])}" if mix[t]["n"] else "nenhum pedido",
              **dl_mix(t))
         for t in TIPOS
     ] + [
