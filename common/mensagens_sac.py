@@ -193,7 +193,7 @@ def msg_recontato_cupom(nome, origem, numero_pedido, codigo, valor_pct, expira_e
         checkout += f"\nO carrinho continua salvo aqui:\n{url_recuperacao}"
     return _fecha(_p(
         _oi(nome),
-        f"Passei para te avisar de uma última cortesia: separei um {vantagem} para você concluir {assunto}.",
+        f"Separei um {vantagem} pra você finalizar {assunto}.",
         f"O código é {_neg(codigo)}, de uso único, e vale só por {prazo}. Depois disso ele expira.",
         checkout,
         "Qualquer dúvida, me chama por aqui."))
