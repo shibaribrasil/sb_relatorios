@@ -17,7 +17,18 @@ from common import bigquery as bq
 
 URL_FUNCTION = "https://nuvemshop-criar-cupom-jpt6bmdtaa-uk.a.run.app"
 CAMPANHA_RECUPERACAO_WHATSAPP = "cupom_recuperacao_venda_whatsapp"
+CAMPANHA_RETORNO_PERDIDO = "cupom_retorno_perdido"  # crédito de retorno de R$ 20 (preset novo na function; 07/10/2026)
+# Valor mínimo de compra do crédito de retorno: mesmo valor do preset `cupom_retorno_perdido` (sb_data_pipeline,
+# `writers/nuvemshop_cupom.py`). Entra no texto da mensagem. R$ 120, confirmado pelo Hugo em 07/10/2026 — mude nos dois lugares.
+MIN_COMPRA_RETORNO = 120
+LINK_LOJA = "https://shibaribrasil.com.br"
 TABELA = f"{bq.PROJECT}.raw_control.cupons_gerados"
+
+
+def link_cupom(codigo: str) -> str:
+    """Link da loja que aplica o cupom sozinho ao entrar (formato `/discount/<código>` da Nuvemshop). Ainda não testado nesta loja:
+    a 1ª mensagem do piloto é o teste (carrinho vazio e com item, valor mínimo, uso único)."""
+    return f"{LINK_LOJA}/discount/{codigo}"
 
 
 def _token() -> str:

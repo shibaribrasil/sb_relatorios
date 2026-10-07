@@ -29,6 +29,10 @@ TIPO_CARRINHO = "carrinho_abandonado"
 TIPO_CANCELADO = "pedido_cancelado"
 TIPO_RECONTATO = "recontato_cupom"
 TIPO_PROXIMIDADE = "proximidade_pos_entrega"
+TIPO_RECOMPRA = "recompra_piloto"  # piloto do Ecossistema de Pós-Venda: último contato dos "Perdido" (spec: specs/sac.md)
+CAMPANHA_LISTA_RECOMPRA = "perdido_ultimo_contato"
+TAB_LISTA = f"{bq.PROJECT}.raw_control.posvenda_lista"  # lista operacional montada à mão e liberada em ondas (fg_liberado)
+LIMITE_CUPONS_POR_CLIQUE = 30  # trava de segurança do botão "Gerar cupons pendentes"
 # Proximidade: o registro nasce no dia seguinte à entrega (D+1) e FICA até o Robson tratar — não há prazo para sumir (decisão do Hugo,
 # 28/09/2026: fim de semana, folga ou imprevisto não podem fazer o contato desaparecer). PROXIMIDADE_DESDE = 1ª entrega considerada:
 # 30 dias antes do lançamento da lista (28/09/2026), para já contatar o que ficou para trás.
@@ -124,24 +128,11 @@ def carregar_recontato():
     return df
 
 
-@st.cache_data(ttl=300)
-def carregar_proximidade():
-    """Recompras (2º pedido em diante) com entrega confirmada nos últimos dias, com duas marcas do estado do SAC:
-    `fg_nao_retomar` (o cliente tem "Não retomar contato" em QUALQUER lista do SAC, por e-mail) e `fg_contatado_antes` (já teve
-    contato de proximidade tratado em OUTRO pedido, exceto "WhatsApp inválido", que não chegou ao cliente)."""
-    client = bq.get_client()
-    az = f"{bq.PROJECT}.dbt_dw_az"
-    df = bq.query_df(client, f"""
-        WITH base AS (
-          SELECT r.*, LOWER(r.ds_email_cliente) AS email
-            FROM `{az}.tb_pedido_recompra_entregue` r
-           WHERE NOT r.fg_teste
-             AND r.dt_entrega >= DATE '{PROXIMIDADE_DESDE:%Y-%m-%d}'
-        ), tarefa AS (
-          SELECT tipo_tarefa, chave, ds_resultado, fg_feito, dt_atualizacao
-            FROM `{TAB_TAREFAS}`
-          QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_tarefa, chave ORDER BY dt_atualizacao DESC) = 1
-        ), nao_retomar AS (
+def _sql_nao_retomar(az: str) -> str:
+    """Bloco `nao_retomar AS (...)` das queries do SAC: (tipo_tarefa, chave, e-mail) de quem tem "Não retomar contato" em QUALQUER lista.
+    Precisa de uma CTE `tarefa` (último estado de cada item) antes dele. Uma só definição para a Proximidade e para a Recompra (piloto)
+    nunca divergirem sobre quem pediu para não ser contatado."""
+    return f"""nao_retomar AS (
           SELECT t.tipo_tarefa, t.chave, LOWER(cr.ds_email_cliente) AS email
             FROM tarefa t JOIN `{az}.tb_carrinho_abandonado` cr ON t.tipo_tarefa = '{TIPO_CARRINHO}' AND t.chave = CAST(cr.cd_carrinho AS STRING)
            WHERE t.ds_resultado = 'Não retomar contato'
@@ -169,7 +160,31 @@ def carregar_proximidade():
           SELECT t.tipo_tarefa, t.chave, LOWER(r.ds_email_cliente)
             FROM tarefa t JOIN `{az}.tb_pedido_recompra_entregue` r ON t.tipo_tarefa = '{TIPO_PROXIMIDADE}' AND t.chave = r.cd_codigo_interno
            WHERE t.ds_resultado = 'Não retomar contato'
-        ), contatado AS (
+          UNION ALL
+          SELECT t.tipo_tarefa, t.chave, LOWER(l.email)
+            FROM tarefa t JOIN `{TAB_LISTA}` l ON t.tipo_tarefa = '{TIPO_RECOMPRA}' AND t.chave = l.chave
+           WHERE t.ds_resultado = 'Não retomar contato'
+        )"""
+
+
+@st.cache_data(ttl=300)
+def carregar_proximidade():
+    """Recompras (2º pedido em diante) com entrega confirmada nos últimos dias, com duas marcas do estado do SAC:
+    `fg_nao_retomar` (o cliente tem "Não retomar contato" em QUALQUER lista do SAC, por e-mail) e `fg_contatado_antes` (já teve
+    contato de proximidade tratado em OUTRO pedido, exceto "WhatsApp inválido", que não chegou ao cliente)."""
+    client = bq.get_client()
+    az = f"{bq.PROJECT}.dbt_dw_az"
+    df = bq.query_df(client, f"""
+        WITH base AS (
+          SELECT r.*, LOWER(r.ds_email_cliente) AS email
+            FROM `{az}.tb_pedido_recompra_entregue` r
+           WHERE NOT r.fg_teste
+             AND r.dt_entrega >= DATE '{PROXIMIDADE_DESDE:%Y-%m-%d}'
+        ), tarefa AS (
+          SELECT tipo_tarefa, chave, ds_resultado, fg_feito, dt_atualizacao
+            FROM `{TAB_TAREFAS}`
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_tarefa, chave ORDER BY dt_atualizacao DESC) = 1
+        ), {_sql_nao_retomar(az)}, contatado AS (
           SELECT r.cd_contato, r.cd_codigo_interno
             FROM tarefa t JOIN `{az}.tb_pedido_recompra_entregue` r ON t.tipo_tarefa = '{TIPO_PROXIMIDADE}' AND t.chave = r.cd_codigo_interno
            WHERE t.fg_feito AND COALESCE(t.ds_resultado, '') != 'WhatsApp inválido'
@@ -195,6 +210,91 @@ def carregar_proximidade():
     for c in ["fg_entrega_atrasada", "fg_nao_retomar", "fg_contatado_antes"]:
         df[c] = df[c].fillna(False).astype(bool)
     return df
+
+
+@st.cache_data(ttl=300)
+def carregar_recompra_piloto():
+    """Piloto de recompra (último contato dos "Perdido"): só o que foi LIBERADO (`fg_liberado`) e tem consentimento conferido
+    (`ds_consentimento = 'true'`) em `raw_control.posvenda_lista`, com três marcas do estado atual: `fg_nao_retomar` ("Não retomar
+    contato" em QUALQUER lista do SAC, por e-mail; a marcação feita nesta própria lista não conta, para o item continuar visível
+    até ser tratado), `fg_comprou_depois` (pedido no DW desde a criação da lista) e `fg_comprou_com_cupom` (pedido com o código do
+    cupom gerado para ele). Regras em specs/sac.md."""
+    client = bq.get_client()
+    az = f"{bq.PROJECT}.dbt_dw_az"
+    df = bq.query_df(client, f"""
+        WITH tarefa AS (
+          SELECT tipo_tarefa, chave, ds_resultado, fg_feito, dt_atualizacao
+            FROM `{TAB_TAREFAS}`
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_tarefa, chave ORDER BY dt_atualizacao DESC) = 1
+        ), {_sql_nao_retomar(az)}, cupom AS (
+          SELECT referencia, codigo
+            FROM `{cup.TABELA}` WHERE campanha = '{cup.CAMPANHA_RETORNO_PERDIDO}'
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY referencia ORDER BY criado_em DESC) = 1
+        )
+        SELECT l.chave, l.nm_cliente, l.email, l.nr_telefone, l.dt_ultima_compra, l.vl_total_gasto, l.qt_pedidos, l.onda, l.ordem,
+               EXISTS (SELECT 1 FROM nao_retomar n WHERE n.email = LOWER(l.email)
+                          AND NOT (n.tipo_tarefa = '{TIPO_RECOMPRA}' AND n.chave = l.chave)) AS fg_nao_retomar,
+               COALESCE((SELECT MAX(c.dt_ult_pedido) FROM `{az}.tb_cliente` c WHERE LOWER(c.ds_email) = LOWER(l.email))
+                        >= DATE(l.criado_em, '{FUSO}'), FALSE) AS fg_comprou_depois,
+               EXISTS (SELECT 1 FROM cupom k JOIN `{az}.tb_pedido` p ON p.ds_codigo_cupom_nuvemshop = k.codigo
+                        WHERE k.referencia = l.chave) AS fg_comprou_com_cupom
+          FROM `{TAB_LISTA}` l
+         WHERE l.campanha = '{CAMPANHA_LISTA_RECOMPRA}' AND l.fg_liberado AND l.ds_consentimento = 'true'
+    """)
+    df["dt_ultima_compra"] = pd.to_datetime(df["dt_ultima_compra"])
+    df["vl_total_gasto"] = pd.to_numeric(df["vl_total_gasto"]).fillna(0.0)
+    for c in ["fg_nao_retomar", "fg_comprou_depois", "fg_comprou_com_cupom"]:
+        df[c] = df[c].fillna(False).astype(bool)
+    return df
+
+
+COLUNAS_RECOMPRA = ["chave", "nm_cliente", "email", "nr_telefone", "dt_ultima_compra", "vl_total_gasto", "qt_pedidos", "onda", "ordem",
+                    "fg_nao_retomar", "fg_comprou_depois", "fg_comprou_com_cupom"]
+
+
+def carregar_recompra_piloto_seguro():
+    """A lista do piloto não deve derrubar o resto da página do SAC se a carga falhar."""
+    try:
+        return carregar_recompra_piloto()
+    except Exception as e:
+        st.warning(f"Não consegui montar a lista de recompra (piloto) agora: {e}")
+        return None
+
+
+def elegivel_recompra_piloto(df):
+    """Quem fica na tela do piloto: liberado e consentido (já filtrado na carga), sem "Não retomar contato" em outra lista, que
+    não comprou depois da criação da lista nem com o cupom (comprou = missão cumprida, o item sai sozinho)."""
+    if df.empty:
+        return df
+    return df[~df["fg_nao_retomar"] & ~df["fg_comprou_depois"] & ~df["fg_comprou_com_cupom"]].sort_values("ordem")
+
+
+def _lista_recompra_piloto(df, cupons, agora=None):
+    """Itens do piloto prontos para a tabela: cupom (se já gerado) e link do WhatsApp (só com cupom ainda válido)."""
+    agora = agora or _agora()
+    el = elegivel_recompra_piloto(df)
+    if el.empty:
+        return el.assign(cupom=pd.Series(dtype=str), whatsapp=pd.Series(dtype=str), obs=pd.Series(dtype=str))
+    el = el.copy()
+    mapa = cupons.set_index("referencia") if not cupons.empty else pd.DataFrame(columns=["codigo", "valor", "expira_em"])
+    cupom_txt, whatsapp, obs = [], [], []
+    for _, r in el.iterrows():
+        sem_fone = _sem_whatsapp(r, "nr_telefone", "email")
+        if r["chave"] not in mapa.index:
+            cupom_txt.append("— (gerar abaixo)"); whatsapp.append(None); obs.append(sem_fone)
+            continue
+        c = mapa.loc[r["chave"]]
+        if c["expira_em"] <= agora:
+            cupom_txt.append(f"{c['codigo']} — expirado"); whatsapp.append(None)
+            obs.append(" · ".join(t for t in ("cupom expirado em " + c["expira_em"].strftime("%d/%m %H:%M"), sem_fone) if t))
+            continue
+        cupom_txt.append(f"{c['codigo']} — vence {c['expira_em'].strftime('%d/%m')}")
+        whatsapp.append(msg.link_whatsapp(r["nr_telefone"], msg.msg_recompra_ultimo_contato(
+            r["nm_cliente"], cup.link_cupom(c["codigo"]), c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])))
+        obs.append(sem_fone)
+    el["cupom"], el["whatsapp"], el["obs"] = cupom_txt, whatsapp, obs
+    el["pedidos_txt"] = el["qt_pedidos"].map(lambda n: f"{int(n)}" if pd.notna(n) else "antes de 11/2023")
+    return el
 
 
 # --- Montagem das listas ---------------------------------------------------------------------------------------
@@ -447,6 +547,7 @@ GRUPOS = {  # visual por grupo de listas: cor da faixa, fundo suave e propósito
     "recuperacao": ("Recuperação de venda", "Trazer de volta quem quase comprou", "#0284C7", "#E0F2FE"),
     "problemas": ("Problemas", "Resolver antes que vire reclamação", "#D97706", "#FEF3C7"),
     "proximidade": ("Proximidade", "Cuidar de quem já é cliente — relacionamento, sem venda", "#16A34A", "#DCFCE7"),
+    "recompra": ("Recompra (piloto)", "Convidar para voltar quem já comprou, com um crédito pessoal", "#7C3AED", "#EDE9FE"),
 }
 
 
@@ -516,6 +617,31 @@ def _form_gerar_cupom(recontato):
                     cup.gerar_cupom(cup.CAMPANHA_RECUPERACAO_WHATSAPP, ref)
             except Exception as e:
                 st.error(str(e))
+            else:
+                st.rerun()
+
+
+def _form_gerar_cupons_recompra(lista):
+    """Gera o crédito de retorno (function) para os clientes do piloto que ainda não têm cupom. A validade (21 dias) conta a partir
+    do clique: gere na hora de mandar as mensagens. Repetir o clique não duplica (1 cupom por cliente)."""
+    pendentes = lista[lista["cupom"].str.startswith("—")] if not lista.empty else lista
+    if pendentes.empty:
+        return
+    with st.container(border=True):
+        st.markdown(f"**Gerar o crédito de retorno ({brl(20)} · uso único · 21 dias · mínimo {brl(cup.MIN_COMPRA_RETORNO)})**")
+        st.caption("A validade de 21 dias começa quando você clicar. Gere só na hora de mandar as mensagens; depois o link \"Mensagem\" "
+                   "da tabela já traz o código e o link que aplica o crédito no carrinho.")
+        lote = pendentes.head(LIMITE_CUPONS_POR_CLIQUE)
+        if st.button(f"Gerar cupons pendentes ({len(lote)})", type="primary", key="cupom_recompra_gerar"):
+            erros = []
+            with st.spinner("Criando os cupons na Nuvemshop..."):
+                for ref in lote["chave"]:
+                    try:
+                        cup.gerar_cupom(cup.CAMPANHA_RETORNO_PERDIDO, ref, solicitante="sac_recompra_piloto")
+                    except Exception as e:
+                        erros.append(f"{ref}: {e}")
+            if erros:
+                st.error("Alguns cupons não foram criados:\n\n" + "\n".join(erros[:5]))
             else:
                 st.rerun()
 
@@ -657,6 +783,31 @@ def render():
                  "O que o cliente responder vai na <b>Observação SAC</b>; se for reclamação, escolha \"Reclamação — abrir tratativa\". "
                  + aviso_link,
         )
+
+    df_rec = carregar_recompra_piloto_seguro()
+    if df_rec is not None and not df_rec.empty:
+        lst_rec = _lista_recompra_piloto(df_rec, cup.carregar_cupons(cup.CAMPANHA_RETORNO_PERDIDO))
+        _faixa_grupo("recompra", _pendentes(TIPO_RECOMPRA, lst_rec))
+        _secao_checklist(
+            "Último contato — voltar a explorar (piloto)",
+            TIPO_RECOMPRA, lst_rec,
+            colunas={
+                "Cliente": "nm_cliente", "Última compra": "dt_ultima_compra", "Pedidos": "pedidos_txt", "Total gasto": "vl_total_gasto",
+                "Cupom": "cupom", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
+            },
+            column_config={
+                "WhatsApp": COL_WHATSAPP, "Total gasto": valor, "Obs.": COL_OBS,
+                "Última compra": st.column_config.DateColumn(format="DD/MM/YYYY"),
+            },
+            nota="Piloto do Ecossistema de Pós-Venda: contato humano para quem não compra há mais de 1 ano e <b>já aceitou receber "
+                 "mensagens</b> (consentimento conferido na Nuvemshop). A lista é liberada em ondas pelo sócio; aqui aparece só o que foi "
+                 "liberado. Cada cliente leva um <b>crédito de retorno pessoal</b> (uso único, 21 dias, com valor mínimo de compra): clique em "
+                 "\"Gerar cupons pendentes\" e depois use o link \"Mensagem\" de cada linha — o crédito já entra aplicado no carrinho. "
+                 "Quem responder <b>SAIR</b> ou pedir para não receber: marque a Resolução \"Não retomar contato\" (vale para todas as listas). "
+                 "Quem comprar (com o cupom ou não) sai sozinho da lista. <b>Pare e avise o Hugo</b> se mais de 3% pedirem para sair, se o "
+                 "link do crédito não funcionar ou se o WhatsApp mostrar qualquer aviso. " + aviso_link,
+        )
+        _form_gerar_cupons_recompra(lst_rec)
 
     if fr:
         detalhe_atualizacao(fr)
