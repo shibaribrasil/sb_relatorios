@@ -143,11 +143,12 @@ def msg_recompra_ultimo_contato(nome, link, valor, minimo, expira_em) -> str:
     sticker e do Pix). O cupom COMBINA com outros descontos (decisão do Hugo, 07/10/2026) justamente para o desconto de 3% do Pix valer junto;
     antes da onda 1, confirmar num pedido de teste (cupom + Pix) que o Pix aparece no checkout."""
     ate = expira_em.strftime("%d/%m")
+    # *negrito* é a marcação do WhatsApp (asteriscos colados no texto, sem espaço por dentro): destaca só o que importa na leitura rápida.
     return (f"{_oi(nome)} Faz um tempo desde a sua última compra com a gente e eu queria saber como tem sido a sua prática com o "
-            f"que você levou. Se quiser voltar a explorar, separei um crédito de {_valor(valor)} só para você curtir nossas novidades: "
-            f"é de uso único e vale até {ate}, em compras a partir de {_valor(minimo)}. É só abrir este link, que o crédito já entra "
-            f"aplicado no carrinho: {link} Na compra, você ainda leva um sticker exclusivo e tem 3% de desconto pagando no Pix. "
-            f"Qualquer dúvida, me chama por aqui. Se preferir não receber mais mensagens, é só responder SAIR.")
+            f"que você levou. Se quiser voltar a explorar, separei um *crédito de {_valor(valor)}* só para você curtir nossas novidades: "
+            f"é de uso único e vale *até {ate}*, em compras a partir de *{_valor(minimo)}*. É só abrir este link, que o crédito já entra "
+            f"aplicado no carrinho: {link} Na compra, você ainda leva um *sticker exclusivo* e tem *3% de desconto pagando no Pix*. "
+            f"Qualquer dúvida, me chama por aqui. Se preferir não receber mais mensagens, é só responder *SAIR*.")
 
 
 # --- Proximidade: contato amistoso depois da entrega de uma recompra --------------------------------------------
