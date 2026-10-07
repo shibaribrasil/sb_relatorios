@@ -132,36 +132,35 @@ def secao_acao(meses_sel, hoje):
     sac = d[d["fg_sac_marketing"]]
     g = gerados[gerados["mes"].isin([pd.Timestamp(m) for m in meses_sel])]
     sa = _agrega(sac)
-    render_cards([
-        card("Pedidos com cupom de ação do SAC / pós-venda", f"{sa['n']}", f"{brl(sa['fat'])} faturados" if sa["n"] else "nenhum no período"),
-        card("Cupons gerados no período", f"{len(g)}", f"{int(g['fg_comprou'].sum())} usados em compra" if len(g) else "nenhum cupom gerado",
-             ref=(f"conversão {pct(g['fg_comprou'].mean(), 0)}" if len(g) else "")),
-        card("Margem de contribuição dessas vendas", pct(sa["margem_pct"]) if sa["margem_pct"] is not None else "—",
-             f"{brl(sa['mc'])} de margem · desconto {brl(sa['desc'])}" if sa["n"] else "sem vendas ainda"),
-    ])
-    # A tabela parte dos PEDIDOS (a mesma base do card) e cruza com os cupons gerados pela function: o prefixo de cada campanha liga um ao outro.
-    # Cupom recriado à mão na Nuvemshop vende com o mesmo prefixo, mas não passou pela function: vira "usado fora da function".
+    # Por campanha: os cupons gerados pela function (prefixo da campanha) e as vendas com aquele prefixo (mesma base do card de cima).
     codigo = sac["ds_codigo_cupom"].fillna("").str.upper()
     cobertos = pd.Series(False, index=sac.index)
     linhas = []
 
-    def _linha(acao, prefixo, gx, ped):
+    def _linha(acao, prefixo, n_g, ped):
         x = _agrega(ped)
-        usados = int(gx["fg_comprou"].sum()) if gx is not None else 0
-        n_g = len(gx) if gx is not None else 0
-        return {"Ação": acao, "Prefixo do cupom": prefixo, "Cupons gerados": n_g, "Usados (gerados)": usados,
-                "Conversão": (usados / n_g) if n_g else None, "Pedidos com o cupom": x["n"],
-                "Usados fora da function": max(x["n"] - usados, 0) if n_g else x["n"], "Faturamento": x["fat"],
+        return {"Campanha": acao, "Prefixo do cupom": prefixo, "Cupons gerados": n_g, "Pedidos com o cupom": x["n"],
+                "Conversão": (x["n"] / n_g) if n_g else None, "Faturamento": x["fat"],
                 "Margem de contribuição": x["mc"], "Desconto": x["desc"]}
 
     for (camp, pref), _ in gerados.groupby(["campanha", "prefixo"]):
-        gx = g[(g["campanha"] == camp) & (g["prefixo"] == pref)]
+        n_g = int(((g["campanha"] == camp) & (g["prefixo"] == pref)).sum())
         ped = sac[codigo.str.startswith(pref.upper())]
         cobertos.loc[ped.index] = True
-        if len(gx) or len(ped):
-            linhas.append(_linha(camp, pref, gx, ped))
-    for acao, ped in sac[~cobertos].groupby("ds_acao"):  # ação mapeada que não tem cupom gerado pela function
-        linhas.append(_linha(acao, "—", None, ped))
+        if n_g or len(ped):
+            linhas.append(_linha(camp, pref, n_g, ped))
+    for acao, ped in sac[~cobertos].groupby("ds_acao"):  # ação mapeada sem cupom gerado pela function
+        linhas.append(_linha(acao, "—", 0, ped))
+    n_gerados = sum(r["Cupons gerados"] for r in linhas)
+    n_vendas = sum(r["Pedidos com o cupom"] for r in linhas if r["Cupons gerados"])
+
+    render_cards([
+        card("Pedidos com cupom de ação do SAC / pós-venda", f"{sa['n']}", f"{brl(sa['fat'])} faturados" if sa["n"] else "nenhum no período"),
+        card("Cupons gerados no período", f"{n_gerados}", f"{n_vendas} vendas com esses cupons" if n_gerados else "nenhum cupom gerado",
+             ref=(f"conversão {pct(min(n_vendas / n_gerados, 1), 0)}" if n_gerados else "")),
+        card("Margem de contribuição dessas vendas", pct(sa["margem_pct"]) if sa["margem_pct"] is not None else "—",
+             f"{brl(sa['mc'])} de margem · desconto {brl(sa['desc'])}" if sa["n"] else "sem vendas ainda"),
+    ])
     if linhas:
         st.dataframe(pd.DataFrame(linhas), hide_index=True, use_container_width=True,
                      column_config={"Faturamento": st.column_config.NumberColumn(format="R$ %.2f"),
@@ -171,8 +170,7 @@ def secao_acao(meses_sel, hoje):
     note("Ações mapeadas = cupons cujo prefixo está em <code>stg_acao_cupom</code> como SAC e pós-venda: <code>SEGUNDACHANCE</code> (recontato com cupom), "
          "<code>RETORNO…</code> (crédito de retorno da recompra), <code>CASHBACKPOSCOMPRA</code> e <code>EXPLORAR20</code>. Cupons gerados vêm da function "
          "<code>nuvemshop-criar-cupom</code> (<code>raw_control.cupons_gerados</code>); a conversão conta o cupom gerado no mês que foi usado em compra, mesmo depois do mês. "
-         "<strong>Pedidos com o cupom</strong> conta toda venda com o prefixo (mesma base do card de cima); <strong>Usados (gerados)</strong> conta só os cupons que a function criou; a diferença "
-         "(<strong>usados fora da function</strong>) são cupons recriados à mão na Nuvemshop. Volume pequeno: leia como sinal, não como taxa estável.")
+         "<strong>Pedidos com o cupom</strong> conta toda venda com o prefixo da campanha (mesma base do card de cima); conversão = pedidos ÷ cupons gerados. Volume pequeno: leia como sinal, não como taxa estável.")
 
     # ═══ por ação ═══
     st.html('<div class="c-label" style="margin:18px 0 8px">Vendas por ação (linhas em destaque = ação mapeada do SAC / pós-venda)</div>')
