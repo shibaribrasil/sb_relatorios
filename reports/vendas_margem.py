@@ -96,11 +96,6 @@ def carregar_dados():
           FROM `{bq.PROJECT}.dbt_dw_az.tb_objetivo_faturamento`
          WHERE dt_prim_dia_mes >= DATE '{INICIO_HISTORICO}'
     """)
-    tempo = bq.query_df(client, f"""
-        SELECT dt_data, fg_dia_util, dt_prim_dia_mes
-          FROM `{bq.PROJECT}.dbt_dw_az.tb_tempo`
-         WHERE dt_data >= DATE '{INICIO_HISTORICO}' AND dt_data <= DATE_ADD(CURRENT_DATE('America/Sao_Paulo'), INTERVAL 45 DAY)
-    """)
     ads = bq.query_df(client, f"""
         SELECT dt_data, SUM(vl_custo) AS vl_custo, SUM(qt_cliques) AS qt_cliques
           FROM `{bq.PROJECT}.dbt_dw_us_az.tb_gads_conta_diario`
@@ -139,10 +134,7 @@ def carregar_dados():
     ads["dt_data"] = pd.to_datetime(ads["dt_data"])
     ads["mes"] = ads["dt_data"].dt.to_period("M").dt.to_timestamp()
     ads["vl_custo"] = pd.to_numeric(ads["vl_custo"]).fillna(0.0)
-    tempo["dt_data"] = pd.to_datetime(tempo["dt_data"])
-    tempo["dt_prim_dia_mes"] = pd.to_datetime(tempo["dt_prim_dia_mes"])
-    tempo["fg_dia_util"] = tempo["fg_dia_util"].astype(bool)
-    return {"vendas": vendas, "cancel": cancel, "metas": metas, "ads": ads, "refs": refs, "hist": hist, "tempo": tempo}
+    return {"vendas": vendas, "cancel": cancel, "metas": metas, "ads": ads, "refs": refs, "hist": hist}
 
 
 def _hoje_brt():
@@ -251,21 +243,27 @@ def _meta(metas, meses_sel, hoje, faturamento):
     }
 
 
-def _projecao(df, tempo, meses_sel, hoje, meta_total):
-    """Projeção do mês corrente por dias úteis (mesma regra do Pulso do Dia): faturamento dos dias
-    fechados ÷ dias úteis fechados × dias úteis do mês. Só com um único mês, o corrente."""
-    if len(meses_sel) != 1 or pd.Timestamp(meses_sel[0]).date() != hoje.replace(day=1):
+def _ritmo(df, meses_sel, hoje, meta_total):
+    """Média por dia e projeção, em dias corridos. Mês corrente: só dias fechados (hoje fica de fora);
+    mês passado: mês inteiro; mês futuro: fora. Projeção = média por dia × dias do mês, só com um único
+    mês, o corrente. Devolve None se não há nenhum dia fechado."""
+    fechados = total = 0
+    for m in meses_sel:
+        m = pd.Timestamp(m)
+        dias_mes = m.days_in_month
+        if m.date() == hoje.replace(day=1):
+            fechados += hoje.day - 1
+        elif m.date() < hoje.replace(day=1):
+            fechados += dias_mes
+        total += dias_mes
+    if not fechados:
         return None
-    mes = pd.Timestamp(meses_sel[0])
-    t = tempo[tempo["dt_prim_dia_mes"] == mes]
-    total_uteis = int(t["fg_dia_util"].sum())
-    fechados = int(t[t["dt_data"] < pd.Timestamp(hoje)]["fg_dia_util"].sum())
-    if not fechados or not total_uteis:
-        return None
-    fat_fechado = float(df.loc[df["dt_pedido"] < pd.Timestamp(hoje), "vl_liquido_item"].sum())
-    valor = fat_fechado / fechados * total_uteis
-    return {"valor": valor, "fechados": fechados, "total": total_uteis,
-            "pct_meta": (valor / meta_total) if meta_total else None}
+    fat = float(df.loc[df["dt_pedido"] < pd.Timestamp(hoje), "vl_liquido_item"].sum())
+    media = fat / fechados
+    corrente = len(meses_sel) == 1 and pd.Timestamp(meses_sel[0]).date() == hoje.replace(day=1)
+    valor = media * total if corrente else None
+    return {"media": media, "fechados": fechados, "total": total, "valor": valor,
+            "pct_meta": (valor / meta_total) if valor is not None and meta_total else None}
 
 
 def _grafico_cascata(s, r, custo_ads=0.0):
@@ -651,7 +649,8 @@ def render():
     # ═══ VENDAS E META ═══
     section_title("Vendas e meta do período")
     acima = bool(meta["acumulada"]) and meta["falta_acum"] <= 0
-    proj = _projecao(sel, dados["tempo"], meses_sel, hoje, meta["total"])
+    ritmo = _ritmo(sel, meses_sel, hoje, meta["total"])
+    proj = ritmo if ritmo and ritmo["valor"] is not None else None
     t_fat, c_fat = d("vl_liquido_item")
     t_ped, c_ped = d("pedidos", fmt=lambda v: f"{int(v)}")
     t_tk, c_tk = d("ticket", "rel", "r")
@@ -671,11 +670,14 @@ def render():
              "meta acumulada até hoje − faturamento" if not acima else "faturamento − meta acumulada até hoje",
              variant=("neutral" if not meta["acumulada"] else "ok" if acima else "bad"),
              ref=f"faltam {brl(meta['falta'])} para a meta total do mês" if meta["total"] else ""),
+        card("Média de vendas por dia", brl(ritmo["media"]) if ritmo else "—",
+             "faturamento dos dias fechados ÷ dias corridos fechados" if ritmo else "sem dia fechado no período",
+             ref=f"{ritmo['fechados']} {'dia fechado' if ritmo['fechados'] == 1 else 'dias fechados'} (hoje fica de fora)" if ritmo else ""),
         card("Projeção de faturamento", brl(proj["valor"]) if proj else "—",
-             (f"{pct(proj['pct_meta'], 0)} da meta do mês" if proj["pct_meta"] is not None else "ritmo atual × dias úteis do mês")
+             (f"{pct(proj['pct_meta'], 0)} da meta do mês" if proj["pct_meta"] is not None else "média por dia × dias do mês")
              if proj else "só para o mês em andamento",
              variant=("neutral" if not proj or proj["pct_meta"] is None else "ok" if proj["pct_meta"] >= 1 else "bad"),
-             ref=f"{proj['fechados']} dias úteis fechados de {proj['total']}" if proj else ""),
+             ref=f"{proj['fechados']} {'dia' if proj['fechados'] == 1 else 'dias'} de {proj['total']}" if proj else ""),
     ])
     note("<strong>Projeção</strong> = faturamento dos dias fechados ÷ dias úteis fechados × dias úteis do mês (mesma regra do Pulso do Dia; "
          "vendas de fim de semana entram no faturamento). Referência de ritmo, não previsão; aparece só no mês em andamento e a partir do 2º dia.")
