@@ -310,4 +310,7 @@ RESULTADOS = {
 RESOLUCOES_SEM_RECONTATO = {
     "Não retomar contato", "WhatsApp inválido", "Telefone inválido / sem WhatsApp",
     "Comprou", "Refez o pedido", "Estorno confirmado", "Estorno pendente — resolver",
+    # negativas do cliente no 1º contato (Hugo, 07/10/2026): quem disse não, ou desistiu, não cai na repescagem com cupom
+    "Sem interesse — preço/frete", "Sem interesse — outro motivo",
+    "Desistiu — preço/frete", "Desistiu — prazo de entrega", "Desistiu — outro motivo",
 }
