@@ -32,6 +32,15 @@ TIPO_PROXIMIDADE = "proximidade_pos_entrega"
 TIPO_RECOMPRA = "recompra_piloto"  # piloto do Ecossistema de Pós-Venda: último contato dos "Perdido" (spec: specs/sac.md)
 CAMPANHA_LISTA_RECOMPRA = "perdido_ultimo_contato"
 TAB_LISTA = f"{bq.PROJECT}.raw_control.posvenda_lista"  # lista operacional montada à mão e liberada em ondas (fg_liberado)
+# Fila do fluxo de pós-venda (B065 etapa 4; spec: planejamento/Fluxo de Pós-Venda — Especificação.md no sb_admin_team). Os Perdido NÃO fazem parte
+# dela (piloto à parte, acima). tipo_tarefa = campanha da `tb_posvenda_fila`; chave de cada item = cd_contato (texto).
+TAB_FILA = f"{bq.PROJECT}.dbt_dw_az.tb_posvenda_fila"
+TAB_LOTE_FILA = f"{bq.PROJECT}.raw_control.posvenda_fila_lote"  # lote que o SAC liberou em cada dia (congela o que o dbt recalcula por hora)
+CAMPANHAS_FILA = ("jornada_w2", "jornada_w1", "esgotamento_maturacao", "esgotamento_dormente")  # ordem de exibição = prioridade
+CUPOM_DA_CAMPANHA = {  # campanha da fila -> preset de cupom da function (W2 reaproveita o cashback da W1)
+    "jornada_w1": cup.CAMPANHA_CASHBACK, "jornada_w2": cup.CAMPANHA_CASHBACK,
+    "esgotamento_maturacao": cup.CAMPANHA_RETORNO_MATURACAO, "esgotamento_dormente": cup.CAMPANHA_RETORNO_DORMENTE,
+}
 LIMITE_CUPONS_POR_CLIQUE = 30  # trava de segurança do botão "Gerar cupons pendentes"
 LOTE_DIARIO_RECOMPRA = 20  # clientes sem contato registrado que a lista mantém (Hugo, 07/10/2026): o lote do dia completa até este número
 # Proximidade: o registro nasce no dia seguinte à entrega (D+1) e FICA até o Robson tratar — não há prazo para sumir (decisão do Hugo,
@@ -601,6 +610,7 @@ GRUPOS = {  # visual por grupo de listas: cor da faixa, fundo suave e propósito
     "problemas": ("Problemas", "Resolver antes que vire reclamação", "#D97706", "#FEF3C7"),
     "proximidade": ("Proximidade", "Cuidar de quem já é cliente — relacionamento, sem venda", "#16A34A", "#DCFCE7"),
     "recompra": ("Recompra (piloto)", "Convidar para voltar quem já comprou, com um crédito pessoal", "#7C3AED", "#EDE9FE"),
+    "fluxo": ("Pós-venda — fluxo completo", "Jornada do cliente novo e esgotamento da base: cashback e crédito pessoal por WhatsApp", "#0F766E", "#CCFBF1"),
 }
 
 
@@ -704,6 +714,271 @@ def _form_gerar_cupons_recompra(lista):
                 st.error("Alguns cupons não foram criados:\n\n" + "\n".join(erros[:5]))
             else:
                 st.rerun()
+
+
+# --- Fila do fluxo de pós-venda: lote do dia, lista e seções ----------------------------------------------------
+
+@st.cache_data(ttl=60)
+def fila_ao_vivo() -> bool:
+    """O Hugo liga a fila na planilha de controle (`fila_ao_vivo` = 1) depois da revisão em sombra; o dbt expõe a marca em `fg_ao_vivo`.
+    Desligada (padrão), o SAC NÃO libera lote novo. Fila vazia também devolve falso."""
+    client = bq.get_client()
+    df = bq.query_df(client, f"SELECT COALESCE(LOGICAL_OR(fg_ao_vivo), FALSE) AS ao_vivo FROM `{TAB_FILA}`")
+    return bool(df["ao_vivo"].iloc[0]) if not df.empty else False
+
+
+def _sql_liberar_jornada() -> str:
+    """INSERT: todo cliente da JORNADA (W1/W2) que está na fila e ainda não tem lote nessa campanha. SEM limite diário (decisão do Hugo, 08/10/2026):
+    a regra de data (entrega + 2 dias; W1 + 15 dias) já vem aplicada pelo dbt. Idempotente."""
+    return f"""
+        INSERT INTO `{TAB_LOTE_FILA}` (dt_lote, ds_campanha, cd_contato, dt_criacao)
+        SELECT CURRENT_DATE('{FUSO}'), f.ds_campanha, CAST(f.cd_contato AS STRING), CURRENT_TIMESTAMP()
+          FROM `{TAB_FILA}` f
+         WHERE f.fg_ao_vivo AND STARTS_WITH(f.ds_campanha, 'jornada')
+           AND NOT EXISTS (SELECT 1 FROM `{TAB_LOTE_FILA}` l
+                            WHERE l.ds_campanha = f.ds_campanha AND l.cd_contato = CAST(f.cd_contato AS STRING))
+    """
+
+
+def _sql_completar_esgotamento() -> str:
+    """INSERT: completa o lote do ESGOTAMENTO (maturação, depois dormente) até o limite diário próprio (`qt_limite_esgotamento_dia`, da planilha), contando
+    o que ficou pendente de dias anteriores (como no piloto: só entra a diferença). No máximo UMA vez por dia (se já entrou esgotamento hoje, não faz nada)."""
+    return f"""
+        INSERT INTO `{TAB_LOTE_FILA}` (dt_lote, ds_campanha, cd_contato, dt_criacao)
+        WITH tarefa AS (
+          SELECT tipo_tarefa, chave, fg_feito FROM `{TAB_TAREFAS}`
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_tarefa, chave ORDER BY dt_atualizacao DESC) = 1
+        ), pendentes AS (
+          SELECT COUNT(*) AS n
+            FROM `{TAB_LOTE_FILA}` l LEFT JOIN tarefa t ON t.tipo_tarefa = l.ds_campanha AND t.chave = l.cd_contato
+           WHERE STARTS_WITH(l.ds_campanha, 'esgotamento') AND COALESCE(t.fg_feito, FALSE) = FALSE
+        ), limite AS (
+          SELECT CAST(MAX(qt_limite_esgotamento_dia) AS INT64) AS lim FROM `{TAB_FILA}`
+        )
+        SELECT CURRENT_DATE('{FUSO}'), f.ds_campanha, CAST(f.cd_contato AS STRING), CURRENT_TIMESTAMP()
+          FROM `{TAB_FILA}` f CROSS JOIN pendentes p CROSS JOIN limite
+         WHERE f.fg_ao_vivo AND STARTS_WITH(f.ds_campanha, 'esgotamento')
+           AND NOT EXISTS (SELECT 1 FROM `{TAB_LOTE_FILA}` l
+                            WHERE l.ds_campanha = f.ds_campanha AND l.cd_contato = CAST(f.cd_contato AS STRING))
+           AND NOT EXISTS (SELECT 1 FROM `{TAB_LOTE_FILA}` l2
+                            WHERE STARTS_WITH(l2.ds_campanha, 'esgotamento') AND l2.dt_lote = CURRENT_DATE('{FUSO}'))
+        QUALIFY ROW_NUMBER() OVER (ORDER BY f.nr_prioridade, f.ds_faixa_valor, f.vl_margem_contribuicao DESC, f.cd_contato)
+                <= GREATEST(0, COALESCE(limite.lim, 0) - p.n)
+    """
+
+
+def completar_lote_fila() -> int:
+    """Libera o lote da fila do fluxo (jornada sem limite + esgotamento até o limite próprio). Devolve quantos itens entraram."""
+    client = bq.get_client()
+    novos = 0
+    for sql in (_sql_liberar_jornada(), _sql_completar_esgotamento()):
+        job = client.query(sql)
+        job.result()
+        novos += int(job.num_dml_affected_rows or 0)
+    return novos
+
+
+def _completar_lote_fila_seguro():
+    """Libera o lote da fila na 1ª abertura da página no dia (1x por sessão e dia), SÓ se o Hugo ligou a fila (`fila_ao_vivo`). Falha aqui não
+    derruba o resto da página."""
+    hoje = _agora().date()
+    if st.session_state.get("lote_fila_dia") == hoje:
+        return
+    try:
+        if not fila_ao_vivo():
+            return
+        novos = completar_lote_fila()
+    except Exception as e:
+        st.warning(f"Não consegui liberar o lote da fila de pós-venda (fluxo completo): {e}")
+        return
+    st.session_state["lote_fila_dia"] = hoje
+    if novos:
+        carregar_lote_fila.clear()
+
+
+@st.cache_data(ttl=300)
+def carregar_lote_fila():
+    """Itens já liberados da fila do fluxo (`posvenda_fila_lote`) com os dados do cliente e quatro marcas do estado atual: `fg_nao_retomar`
+    ("Não retomar contato" em QUALQUER lista do SAC, por e-mail; a marcação desta própria lista não conta, para o item continuar visível até ser
+    tratado), `fg_comprou_depois` (pedido no DW desde a liberação), `fg_comprou_com_cupom` (pedido com o código do cupom gerado para ele) e
+    `fg_na_fila` (o cliente ainda está na fila do dbt nessa campanha; a W1 que envelheceu sai da fila e some daqui se não foi tratada)."""
+    client = bq.get_client()
+    az = f"{bq.PROJECT}.dbt_dw_az"
+    cupons = ", ".join(f"'{c}'" for c in sorted(set(CUPOM_DA_CAMPANHA.values())))
+    df = bq.query_df(client, f"""
+        WITH tarefa AS (
+          SELECT tipo_tarefa, chave, ds_resultado, fg_feito, dt_atualizacao
+            FROM `{TAB_TAREFAS}`
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_tarefa, chave ORDER BY dt_atualizacao DESC) = 1
+        ), {_sql_nao_retomar(az)}, cupom AS (
+          SELECT referencia, codigo FROM `{cup.TABELA}` WHERE campanha IN ({cupons})
+        ), pedido1 AS (
+          SELECT cd_contato, cd_codigo_interno
+            FROM (SELECT DISTINCT cd_contato, cd_codigo_interno, dt_pedido FROM `{az}.tb_pedido` WHERE fg_pedido_valido AND NOT fg_brinde)
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY cd_contato ORDER BY dt_pedido, cd_codigo_interno) = 1
+        ), prod AS (
+          SELECT p1.cd_contato, ARRAY_AGG(t.nm_produto ORDER BY t.vl_liquido_item DESC LIMIT 1)[OFFSET(0)] AS nm_produto
+            FROM pedido1 p1 JOIN `{az}.tb_pedido` t ON t.cd_codigo_interno = p1.cd_codigo_interno WHERE NOT t.fg_brinde
+           GROUP BY p1.cd_contato
+        )
+        SELECT l.ds_campanha, l.cd_contato AS chave, l.dt_lote, l.dt_criacao, c.nm_contato AS nm_cliente, LOWER(c.ds_email) AS email,
+               c.nr_telefone, c.dt_ult_pedido AS dt_ultima_compra, c.vl_total_pedido AS vl_total_gasto, c.qt_pedido AS qt_pedidos,
+               pr.nm_produto, ci.ds_faixa_valor,
+               EXISTS (SELECT 1 FROM nao_retomar n WHERE n.email = LOWER(c.ds_email)
+                          AND NOT (n.tipo_tarefa = l.ds_campanha AND n.chave = l.cd_contato)) AS fg_nao_retomar,
+               COALESCE(c.dt_ult_pedido >= DATE(l.dt_criacao, '{FUSO}'), FALSE) AS fg_comprou_depois,
+               EXISTS (SELECT 1 FROM cupom k JOIN `{az}.tb_pedido` p ON p.ds_codigo_cupom_nuvemshop = k.codigo
+                        WHERE k.referencia = l.cd_contato) AS fg_comprou_com_cupom,
+               f.cd_contato IS NOT NULL AS fg_na_fila
+          FROM `{TAB_LOTE_FILA}` l
+          JOIN `{az}.tb_cliente` c ON CAST(c.cd_contato AS STRING) = l.cd_contato
+          LEFT JOIN `{az}.tb_cliente_ciclo` ci ON CAST(ci.cd_contato AS STRING) = l.cd_contato
+          LEFT JOIN prod pr ON CAST(pr.cd_contato AS STRING) = l.cd_contato
+          LEFT JOIN `{TAB_FILA}` f ON CAST(f.cd_contato AS STRING) = l.cd_contato AND f.ds_campanha = l.ds_campanha
+    """)
+    df["dt_ultima_compra"] = pd.to_datetime(df["dt_ultima_compra"])
+    df["vl_total_gasto"] = pd.to_numeric(df["vl_total_gasto"]).fillna(0.0)
+    for c in ["fg_nao_retomar", "fg_comprou_depois", "fg_comprou_com_cupom", "fg_na_fila"]:
+        df[c] = df[c].fillna(False).astype(bool)
+    return df
+
+
+def carregar_lote_fila_seguro():
+    """A fila do fluxo não deve derrubar o resto da página do SAC se a carga falhar (nem enquanto a tabela ainda não tem lote)."""
+    try:
+        return carregar_lote_fila()
+    except Exception as e:
+        st.warning(f"Não consegui montar a fila de pós-venda (fluxo completo) agora: {e}")
+        return None
+
+
+def elegivel_fila(df, tipo, feitos):
+    """Quem fica na tela da campanha `tipo`: sem "Não retomar contato" em outra lista, que não comprou depois da liberação nem com o cupom (comprou =
+    missão cumprida, sai sozinho) e, na jornada, que ainda está na fila do dbt (a W1 envelhecida e não tratada sai; a já tratada fica no histórico)."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    el = df[(df["ds_campanha"] == tipo) & ~df["fg_nao_retomar"] & ~df["fg_comprou_depois"] & ~df["fg_comprou_com_cupom"]]
+    if tipo.startswith("jornada"):
+        el = el[el["fg_na_fila"] | el["chave"].isin(feitos)]
+    return el.sort_values(["dt_lote", "ds_faixa_valor", "chave"])
+
+
+def _lista_fila(df, tipo, cupons, feitos, agora=None):
+    """Itens da campanha prontos para a tabela: cupom (se já gerado) e link do WhatsApp (só com cupom ainda válido)."""
+    agora = agora or _agora()
+    el = elegivel_fila(df, tipo, feitos)
+    if el.empty:
+        return el.assign(cupom=pd.Series(dtype=str), whatsapp=pd.Series(dtype=str), obs=pd.Series(dtype=str), pedidos_txt=pd.Series(dtype=str))
+    el = el.copy()
+    mapa = cupons.set_index("referencia") if not cupons.empty else pd.DataFrame(columns=["codigo", "valor", "expira_em"])
+    cupom_txt, whatsapp, obs = [], [], []
+    for _, r in el.iterrows():
+        sem_fone = _sem_whatsapp(r, "nr_telefone", "email")
+        if r["chave"] not in mapa.index:
+            if tipo == "jornada_w2":
+                cupom_txt.append("— (cashback da W1 não encontrado)"); whatsapp.append(None); obs.append(sem_fone)
+            else:
+                cupom_txt.append("— (gerar abaixo)"); whatsapp.append(None); obs.append(sem_fone)
+            continue
+        c = mapa.loc[r["chave"]]
+        if c["expira_em"] <= agora:
+            cupom_txt.append(f"{c['codigo']} — expirado"); whatsapp.append(None)
+            obs.append(" · ".join(t for t in ("cupom expirado em " + c["expira_em"].strftime("%d/%m %H:%M"), sem_fone) if t))
+            continue
+        cupom_txt.append(f"{c['codigo']} — vence {c['expira_em'].strftime('%d/%m')}")
+        link = cup.link_cupom(c["codigo"])
+        if tipo == "jornada_w1":
+            texto = msg.msg_jornada_w1(r["nm_cliente"], r["nm_produto"], link, c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])
+        elif tipo == "jornada_w2":
+            texto = msg.msg_jornada_w2(r["nm_cliente"], link, c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])
+        elif tipo == "esgotamento_maturacao":
+            texto = msg.msg_esgotamento_maturacao(r["nm_cliente"], link, c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])
+        else:
+            texto = msg.msg_esgotamento_dormente(r["nm_cliente"], link, c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])
+        whatsapp.append(msg.link_whatsapp(r["nr_telefone"], texto))
+        obs.append(sem_fone)
+    el["cupom"], el["whatsapp"], el["obs"] = cupom_txt, whatsapp, obs
+    el["pedidos_txt"] = el["qt_pedidos"].map(lambda n: f"{int(n)}" if pd.notna(n) else "antes de 11/2023")
+    return el
+
+
+def _form_gerar_cupons_fila(tipo, lista, rotulo):
+    """Gera o cupom pessoal (function) dos itens da campanha que ainda não têm. A validade conta a partir do clique: gere na hora de mandar as
+    mensagens. Repetir o clique não duplica (1 cupom por cliente e preset). A W2 não gera: reaproveita o cashback da W1."""
+    if tipo == "jornada_w2":
+        return
+    pendentes = lista[lista["cupom"].str.startswith("— (gerar")] if not lista.empty else lista
+    if pendentes.empty:
+        return
+    with st.container(border=True):
+        st.markdown(f"**Gerar o {rotulo} ({brl(20)} · uso único · mínimo {brl(cup.MIN_COMPRA_RETORNO)})**")
+        st.caption("A validade começa quando você clicar. Gere só na hora de mandar as mensagens; depois o link \"Mensagem\" da tabela já traz o "
+                   "código e o link que aplica o desconto no carrinho.")
+        lote = pendentes.head(LIMITE_CUPONS_POR_CLIQUE)
+        if st.button(f"Gerar cupons pendentes ({len(lote)})", type="primary", key=f"cupom_fila_{tipo}"):
+            erros = []
+            with st.spinner("Criando os cupons na Nuvemshop..."):
+                for ref in lote["chave"]:
+                    try:
+                        cup.gerar_cupom(CUPOM_DA_CAMPANHA[tipo], ref, solicitante=f"sac_{tipo}")
+                    except Exception as e:
+                        erros.append(f"{ref}: {e}")
+            if erros:
+                st.error("Alguns cupons não foram criados:\n\n" + "\n".join(erros[:5]))
+            else:
+                st.rerun()
+
+
+SECOES_FILA = {  # campanha -> (título da seção, nome do cupom no botão, nota de operação)
+    "jornada_w2": ("W2 — lembrete do cashback", "cashback",
+                   "Lembrete <b>único</b> do mesmo cashback da W1, 15 dias depois, só para quem <b>ainda não comprou</b> e tem o cupom válido. "
+                   "O link \"Mensagem\" traz o código da W1. <b>Não há terceiro contato nesta jornada.</b>"),
+    "jornada_w1": ("W1 — check-in depois da entrega, com cashback", "cashback",
+                   "Cliente novo (1º pedido) que recebeu o pedido há 2 dias: conversa sobre a chegada, pedido de avaliação e <b>cashback pessoal</b> "
+                   "(descontado automaticamente no carrinho pelo link). <b>Não há limite diário</b>: todo cliente que cumpre a regra de data entra. "
+                   "Se o cliente não for contatado até 7 dias depois, o item sai da lista."),
+    "esgotamento_maturacao": ("Esgotamento — em maturação (31 a 90 dias)", "crédito de retorno",
+                              "Base que já existia antes da jornada: <b>1 toque</b> com crédito pessoal para quem comprou entre 31 e 90 dias atrás. "
+                              "Entra até o limite diário próprio (planilha de controle), contando o que ficou de ontem."),
+    "esgotamento_dormente": ("Esgotamento — dormente (91 a 365 dias)", "crédito de retorno",
+                             "Base que já existia antes da jornada: <b>1 toque</b> com crédito pessoal para quem comprou entre 91 e 365 dias atrás. "
+                             "Entra depois da lista de maturação, até o limite diário próprio."),
+}
+
+
+def _render_fila_fluxo(df_lote, aviso_link, valor):
+    """Seções da fila do fluxo (uma por campanha) com o mesmo padrão do piloto: cupom, mensagem, Já tratei, Resolução e Observação SAC."""
+    if df_lote is None or df_lote.empty:
+        return
+    listas = {}
+    for tipo in CAMPANHAS_FILA:
+        try:
+            feitos = set(carregar_tarefas(tipo).query("fg_feito")["chave"])
+        except Exception:
+            feitos = set()
+        listas[tipo] = _lista_fila(df_lote, tipo, cup.carregar_cupons(CUPOM_DA_CAMPANHA[tipo]), feitos)
+    if all(l.empty for l in listas.values()):
+        return
+    _faixa_grupo("fluxo", sum(_pendentes(t, l) for t, l in listas.items()))
+    for tipo in CAMPANHAS_FILA:
+        lista = listas[tipo]
+        if lista.empty:
+            continue
+        titulo, rotulo_cupom, nota = SECOES_FILA[tipo]
+        colunas = {"Cliente": "nm_cliente", "Faixa": "ds_faixa_valor", "Última compra": "dt_ultima_compra", "Pedidos": "pedidos_txt",
+                   "Total gasto": "vl_total_gasto", "Cupom": "cupom", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None,
+                   "Obs.": "obs"}
+        if tipo == "jornada_w1":
+            colunas = {"Cliente": "nm_cliente", "Produto": "nm_produto", **{k: v for k, v in colunas.items() if k not in ("Cliente", "Última compra", "Total gasto", "Pedidos")}}
+        _secao_checklist(
+            titulo, tipo, lista, colunas=colunas,
+            column_config={"WhatsApp": COL_WHATSAPP, "Total gasto": valor, "Obs.": COL_OBS,
+                           "Última compra": st.column_config.DateColumn(format="DD/MM/YYYY")},
+            nota=nota + " Quem responder <b>SAIR</b> ou pedir para não receber: marque a Resolução \"Não retomar contato\" (vale para todas as listas). "
+                        "Quem comprar sai sozinho da lista. <b>Pare e avise o Hugo</b> se mais de 3% pedirem para sair, se o link não funcionar ou se "
+                        "o WhatsApp mostrar qualquer aviso. " + aviso_link,
+        )
+        _form_gerar_cupons_fila(tipo, lista, rotulo_cupom)
 
 
 def render():
@@ -869,6 +1144,11 @@ def render():
                  "link do crédito não funcionar ou se o WhatsApp mostrar qualquer aviso. " + aviso_link,
         )
         _form_gerar_cupons_recompra(lst_rec)
+
+    # Fila do fluxo completo (jornada + esgotamento em maturação e dormente), independente do piloto dos Perdido acima. Só libera lote com a
+    # fila ligada na planilha de controle (`fila_ao_vivo` = 1); ligada ou não, mostra o que já foi liberado.
+    _completar_lote_fila_seguro()
+    _render_fila_fluxo(carregar_lote_fila_seguro(), aviso_link, valor)
 
     if fr:
         detalhe_atualizacao(fr)

@@ -203,3 +203,17 @@ Medição por ação: view `raw_control.vw_vendas_cupom_acao` (uma linha por cup
 
 O bloco `nao_retomar` das consultas de Proximidade, Recompra (piloto) e do lote diário lê `raw_control.vw_tarefa_pessoa` (sb_data_pipeline, `sql/raw_control/views_contato_cliente.sql`) em vez de repetir 8 JOINs. A mesma view alimenta o motor de pós-venda (`vw_supressao_contato`). Lista nova do SAC = 1 ramo novo na view. Comportamento idêntico ao anterior.
 
+
+## Fila do fluxo de pós-venda: jornada e esgotamento (B065 etapa 4, 08/10/2026)
+
+Grupo "Pós-venda — fluxo completo", **separado do piloto dos Perdido** (que segue com a lista `posvenda_lista`, 20 por dia). Fonte da regra: `planejamento/Fluxo de Pós-Venda — Especificação.md` (sb_admin_team).
+
+- **Quem entra:** a fila é calculada pelo dbt (`dbt_dw_az.tb_posvenda_fila`: consentimento, supressões, 1 toque comercial a cada 7 dias, janelas). O SAC só **congela o lote do dia** em `raw_control.posvenda_fila_lote` e mostra.
+- **Campanhas (tipo_tarefa = campanha; chave = `cd_contato`):** `jornada_w2` (lembrete do cashback, W1 + 15 dias), `jornada_w1` (check-in depois da entrega, com cashback), `esgotamento_maturacao` e `esgotamento_dormente` (1 toque com crédito pessoal).
+- **Lote:** a **jornada não tem limite diário** (todo cliente na fila entra, idempotente); o **esgotamento** completa até o limite próprio da planilha de controle (`qt_limite_esgotamento_dia`), descontando o que ficou pendente de dias anteriores, **uma vez por dia**.
+- **Sombra x ao vivo:** o SAC só libera lote quando `fg_ao_vivo` for verdadeiro (parâmetro `fila_ao_vivo` da planilha de controle, padrão 0). Desligado, não aparece nada novo; o que já foi liberado continua visível.
+- **Saem da tela sozinhos:** "Não retomar contato" em outra lista, compra depois da liberação ou com o cupom; na jornada, a W1 que envelheceu (saiu da fila) e não foi tratada.
+- **Cupons:** botão "Gerar cupons pendentes" por campanha (presets `cupom_cashback_posvenda`, `cupom_retorno_maturacao`, `cupom_retorno_dormente`); a W2 reaproveita o cashback da W1.
+- **Mensagens:** `msg_jornada_w1`, `msg_jornada_w2` (textos aprovados em 07/10/2026) e `msg_esgotamento_maturacao`/`msg_esgotamento_dormente` (texto proposto, **aguarda aprovação do Hugo**), no padrão fixo de `common/mensagens_sac.py`.
+- **Resolução:** Comprou com o cashback (ou crédito), Respondeu — quer ver produtos, Respondeu — sem interesse, Sem resposta, WhatsApp inválido, Não retomar contato. "Sem resposta" e "Respondeu — quer ver produtos" da W1 liberam a W2.
+- **Dependências para publicar:** dbt com `fg_ao_vivo` (sb_dw_dbt#39) e views/tabela do lote (sb_data_pipeline#29, já aplicadas); function de cupons com os presets do esgotamento (sb_data_pipeline#28).
