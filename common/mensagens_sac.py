@@ -219,6 +219,69 @@ def msg_recompra_ultimo_contato(nome, link, valor, minimo, expira_em) -> str:
         "Qualquer dúvida, me chama por aqui."))
 
 
+def _valor_curto(v) -> str:
+    """Valor sem centavos quando é inteiro ("R$ 20", "R$ 120"), como nos textos aprovados da fila do fluxo; com centavos se não for."""
+    f = float(v)
+    return f"R$ {int(f)}" if f.is_integer() else _valor(f)
+
+
+# --- Fila do fluxo de pós-venda (B065 etapa 4): jornada W1 e W2 e esgotamento em maturação e dormente ---------------
+# Textos W1 e W2 APROVADOS pelo Hugo em 07/10/2026 (planejamento/Textos do Fluxo de Pós-Venda.md); os de esgotamento seguem o texto
+# aprovado do piloto dos Perdido e AGUARDAM a aprovação do Hugo antes do 1º envio. Padrão fixo do CLAUDE.md: rodapé SAIR, negrito nas partes
+# importantes, blocos separados por linha em branco, link sozinho na linha, sem emoji, "Shibari Brasil".
+
+def msg_jornada_w1(nome, produto, link, valor, minimo, expira_em) -> str:
+    """W1 — check-in depois da entrega (entrega + 2 dias), com o cashback pessoal (uso único, validade REAL de `expira_em`, mínimo `minimo`).
+    `produto` = principal item do 1º pedido (se vazio, a pergunta fala do pedido)."""
+    ate = expira_em.strftime("%d/%m")
+    item = f"o {str(produto).strip()}" if isinstance(produto, str) and produto.strip() else "o seu pedido"
+    return _fecha(_p(
+        _oi(nome),
+        f"Vi que o seu pedido chegou e queria saber como foi: {item} {_neg('chegou certinho e era como você esperava?')}",
+        "Se tiver qualquer dúvida de prática ou de segurança, me chama por aqui. E se puder, a sua avaliação do produto ajuda muito a gente.",
+        f"Como boas-vindas, separei um {_neg('cashback de ' + _valor_curto(valor))} para a sua próxima compra, que fica "
+        f"{_neg('descontado automaticamente no carrinho')}. É só abrir este link:\n{link}",
+        f"Vale {_neg('até ' + ate)}, é de uso único e vale em compras a partir de {_neg(_valor_curto(minimo))}. Na compra, você ainda leva um "
+        f"{_neg('sticker exclusivo')} e tem {_neg('3% de desconto pagando no Pix')}."))
+
+
+def msg_jornada_w2(nome, link, valor, minimo, expira_em) -> str:
+    """W2 — lembrete de uso do MESMO cashback da W1 (W1 + 15 dias, só se ainda não comprou e o cupom vale). Um único lembrete."""
+    ate = expira_em.strftime("%d/%m")
+    return _fecha(_p(
+        _oi(nome),
+        f"Passando só para lembrar que o seu {_neg('cashback de ' + _valor_curto(valor))} continua valendo {_neg('até ' + ate)}. Ele entra "
+        f"{_neg('descontado automaticamente no carrinho')} por este link:\n{link}",
+        f"É de uso único, em compras a partir de {_neg(_valor_curto(minimo))}, e você ainda tem {_neg('3% de desconto pagando no Pix')}. "
+        "Se quiser ajuda para escolher o próximo item, é só me chamar."))
+
+
+def _msg_esgotamento(nome, abertura, link, valor, minimo, expira_em) -> str:
+    ate = expira_em.strftime("%d/%m")
+    return _fecha(_p(
+        _oi(nome),
+        abertura,
+        f"Para a sua próxima exploração, separei um {_neg('crédito de ' + _valor_curto(valor))} só para você: é de uso único e vale "
+        f"{_neg('até ' + ate)}, em compras a partir de {_neg(_valor_curto(minimo))}.",
+        f"É só abrir este link, que o crédito já entra aplicado no carrinho:\n{link}",
+        f"Na compra, você ainda leva um {_neg('sticker exclusivo')} e tem {_neg('3% de desconto pagando no Pix')}.",
+        "Qualquer dúvida, me chama por aqui."))
+
+
+def msg_esgotamento_maturacao(nome, link, valor, minimo, expira_em) -> str:
+    """Esgotamento da base existente, EM MATURAÇÃO (31 a 90 dias desde o último pedido): 1 toque com o crédito de retorno. Texto proposto,
+    aguarda aprovação do Hugo."""
+    return _msg_esgotamento(nome, "Faz um tempo desde o seu último pedido com a gente e eu queria saber como tem sido a sua prática com o "
+                                  "que você levou.", link, valor, minimo, expira_em)
+
+
+def msg_esgotamento_dormente(nome, link, valor, minimo, expira_em) -> str:
+    """Esgotamento da base existente, DORMENTE (91 a 365 dias desde o último pedido): 1 toque com o crédito de retorno. Texto proposto,
+    aguarda aprovação do Hugo."""
+    return _msg_esgotamento(nome, "Faz alguns meses desde o seu último pedido com a gente e eu queria saber como tem sido a sua prática "
+                                  "com o que você levou.", link, valor, minimo, expira_em)
+
+
 # --- Proximidade: contato amistoso depois da entrega de uma recompra --------------------------------------------
 
 def msg_proximidade(nome, numero_pedido, produto, nr_pedido_cliente, dias_desde_entrega, atrasado: bool) -> str:
@@ -286,6 +349,16 @@ RESULTADOS = {
         "Não retomar contato",
     ],
     # recompra: último contato dos "Perdido" (piloto). Quem responder SAIR vira "Não retomar contato".
+    # fila do fluxo de pós-venda (B065 etapa 4): tipo_tarefa = campanha da `tb_posvenda_fila`; chave = cd_contato. "Não retomar contato" vale
+    # em todas as listas; "Sem resposta" e "Respondeu — quer ver produtos" da W1 liberam o lembrete (W2).
+    "jornada_w1": ["Comprou com o cashback", "Respondeu — quer ver produtos", "Respondeu — sem interesse", "Sem resposta",
+                   "WhatsApp inválido", "Não retomar contato"],
+    "jornada_w2": ["Comprou com o cashback", "Respondeu — quer ver produtos", "Respondeu — sem interesse", "Sem resposta",
+                   "WhatsApp inválido", "Não retomar contato"],
+    "esgotamento_maturacao": ["Comprou com o crédito", "Respondeu — quer ver produtos", "Respondeu — sem interesse", "Sem resposta",
+                              "WhatsApp inválido", "Não retomar contato"],
+    "esgotamento_dormente": ["Comprou com o crédito", "Respondeu — quer ver produtos", "Respondeu — sem interesse", "Sem resposta",
+                             "WhatsApp inválido", "Não retomar contato"],
     "recompra_piloto": [
         "Comprou com o cupom",
         "Respondeu — quer ver produtos",
