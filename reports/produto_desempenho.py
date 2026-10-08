@@ -31,6 +31,7 @@ EXTRATORES = ("nuvemshop_orders", "bling_products")
 HISTORICO_CONFIAVEL = pd.Timestamp("2025-08-01")      # custo e taxa reais da Nuvemshop desde ago/2025
 INICIO_ITENS_GA4 = pd.Timestamp("2026-08-29")         # primeiro dia com eventos de e-commerce por produto
 MIN_PEDIDOS_LIFT = 3                                  # lift abaixo disso é ruído
+MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
 COR_PRECO = COLORS["accent"]
 COR_CUSTO = COLORS["text_muted"]
 
@@ -56,17 +57,17 @@ def carregar_catalogo():
                g.ds_nivel_exposicao, g.fl_na_home, g.ds_prateleiras_home, g.qt_paginas_como_similar, g.qt_paginas_como_complementar,
                g.nr_ranking_mais_vendidos, g.fl_sem_seo, g.qt_imagens_sem_alt, g.qt_variacoes_sem_gtin_produto,
                g.fg_sem_custo, g.fg_sem_peso, g.fg_sem_imagem,
-               m.vl_preco_atual, m.vl_custo_atual, m.fg_sem_custo AS fg_custo_zero,
-               m.vl_margem_unitaria_tabela, m.pct_margem_tabela, m.vl_margem_unitaria_pix, m.pct_margem_pix,
+               m.vl_preco_de, m.vl_preco_por, m.fg_promocao, m.vl_custo_atual, m.fg_sem_custo AS fg_custo_zero,
+               m.vl_margem_unitaria, m.pct_margem, m.pct_taxa, m.vl_materiais_envio, m.pct_imposto,
                e.dt_primeira_foto, e.qt_dias_observados, e.qt_dias_sem_estoque, e.pct_tempo_sem_estoque,
                e.qt_rupturas, e.qt_dias_medio_ruptura
           FROM `{AZ}.tb_produto_gestao` AS g
           LEFT JOIN `{AZ}.tb_produto_margem_atual` AS m USING (cd_produto_bling)
           LEFT JOIN `{AZ}.tb_produto_estoque_resumo` AS e USING (cd_produto_bling)
     """)
-    for c in ["vl_preco_atual", "vl_custo_atual", "qt_estoque_bling", "qt_cobertura_atual", "qt_compra_pendente", "qt_dias_sem_venda",
-              "qt_pecas_90d", "vl_receita_liquida_90d", "vl_margem_contribuicao_90d", "vl_margem_unitaria_tabela", "pct_margem_tabela",
-              "vl_margem_unitaria_pix", "pct_margem_pix", "qt_dias_observados", "qt_dias_sem_estoque", "pct_tempo_sem_estoque",
+    for c in ["vl_preco_por", "vl_custo_atual", "qt_estoque_bling", "qt_cobertura_atual", "qt_compra_pendente", "qt_dias_sem_venda",
+              "qt_pecas_90d", "vl_receita_liquida_90d", "vl_margem_contribuicao_90d", "vl_preco_de", "vl_preco_por", "vl_margem_unitaria",
+              "pct_margem", "pct_taxa", "vl_materiais_envio", "pct_imposto", "qt_dias_observados", "qt_dias_sem_estoque", "pct_tempo_sem_estoque",
               "qt_rupturas", "qt_dias_medio_ruptura", "qt_paginas_como_similar", "qt_paginas_como_complementar",
               "nr_ranking_mais_vendidos", "qt_imagens_sem_alt", "qt_variacoes_sem_gtin_produto"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -75,6 +76,23 @@ def carregar_catalogo():
     df["dt_ultima_venda"] = pd.to_datetime(df["dt_ultima_venda"])
     df["rotulo_variacao"] = df["ds_variacao"].fillna("").replace({"Sem Variacao": "Única", "": "Única"})
     return df
+
+
+@st.cache_data(ttl=900)
+def carregar_totais():
+    """Unidades, receita líquida e margem de contribuição da loja por dia e frente (pedido válido, sem brinde): base das participações."""
+    client = bq.get_client()
+    t = bq.query_df(client, f"""
+        SELECT dt_pedido AS dt_data, COALESCE(ds_frente, 'Sem frente') AS ds_frente, SUM(qt_item) AS qt_unidades,
+               SUM(vl_receita_liquida_produto) AS vl_receita_liquida, SUM(vl_margem_contribuicao) AS vl_margem_contribuicao
+          FROM `{AZ}.tb_pedido`
+         WHERE fg_pedido_valido AND NOT COALESCE(fg_brinde, FALSE)
+         GROUP BY 1, 2
+    """)
+    t["dt_data"] = pd.to_datetime(t["dt_data"])
+    for c in ("qt_unidades", "vl_receita_liquida", "vl_margem_contribuicao"):
+        t[c] = pd.to_numeric(t[c], errors="coerce").fillna(0.0)
+    return t
 
 
 @st.cache_data(ttl=900)
@@ -315,36 +333,89 @@ def _faixa(vals, fmt):
     return f"faixa {fmt(v.min())} a {fmt(v.max())}" if v.max() - v.min() > 0.005 else ""
 
 
-def _numeros(cat_sku, w, vendas):
+def _soma_tot(tot, ini, fim, frente=None):
+    t = tot[(tot["dt_data"] >= ini) & (tot["dt_data"] <= fim)]
+    if frente is not None:
+        t = t[t["ds_frente"] == frente]
+    return {"un": float(t["qt_unidades"].sum()), "rec": float(t["vl_receita_liquida"].sum()), "mc": float(t["vl_margem_contribuicao"].sum())}
+
+
+def _part(parte, total):
+    return parte / total if total and total > 0 else None
+
+
+def _txt_part(prod, tot, rotulo="da loja"):
+    pu, pm = _part(prod["un"], tot["un"]), _part(prod["mc"], tot["mc"])
+    return f"{pct(pu)} das unidades · {pct(pm)} da margem {rotulo}"
+
+
+def _margem_familia(cat_sku):
+    """Margem unitária (R$ e %) da família: média ponderada pelas unidades de 90 dias (se não vendeu, peso igual); só SKUs com custo."""
+    ok = cat_sku[~cat_sku["fg_custo_zero"].fillna(True) & cat_sku["vl_margem_unitaria"].notna()]
+    if ok.empty:
+        return None, None
+    w = ok["qt_pecas_90d"].fillna(0)
+    if w.sum() <= 0:
+        w = pd.Series(1.0, index=ok.index)
+    return float((ok["vl_margem_unitaria"] * w).sum() / w.sum()), float((ok["vl_margem_unitaria"] * w).sum() / (ok["vl_preco_por"] * w).sum())
+
+
+def _numeros(cat_sku, w, vendas, tot, hoje):
     peso = cat_sku["qt_pecas_90d"]
-    preco = _media_ponderada(cat_sku["vl_preco_atual"], peso)
+    por = _media_ponderada(cat_sku["vl_preco_por"], peso)
+    de = _media_ponderada(cat_sku["vl_preco_de"], peso)
+    promo = bool(cat_sku["fg_promocao"].fillna(False).any())
     custo = _media_ponderada(cat_sku["vl_custo_atual"].where(cat_sku["vl_custo_atual"] > 0), peso)
-    m_tab = _media_ponderada(cat_sku["pct_margem_tabela"], peso)
-    m_pix = _media_ponderada(cat_sku["pct_margem_pix"], peso)
+    m_rs, m_pct = _margem_familia(cat_sku)
     rec90 = float(cat_sku["vl_receita_liquida_90d"].sum())
     m_real = float(cat_sku["vl_margem_contribuicao_90d"].sum()) / rec90 if rec90 > 0 else None
+    hoje = pd.Timestamp(hoje)
+    ontem = hoje - pd.Timedelta(days=1)
+    mes_ini = hoje.replace(day=1)
+    frente = str(cat_sku["ds_frente"].iloc[0]) if pd.notna(cat_sku["ds_frente"].iloc[0]) else None
     mes_txt, mes_cor = _delta_txt(w["mes"]["un"], w["mes_ant"]["un"], f"vs {w['ant_ini']:%d/%m}–{w['ant_fim']:%d/%m}")
+    t_mes, t_30, t_90 = _soma_tot(tot, mes_ini, hoje), _soma_tot(tot, ontem - pd.Timedelta(days=29), ontem), _soma_tot(tot, ontem - pd.Timedelta(days=89), ontem)
     pico = w["pico"]
-    sem_custo = cat_sku["fg_custo_zero"].fillna(True).all()
+    t_pico = _soma_tot(tot, pico[0], pico[0] + pd.offsets.MonthEnd(0)) if pico else None
+    p_pico = {"un": pico[1], "mc": float(vendas[(vendas["dt_data"] >= pico[0]) & (vendas["dt_data"] <= pico[0] + pd.offsets.MonthEnd(0))]["vl_margem_contribuicao"].sum())} if pico else None
+    sem_custo = m_rs is None
+
+    def cartao_periodo(rotulo, p, t, ref_extra="", delta=("", "")):
+        return card(rotulo, f"{p['un']:.0f} un", f"receita {brl(p['rec'], 0)} · margem {brl(p['mc'], 0)}", delta=delta[0], delta_color=delta[1],
+                    ref=f"Loja: {_txt_part(p, t)}" + ref_extra)
+
     render_cards([
-        card("Vendas no mês (até hoje)", f"{w['mes']['un']:.0f} un", f"{brl(w['mes']['rec'], 0)} · {w['mes']['ped']:.0f} pedidos", delta=mes_txt, delta_color=mes_cor,
-             ref=f"Mês anterior no mesmo intervalo: {w['mes_ant']['un']:.0f} un"),
-        card("Últimos 30 dias", f"{w['d30']['un']:.0f} un", f"{brl(w['d30']['rec'], 0)} · {w['d30']['ped']:.0f} pedidos", ref="30 dias fechados (até ontem)"),
-        card("Últimos 90 dias", f"{w['d90']['un']:.0f} un", f"{brl(w['d90']['rec'], 0)} · {w['d90']['ped']:.0f} pedidos", ref="90 dias fechados (até ontem)"),
-        card("Mês de maior venda", f"{pico[1]:.0f} un" if pico else "—", f"{pico[0]:%m/%Y}" if pico else "sem histórico", ref="Desde ago/2025 (histórico confiável)"),
+        cartao_periodo("Vendas no mês (até hoje)", w["mes"], t_mes, delta=(mes_txt, mes_cor)),
+        cartao_periodo("Últimos 30 dias", w["d30"], t_30),
+        cartao_periodo("Últimos 90 dias", w["d90"], t_90),
+        card("Mês de maior venda", f"{pico[1]:.0f} un" if pico else "—", f"{pico[0]:%m/%Y} · margem {brl(p_pico['mc'], 0)}" if pico else "sem histórico",
+             ref=f"Loja: {_txt_part(p_pico, t_pico)}" if pico else "Desde ago/2025 (histórico confiável)"),
     ])
+    taxa, mat, imp = cat_sku["pct_taxa"].dropna(), cat_sku["vl_materiais_envio"].dropna(), cat_sku["pct_imposto"].dropna()
+    comp = f"taxa {pct(taxa.iloc[0])} · embalagem {brl(mat.iloc[0])} · imposto {pct(imp.iloc[0])}" if not taxa.empty and not mat.empty and not imp.empty else "parâmetros da tabela"
     render_cards([
-        card("Preço atual", brl(preco), _faixa(cat_sku["vl_preco_atual"], brl) or "preço de venda hoje",
-             ref="Média ponderada pelas vendas de 90 dias" if len(cat_sku) > 1 else "Preço “por” da Nuvemshop"),
+        card("Preço “por” (atual)", brl(por), f"de {brl(de)} por {brl(por)}" if promo and de else "sem promoção ativa",
+             ref=(_faixa(cat_sku["vl_preco_por"], brl) or ("Média ponderada pelas vendas de 90 dias" if len(cat_sku) > 1 else "Preço que o cliente paga hoje"))),
         card("Custo atual", brl(custo) if custo is not None else "sem custo", _faixa(cat_sku["vl_custo_atual"].where(cat_sku["vl_custo_atual"] > 0), brl) or "custo da última compra/produção",
              ref="CMV do cadastro"),
-        card("Margem de contribuição esperada", "sem custo" if sem_custo else pct(m_tab),
-             "" if sem_custo else f"no Pix (−3%): {pct(m_pix)}", ref="Parâmetros da tabela de precificação · antes de mídia"),
-        card("Margem realizada (90 dias)", pct(m_real) if m_real is not None else "—", "da tb_pedido: cupom, frete e mix de pagamento",
-             ref="Margem de contribuição ÷ receita líquida"),
+        card("Margem de contribuição (R$)", "sem custo" if sem_custo else brl(m_rs), "por unidade, sobre o preço “por”", ref=comp),
+        card("Margem de contribuição (%)", "sem custo" if sem_custo else pct(m_pct), "sobre o preço “por”",
+             ref=f"Realizada nos últimos 90 dias: {pct(m_real)}" if m_real is not None else "Antes de mídia"),
     ])
-    note("A margem <b>esperada</b> é a do preço de hoje com os parâmetros da tabela de precificação (taxa Pix, R$ 2,50 de embalagem por unidade, desconto padrão). "
-         "A <b>realizada</b> vem dos pedidos e já inclui cupom, frete e o mix de pagamento — por isso costuma ficar abaixo da esperada. Margem antes de mídia.")
+    if frente:
+        p90 = {"un": w["d90"]["un"], "rec": w["d90"]["rec"], "mc": w["d90"]["mc"]}
+        f90, fmes = _soma_tot(tot, ontem - pd.Timedelta(days=89), ontem, frente), _soma_tot(tot, mes_ini, hoje, frente)
+        pm_mes = {"un": w["mes"]["un"], "rec": w["mes"]["rec"], "mc": w["mes"]["mc"]}
+        render_cards([
+            card(f"Peso na frente {frente} — 90 dias", pct(_part(p90["mc"], f90["mc"])), f"da margem de contribuição da frente ({brl(f90['mc'], 0)})",
+                 ref=f"{pct(_part(p90['un'], f90['un']))} das unidades · {pct(_part(p90['rec'], f90['rec']))} da receita"),
+            card(f"Peso na frente {frente} — mês até hoje", pct(_part(pm_mes["mc"], fmes["mc"])), f"da margem de contribuição da frente ({brl(fmes['mc'], 0)})",
+                 ref=f"{pct(_part(pm_mes['un'], fmes['un']))} das unidades · {pct(_part(pm_mes['rec'], fmes['rec']))} da receita"),
+        ])
+    note("<b>Participações</b>: do produto no total de unidades e de margem de contribuição da loja (ou da frente) no mesmo período; pedidos válidos, sem brinde. "
+         "A frente é a do cadastro do produto (Shibari = produção própria; Curadoria = revenda). "
+         "<b>Margem esperada</b> = preço “por” − custo − taxa de pagamento − embalagem − imposto, todos lidos da tabela de precificação (se mudarem lá, mudam aqui); "
+         "a <b>realizada</b> vem dos pedidos e já inclui cupom, frete e o mix de pagamento. Em margem esperada o imposto vem da tabela, e na realizada a loja ainda não paga imposto (sem CNPJ). Margens antes de mídia.")
 
 
 def _grafico_evolucao(vendas, hist, rot_var):
@@ -394,8 +465,8 @@ def _tabela_variacoes(cat_sku, vendas, hoje):
     t = cat_sku.set_index("cd_produto_bling")
     out = pd.DataFrame({
         "Variação": t["rotulo_variacao"],
-        "Preço": t["vl_preco_atual"], "Custo": t["vl_custo_atual"].where(t["vl_custo_atual"] > 0),
-        "Margem esperada": t["pct_margem_tabela"],
+        "Preço": t["vl_preco_por"], "Custo": t["vl_custo_atual"].where(t["vl_custo_atual"] > 0),
+        "Margem esperada": t["pct_margem"],
         "Mês": un(mes_ini, pd.Timestamp(hoje)), "30 dias": un(ontem - pd.Timedelta(days=29), ontem),
         "90 dias": un(ontem - pd.Timedelta(days=89), ontem), "Mês de pico": pico,
         "Receita 90d": r90["vl_receita_liquida"],
@@ -599,34 +670,77 @@ def _secao_preco_custo(d, cat_sku, rot_var):
              "Com ~1 pedido por dia e pouca unidade por variação, a comparação antes × depois é <b>indicativa, não elasticidade</b> — cupom, vitrine, estoque e sazonalidade mudam junto. "
              "Reprecificações em lote (muitos SKUs no mesmo dia) aparecem como várias linhas na mesma data.")
 
-    st.markdown("**Preço, custo e vendas em cada faixa de preço**")
+    st.markdown("**Preço, custo e vendas por mês**")
+    _grafico_preco_vendas(d["vendas"])
+    with st.expander("Ver as faixas de preço em tabela (por variação)"):
+        _tabela_faixas(d, hist, rot_var)
+
+
+def _grafico_preco_vendas(vendas):
+    """Barras = unidades por mês (mês de pico em destaque); linhas = preço cobrado e custo médios do mês, com rótulo quando mudam."""
+    if vendas.empty:
+        st.caption("Sem vendas para desenhar.")
+        return
+    hoje = pd.Timestamp(_hoje_brt())
+    v = vendas.copy()
+    v["mes"] = v["dt_data"].dt.to_period("M").dt.to_timestamp()
+    m = v.groupby("mes").agg(un=("qt_unidades", "sum"), rb=("vl_receita_bruta", "sum"), cu=("vl_custo", "sum"))
+    m = m.reindex(pd.date_range(m.index.min(), hoje.replace(day=1), freq="MS"))
+    m["un"] = m["un"].fillna(0)
+    m["preco"] = (m["rb"] / m["un"].where(m["un"] > 0))                        # preço bruto cobrado (antes de cupom e desconto)
+    m["custo"] = (m["cu"] / m["un"].where(m["un"] > 0)).where(m.index >= HISTORICO_CONFIAVEL)   # custo de época só é confiável desde ago/2025
+    pico = m["un"].idxmax()
+
+    def rotulos_mudanca(serie, casas=2):
+        """Texto só onde o valor muda (e no primeiro e último ponto) para não poluir o gráfico."""
+        ant, out = None, []
+        vals = serie.dropna()
+        for t, x in serie.items():
+            if pd.isna(x):
+                out.append("")
+                continue
+            muda = ant is None or abs(x - ant) >= 0.005 * max(ant, 1) or t == vals.index[-1]
+            out.append(brl(x, casas) if muda else "")
+            if muda:
+                ant = x
+        return out
+
+    cores = [COLORS["primary_dark"] if t == pico else "#CBD5E1" for t in m.index]
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_bar(x=m.index, y=m["un"], name="Unidades por mês", marker_color=cores,
+                text=[f"{int(x)}" if x > 0 else "" for x in m["un"]], textposition="outside", textfont=dict(size=10, color=COLORS["text_secondary"]),
+                hovertemplate="%{x|%m/%Y}: %{y:.0f} un<extra></extra>", secondary_y=False)
+    fig.add_scatter(x=m.index, y=m["preco"], name="Preço cobrado (médio do mês)", mode="lines+markers+text", connectgaps=True,
+                    line=dict(color=COR_PRECO, width=2.5), marker=dict(size=6), text=rotulos_mudanca(m["preco"]), textposition="top center",
+                    textfont=dict(size=10, color=COR_PRECO), hovertemplate="%{x|%m/%Y}<br>preço R$ %{y:,.2f}<extra></extra>", secondary_y=True)
+    if m["custo"].notna().any():
+        fig.add_scatter(x=m.index, y=m["custo"], name="Custo (médio do mês)", mode="lines+markers+text", connectgaps=True,
+                        line=dict(color=COR_CUSTO, width=2, dash="dot"), marker=dict(size=5), text=rotulos_mudanca(m["custo"]), textposition="bottom center",
+                        textfont=dict(size=10, color=COLORS["text_secondary"]), hovertemplate="%{x|%m/%Y}<br>custo R$ %{y:,.2f}<extra></extra>", secondary_y=True)
+    topo_un = float(m["un"].max()) or 1.0
+    topo_preco = float(pd.concat([m["preco"], m["custo"]]).max() or 1.0)
+    plotly_layout(fig, height=420, bargap=0.2)
+    fig.update_yaxes(range=[0, topo_un * 2.3], visible=False, secondary_y=False)
+    fig.update_yaxes(range=[-topo_preco * 1.1, topo_preco * 1.25], visible=False, showgrid=False, secondary_y=True)   # abaixo de zero: as linhas ficam acima das barras
+    passo = 3 if len(m) > 14 else 1
+    fig.update_xaxes(tickmode="array", tickvals=list(m.index[::passo]), ticktext=[f"{MESES[t.month - 1]}/{t:%y}" for t in m.index[::passo]], tickangle=0)
+    st.plotly_chart(fig, width="stretch")
+    note(f"Barras cinza = unidades vendidas no mês; a barra escura é o <b>mês de pico</b> ({pico:%m/%Y}, {int(m['un'].max())} un). "
+         "A linha laranja é o preço médio cobrado no mês (receita bruta ÷ unidades, antes de cupom e desconto; em família, a média das variações) e a pontilhada é o custo médio, "
+         "com rótulo só quando o valor muda. O custo de cada mês só é confiável desde ago/2025 (antes, o cadastro atual era replicado para trás). "
+         "Mês sem venda não tem ponto de preço. Preço que muda ao longo do mês aparece como média.")
+
+
+def _tabela_faixas(d, hist, rot_var):
     ordem = (d["vendas"].groupby("cd_produto_bling")["qt_unidades"].sum().reindex(list(rot_var)).fillna(0).sort_values(ascending=False).index.tolist())
     sel = st.selectbox("Variação", ordem, format_func=lambda s: rot_var.get(s, s), key="pd_var_preco") if len(ordem) > 1 else ordem[0]
-    h = hist[hist["cd_produto_bling"] == sel].sort_values("dt_inicio").copy()
+    h = hist[hist["cd_produto_bling"] == sel].sort_values("dt_inicio", ascending=False).copy()
     if h.empty:
         st.caption("Sem histórico de preço para esta variação.")
         return
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fim_graf = pd.Timestamp(_hoje_brt())
-    h["dt_fim_graf"] = h["dt_fim"].clip(upper=fim_graf)
-    h["meio"] = h["dt_inicio"] + (h["dt_fim_graf"] - h["dt_inicio"]) / 2
-    fig.add_bar(x=h["meio"], y=h["vl_unidades_por_dia"], name="Unidades por dia", marker_color=COLORS["primary_light"],
-                width=((h["dt_fim_graf"] - h["dt_inicio"]).dt.days + 1) * 86400000 * 0.92, secondary_y=True,
-                customdata=h[["qt_dias", "qt_unidades"]], hovertemplate="%{x|%d/%m/%Y}<br>%{y:.3f} un/dia · %{customdata[0]} dias · %{customdata[1]:.0f} un<extra></extra>")
-    px = pd.concat([h[["dt_inicio", "vl_preco"]].rename(columns={"dt_inicio": "x"}), h[["dt_fim_graf", "vl_preco"]].rename(columns={"dt_fim_graf": "x"})]).sort_values("x")
-    fig.add_scatter(x=px["x"], y=px["vl_preco"], name="Preço", mode="lines", line=dict(color=COR_PRECO, width=3, shape="hv"), secondary_y=False,
-                    hovertemplate="%{x|%d/%m/%Y}<br>Preço R$ %{y:,.2f}<extra></extra>")
-    cx = pd.concat([h[["dt_inicio", "vl_custo_inicio"]].rename(columns={"dt_inicio": "x", "vl_custo_inicio": "y"}),
-                    h[["dt_fim_graf", "vl_custo_fim"]].rename(columns={"dt_fim_graf": "x", "vl_custo_fim": "y"})]).sort_values("x")
-    fig.add_scatter(x=cx["x"], y=cx["y"], name="Custo", mode="lines", line=dict(color=COR_CUSTO, width=2, dash="dot", shape="hv"), secondary_y=False,
-                    hovertemplate="%{x|%d/%m/%Y}<br>Custo R$ %{y:,.2f}<extra></extra>")
-    plotly_layout(fig, height=330)
-    fig.update_yaxes(title_text="R$", secondary_y=False, rangemode="tozero")
-    fig.update_yaxes(title_text="Unidades por dia", secondary_y=True, rangemode="tozero", showgrid=False)
-    st.plotly_chart(fig, width="stretch")
-    tab = h.sort_values("dt_inicio", ascending=False)[["dt_inicio", "dt_fim", "qt_dias", "vl_preco", "vl_custo_inicio", "vl_custo_fim", "qt_unidades",
-                                                          "vl_unidades_por_dia", "vl_preco_praticado_medio", "qt_dias_sem_estoque", "qt_dias_com_posicao"]].copy()
-    tab["dt_fim"] = tab["dt_fim"].where(~h.sort_values("dt_inicio", ascending=False)["fg_vigente"].values, pd.NaT)
+    tab = h[["dt_inicio", "dt_fim", "qt_dias", "vl_preco", "vl_custo_inicio", "vl_custo_fim", "qt_unidades",
+             "vl_unidades_por_dia", "vl_preco_praticado_medio", "qt_dias_sem_estoque", "qt_dias_com_posicao"]].copy()
+    tab["dt_fim"] = tab["dt_fim"].where(~h["fg_vigente"].astype(bool).values, pd.NaT)
     tab = tab.rename(columns={"dt_inicio": "De", "dt_fim": "Até", "qt_dias": "Dias", "vl_preco": "Preço", "vl_custo_inicio": "Custo no início", "vl_custo_fim": "Custo no fim",
                               "qt_unidades": "Unidades", "vl_unidades_por_dia": "Un/dia", "vl_preco_praticado_medio": "Preço médio cobrado",
                               "qt_dias_sem_estoque": "Dias sem estoque", "qt_dias_com_posicao": "Dias com foto de estoque"})
@@ -636,8 +750,8 @@ def _secao_preco_custo(d, cat_sku, rot_var):
         "Custo no fim": st.column_config.NumberColumn(format="R$ %.2f"), "Preço médio cobrado": st.column_config.NumberColumn(format="R$ %.2f"),
         "Un/dia": st.column_config.NumberColumn(format="%.3f"), "Unidades": st.column_config.NumberColumn(format="%d"),
     })
-    note("Cada linha é um período com o mesmo preço de venda (a linha sem “Até” é o preço de hoje; o período vigente subestima levemente as unidades por dia porque o dia em andamento conta inteiro). "
-         "O histórico começa em 17/07/2025 — o primeiro período pode ter começado antes. “Dias sem estoque” só existe desde 02/07/2026; sem estoque o produto não vende, então a taxa por dia desses períodos fica menor.")
+    st.caption("Cada linha é um período com o mesmo preço de venda (sem “Até” = preço de hoje; o período vigente subestima levemente as unidades por dia porque o dia em andamento conta inteiro). "
+               "O histórico começa em 17/07/2025; “dias sem estoque” só existe desde 02/07/2026.")
 
 
 def _secao_estoque(d, cat_sku, rot_var):
@@ -650,7 +764,7 @@ def _secao_estoque(d, cat_sku, rot_var):
     perdida = float(base_ok["qt_unidades_perdidas_estimadas"].sum()) if not base_ok.empty else 0.0
     sem_base = int((~r["fg_base_suficiente"].astype(bool)).sum()) if not r.empty else 0
     cobertura = est / (float(res["qt_pecas_90d"].sum()) / 90) if res["qt_pecas_90d"].sum() > 0 else None
-    preco = _media_ponderada(res["vl_preco_atual"], res["qt_pecas_90d"])
+    preco = _media_ponderada(res["vl_preco_por"], res["qt_pecas_90d"])
     render_cards([
         card("Estoque atual", f"{est:.0f} un", f"cobre {cobertura:.0f} dias no ritmo de 90 dias" if cobertura is not None else "sem venda nos últimos 90 dias",
              ref=f"{res['qt_compra_pendente'].fillna(0).sum():.0f} un em compra pendente"),
@@ -740,7 +854,7 @@ def render():
 
     w = janelas(d["vendas"], hoje)
     section_title("1. Números do produto")
-    _numeros(cat_sku, w, d["vendas"])
+    _numeros(cat_sku, w, d["vendas"], carregar_totais(), hoje)
 
     section_title("2. Evolução das vendas")
     _grafico_evolucao(d["vendas"], d["hist"], rot_var)
