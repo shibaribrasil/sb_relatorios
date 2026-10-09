@@ -54,16 +54,13 @@ def carregar():
     gerados["fg_comprou"] = gerados["fg_comprou"].fillna(False).astype(bool)
     for c in ("vl_receita_liquida_produto", "vl_margem_contribuicao", "vl_desconto_cupom"):
         gerados[c] = pd.to_numeric(gerados[c]).fillna(0.0)
-    try:  # a tabela só existe depois do deploy do dbt que a criou
-        contatos = bq.query_df(client, f"""
-            SELECT tipo_tarefa, dt_contato
-              FROM `{bq.PROJECT}.dbt_dw_az.tb_sac_contato`
-             WHERE fg_contato_valido AND tipo_tarefa IN ('carrinho_abandonado', 'pedido_cancelado')
-        """)
-    except Exception as e:
-        if "Not found" not in str(e):
-            raise
-        contatos = pd.DataFrame(columns=["tipo_tarefa", "dt_contato"])
+    # Contatos feitos pelo SAC: a mesma view que o motor de pós-venda usa (1º contato em dt_contato; fg_alcancou = false para telefone/WhatsApp inválido)
+    contatos = bq.query_df(client, f"""
+        SELECT tipo_tarefa, chave, DATE(dt_contato, 'America/Sao_Paulo') AS dt_contato
+          FROM `{bq.PROJECT}.raw_control.vw_contato_cliente`
+         WHERE fg_alcancou AND tipo_tarefa IN ('carrinho_abandonado', 'pedido_cancelado')
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_tarefa, chave ORDER BY dt_contato) = 1
+    """)
     contatos["dt_contato"] = pd.to_datetime(contatos["dt_contato"])
     contatos["mes"] = contatos["dt_contato"].dt.to_period("M").dt.to_timestamp()
     return {"pedidos": df, "gerados": gerados, "contatos": contatos}
