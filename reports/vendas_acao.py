@@ -24,14 +24,16 @@ def carregar():
     client = bq.get_client()
     df = bq.query_df(client, f"""
         SELECT cd_pedido_loja, nm_contato, dt_pedido, ds_codigo_cupom, ds_acao, ds_grupo_acao, fg_com_acao, fg_cupom, fg_promocao,
-               fg_sac_marketing, ds_meio_pagamento, nr_pedido_cliente, vl_desconto_cupom, vl_desconto_promocional, vl_desconto_acao,
+               fg_sac_marketing, fg_recuperacao, ds_recuperacao, fg_contato_sac_antes, dt_contato_sac, ds_resolucao_sac, qt_dias_recuperacao,
+               dt_origem_recuperacao, ds_meio_pagamento, nr_pedido_cliente, vl_desconto_cupom, vl_desconto_promocional, vl_desconto_acao,
                vl_receita_bruta_produto, vl_receita_liquida_produto, vl_faturamento, vl_margem_contribuicao
           FROM `{bq.PROJECT}.dbt_dw_az.tb_pedido_acao`
          WHERE dt_pedido >= DATE '{INICIO_HISTORICO}'
     """)
     df["dt_pedido"] = pd.to_datetime(df["dt_pedido"])
     df["mes"] = df["dt_pedido"].dt.to_period("M").dt.to_timestamp()
-    for c in ("fg_com_acao", "fg_cupom", "fg_promocao", "fg_sac_marketing"):
+    df["dt_origem_recuperacao"] = pd.to_datetime(df["dt_origem_recuperacao"])
+    for c in ("fg_com_acao", "fg_cupom", "fg_promocao", "fg_sac_marketing", "fg_recuperacao", "fg_contato_sac_antes"):
         df[c] = df[c].fillna(False).astype(bool)
     for c in ("vl_desconto_cupom", "vl_desconto_promocional", "vl_desconto_acao", "vl_receita_bruta_produto", "vl_receita_liquida_produto",
               "vl_faturamento", "vl_margem_contribuicao"):
@@ -155,7 +157,7 @@ def secao_acao(meses_sel, hoje):
     n_vendas = sum(r["Pedidos com o cupom"] for r in linhas if r["Cupons gerados"])
 
     render_cards([
-        card("Pedidos com cupom de ação do SAC / pós-venda", f"{sa['n']}", f"{brl(sa['fat'])} faturados" if sa["n"] else "nenhum no período"),
+        card("Pedidos com ação do SAC / pós-venda", f"{sa['n']}", f"{brl(sa['fat'])} faturados" if sa["n"] else "nenhum no período"),
         card("Cupons gerados no período", f"{n_gerados}", f"{n_vendas} vendas com esses cupons" if n_gerados else "nenhum cupom gerado",
              ref=(f"conversão {pct(min(n_vendas / n_gerados, 1), 0)}" if n_gerados else "")),
         card("Margem de contribuição dessas vendas", pct(sa["margem_pct"]) if sa["margem_pct"] is not None else "—",
@@ -171,6 +173,42 @@ def secao_acao(meses_sel, hoje):
          "<code>RETORNO…</code> (crédito de retorno da recompra), <code>CASHBACKPOSCOMPRA</code> e <code>EXPLORAR20</code>. Cupons gerados vêm da function "
          "<code>nuvemshop-criar-cupom</code> (<code>raw_control.cupons_gerados</code>); a conversão conta o cupom gerado no mês que foi usado em compra, mesmo depois do mês. "
          "<strong>Pedidos com o cupom</strong> conta toda venda com o prefixo da campanha (mesma base do card de cima); conversão = pedidos ÷ cupons gerados. Volume pequeno: leia como sinal, não como taxa estável.")
+
+    # ═══ recuperação de carrinho e de pedido cancelado ═══
+    st.html('<div class="c-label" style="margin:18px 0 8px">Recuperação de carrinho abandonado e de pedido cancelado</div>')
+    rec = d[d["fg_recuperacao"]]
+    if rec.empty:
+        st.info("Nenhum pedido de recuperação (carrinho abandonado ou pedido cancelado refeito) no período.")
+    else:
+        car, can = rec[rec["ds_recuperacao"] == "Carrinho abandonado"], rec[rec["ds_recuperacao"] == "Pedido cancelado"]
+        com_sac = rec[rec["fg_contato_sac_antes"]]
+        r_all = _agrega(rec)
+        render_cards([
+            card("Carrinhos recuperados", f"{len(car)}", f"{brl(float(car['vl_faturamento'].sum()))} faturados · {int(car['fg_contato_sac_antes'].sum())} após contato do SAC"),
+            card("Pedidos refeitos após cancelamento", f"{len(can)}", f"{brl(float(can['vl_faturamento'].sum()))} faturados · {int(can['fg_contato_sac_antes'].sum())} após contato do SAC"),
+            card("Com contato do SAC antes da compra", f"{len(com_sac)} de {len(rec)}", f"{brl(float(com_sac['vl_faturamento'].sum()))} faturados",
+                 ref="o SAC marcou \"Já tratei\" no item antes do pedido"),
+            card("Margem de contribuição das recuperações", pct(r_all["margem_pct"]) if r_all["margem_pct"] is not None else "—",
+                 f"{brl(r_all['mc'])} de margem · {brl(r_all['fat'])} faturados"),
+        ])
+        p = rec.sort_values("dt_pedido", ascending=False)
+        tab = pd.DataFrame({
+            "Data": p["dt_pedido"].dt.date, "Pedido": p["cd_pedido_loja"].astype(str), "Cliente": p["nm_contato"].fillna("—"),
+            "Recuperou": p["ds_recuperacao"], "Origem em": p["dt_origem_recuperacao"].dt.date, "Dias até comprar": p["qt_dias_recuperacao"],
+            "Contato do SAC antes": p["fg_contato_sac_antes"].map({True: "Sim", False: "Não"}),
+            "Resolução do SAC": p["ds_resolucao_sac"].fillna("—"), "Cupom": p["ds_codigo_cupom"].fillna("—"),
+            "Faturamento": p["vl_faturamento"],
+            "Margem %": p["vl_margem_contribuicao"] / p["vl_receita_liquida_produto"].where(p["vl_receita_liquida_produto"] > 0),
+        })
+        st.dataframe(tab.style.apply(lambda r: [_DESTAQUE if r["Contato do SAC antes"] == "Sim" else ""] * len(r), axis=1)
+                        .format({"Faturamento": brl, "Margem %": lambda v: pct(v) if pd.notna(v) else "—"}),
+                     hide_index=True, use_container_width=True, height=min(420, 38 + 35 * len(tab)))
+    note("<strong>Carrinho recuperado</strong> = o mesmo e-mail do carrinho abandonado fez um pedido válido em até <strong>15 dias</strong>; "
+         "<strong>pedido refeito</strong> = o mesmo cliente fez outro pedido válido em até <strong>30 dias</strong> do cancelamento (as mesmas janelas das listas do SAC). "
+         "<strong>Contato do SAC antes</strong> = o item de origem tem o &quot;Já tratei&quot; marcado e o 1º contato foi feito até a data do pedido; telefone ou WhatsApp "
+         "inválido não conta como contato. Com contato, a venda entra como ação do SAC (destaque âmbar e as tabelas acima); sem contato, o cliente voltou "
+         "sozinho (ou pela recuperação automática da Nuvemshop) e a venda só aparece aqui. A ligação é por e-mail/cliente, não por um id de checkout: "
+         "quem compra outra coisa dentro da janela também conta. O SAC começou em 28/09/2026: antes disso toda recuperação é &quot;sem contato&quot;.")
 
     # ═══ por ação ═══
     st.html('<div class="c-label" style="margin:18px 0 8px">Vendas por ação (linhas em destaque = ação mapeada do SAC / pós-venda)</div>')
