@@ -54,7 +54,16 @@ def carregar():
     gerados["fg_comprou"] = gerados["fg_comprou"].fillna(False).astype(bool)
     for c in ("vl_receita_liquida_produto", "vl_margem_contribuicao", "vl_desconto_cupom"):
         gerados[c] = pd.to_numeric(gerados[c]).fillna(0.0)
-    return {"pedidos": df, "gerados": gerados}
+    # Contatos feitos pelo SAC: a mesma view que o motor de pós-venda usa (1º contato em dt_contato; fg_alcancou = false para telefone/WhatsApp inválido)
+    contatos = bq.query_df(client, f"""
+        SELECT tipo_tarefa, chave, DATE(dt_contato, 'America/Sao_Paulo') AS dt_contato
+          FROM `{bq.PROJECT}.raw_control.vw_contato_cliente`
+         WHERE fg_alcancou AND tipo_tarefa IN ('carrinho_abandonado', 'pedido_cancelado')
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_tarefa, chave ORDER BY dt_contato) = 1
+    """)
+    contatos["dt_contato"] = pd.to_datetime(contatos["dt_contato"])
+    contatos["mes"] = contatos["dt_contato"].dt.to_period("M").dt.to_timestamp()
+    return {"pedidos": df, "gerados": gerados, "contatos": contatos}
 
 
 def _agrega(d: pd.DataFrame) -> dict:
@@ -104,7 +113,7 @@ def secao_acao(meses_sel, hoje):
     except Exception as e:
         st.warning(f"Não foi possível carregar as vendas com ação: {e}")
         return
-    df, gerados = dados["pedidos"], dados["gerados"]
+    df, gerados, contatos = dados["pedidos"], dados["gerados"], dados["contatos"]
     d = df[df["mes"].isin([pd.Timestamp(m) for m in meses_sel])]
     if d.empty:
         st.info("Sem pedidos válidos no período selecionado.")
@@ -141,7 +150,7 @@ def secao_acao(meses_sel, hoje):
 
     def _linha(acao, prefixo, n_g, ped):
         x = _agrega(ped)
-        return {"Campanha": acao, "Prefixo do cupom": prefixo, "Cupons gerados": n_g, "Pedidos com o cupom": x["n"],
+        return {"Campanha": acao, "Prefixo do cupom": prefixo, "Cupons gerados / contatos feitos": n_g, "Pedidos convertidos": x["n"],
                 "Conversão": (x["n"] / n_g) if n_g else None, "Faturamento": x["fat"],
                 "Margem de contribuição": x["mc"], "Desconto": x["desc"]}
 
@@ -151,10 +160,18 @@ def secao_acao(meses_sel, hoje):
         cobertos.loc[ped.index] = True
         if n_g or len(ped):
             linhas.append(_linha(camp, pref, n_g, ped))
+    n_gerados = sum(r["Cupons gerados / contatos feitos"] for r in linhas)  # só campanhas de cupom (as linhas de recuperação entram abaixo)
+    n_vendas = sum(r["Pedidos convertidos"] for r in linhas if r["Cupons gerados / contatos feitos"])
+    # Recuperação (carrinho abandonado e pedido cancelado): conversão = pedidos recuperados após contato ÷ contatos válidos feitos no período
+    c_mes = contatos[contatos["mes"].isin([pd.Timestamp(m) for m in meses_sel])]
+    for acao, tipo in (("Carrinho recuperado após contato do SAC", "carrinho_abandonado"), ("Pedido refeito após contato do SAC", "pedido_cancelado")):
+        ped = sac[sac["ds_acao"] == acao]
+        cobertos.loc[ped.index] = True
+        n_c = int((c_mes["tipo_tarefa"] == tipo).sum())
+        if n_c or len(ped):
+            linhas.append(_linha(acao, "—", n_c, ped))
     for acao, ped in sac[~cobertos].groupby("ds_acao"):  # ação mapeada sem cupom gerado pela function
         linhas.append(_linha(acao, "—", 0, ped))
-    n_gerados = sum(r["Cupons gerados"] for r in linhas)
-    n_vendas = sum(r["Pedidos com o cupom"] for r in linhas if r["Cupons gerados"])
 
     render_cards([
         card("Pedidos com ação do SAC / pós-venda", f"{sa['n']}", f"{brl(sa['fat'])} faturados" if sa["n"] else "nenhum no período"),
