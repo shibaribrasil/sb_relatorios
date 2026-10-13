@@ -17,13 +17,31 @@ from common import bigquery as bq
 
 URL_FUNCTION = "https://nuvemshop-criar-cupom-jpt6bmdtaa-uk.a.run.app"
 CAMPANHA_RECUPERACAO_WHATSAPP = "cupom_recuperacao_venda_whatsapp"
-CAMPANHA_CASHBACK = "cupom_cashback_posvenda"  # cashback da jornada (W1/W2): R$ 20, 30 dias, mínimo R$ 120 (preset na function)
+CAMPANHA_CASHBACK = "cupom_cashback_posvenda"  # cashback da jornada (W1/W2): 10% do pedido, em reais, por cliente; 30 dias (preset na function)
+# Cashback = PCT_CASHBACK do valor líquido de produtos do pedido que gerou o contato (Hugo, 13/10/2026), com piso e teto de segurança. Os mesmos
+# limites estão no preset da function (sb_data_pipeline, `writers/nuvemshop_cupom.py`: valor_min e valor_max); a function recusa fora deles.
+PCT_CASHBACK = 0.10
+CASHBACK_MINIMO = 5.00
+CASHBACK_MAXIMO = 50.00
 CAMPANHA_RETORNO_MATURACAO = "cupom_retorno_maturacao"  # crédito do esgotamento em maturação (R$ 20, 21 dias)
 CAMPANHA_RETORNO_DORMENTE = "cupom_retorno_dormente"  # crédito do esgotamento dormente (R$ 20, 21 dias)
 CAMPANHA_RETORNO_PERDIDO = "cupom_retorno_perdido"  # crédito de retorno de R$ 20 (preset novo na function; 07/10/2026)
 # Valor mínimo de compra do crédito de retorno: mesmo valor do preset `cupom_retorno_perdido` (sb_data_pipeline,
 # `writers/nuvemshop_cupom.py`). Entra no texto da mensagem. R$ 120, confirmado pelo Hugo em 07/10/2026 — mude nos dois lugares.
 MIN_COMPRA_RETORNO = 120
+
+
+def valor_cashback(base) -> float | None:
+    """Cashback de um cliente: PCT_CASHBACK (10%) do valor do pedido `base` (receita líquida de produtos, sem frete), arredondado PARA BAIXO em
+    centavos (nunca passa de 10%), com piso CASHBACK_MINIMO e teto CASHBACK_MAXIMO. None se não houver base (pedido sem valor)."""
+    try:
+        b = float(base)
+    except (TypeError, ValueError):
+        return None
+    if b != b or b <= 0:  # NaN ou sem valor
+        return None
+    bruto = int(b * PCT_CASHBACK * 100 + 1e-9) / 100  # floor em centavos
+    return round(min(max(bruto, CASHBACK_MINIMO), CASHBACK_MAXIMO), 2)
 LINK_LOJA = "https://shibaribrasil.com.br"
 TABELA = f"{bq.PROJECT}.raw_control.cupons_gerados"
 

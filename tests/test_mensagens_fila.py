@@ -55,3 +55,9 @@ def test_resultados_da_fila_incluem_nao_retomar_e_whatsapp_invalido():
         ops = m.RESULTADOS[tipo]
         assert "Não retomar contato" in ops and "WhatsApp inválido" in ops and "Sem resposta" in ops
     assert "Comprou com o cashback" in m.RESULTADOS["jornada_w1"]
+
+
+def test_w1_e_w2_personalizadas_com_valor_variavel():
+    t1 = m.msg_jornada_w1("Ana", "corda", LINK, 22.8, 120, EXPIRA)
+    t2 = m.msg_jornada_w2("Ana", LINK, 22.8, 120, EXPIRA)
+    assert "*cashback de R$ 22,80*" in t1 and "*cashback de R$ 22,80*" in t2
