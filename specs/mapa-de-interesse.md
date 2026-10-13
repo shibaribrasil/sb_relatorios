@@ -51,7 +51,7 @@ Pergunta: cada arte da home (carrossel e quadrados de categoria) ocupa a posiç�
 | Dado | Tabela | Observação |
 |---|---|---|
 | Ordem de todos os blocos, banners, link e arte (última captura) | `dbt_dw_stg.stg_nuvemshop_vitrine_bloco` (fonte `raw_nuvemshop.storefront_home_blocos`) | HTML público, de hora em hora, mesma captura da vitrine de produtos. `nr_ordem_bloco` conta carrossel, quadrados e prateleiras; `cd_arte` = arquivo da imagem sem sufixo de tamanho |
-| Data de entrada de cada arte | mesma stg, 1ª captura de cada `cd_arte` | |
+| Data em que cada banner apareceu | mesma stg, 1ª captura de cada par bloco + destino do link (`ds_bloco`, `ds_destino`) | NÃO por arquivo: o arquivo muda a cada upload |
 | Cliques e funil por banner | `dbt_dw_us_az.tb_ga4_promocao_dia` | evento `select_promotion` da tag GTM v32 (publicada em 09/10/2026); funil na MESMA sessão, depois do clique; `ar_transacoes` = `transaction_id` = `cd_pedido_loja` |
 | Sessões que viram a home | `dbt_dw_us_az.tb_ga4_home_sessao_dia` | denominador do CTR |
 | Margem de contribuição dos pedidos pós-clique | `dbt_dw_az.tb_pedido` (válidos, sem brinde), por `cd_pedido_loja` | antes de mídia |
@@ -61,7 +61,9 @@ Pergunta: cada arte da home (carrossel e quadrados de categoria) ocupa a posiç�
 - **Pontos** = 1 × clique + 5 × carrinho + 20 × pedido (mesmos `PESO_*`). **Score 0–100** = posição percentil dos pontos entre os banners da home (no máximo 10 posições); 0 pontos = Sem sinal. Faixas e cores iguais às dos produtos.
 - **CTR** = sessões que clicaram ÷ sessões que viram a home. Vira possível aqui (o mapa de produtos não tem CTR porque a impressão da home só cobre ~18 itens).
 - **Taxa de carrinho suavizada** e **quadrantes** (≥ 10 cliques): mesma fórmula e mesmos nomes (Estrela, Vitrine que não fecha, Joia escondida, Cão).
-- **Janela por arte:** começa no maior entre o início da janela, o 1º dia COMPLETO da tag (10/10/2026) e a entrada da arte (1ª captura); vale para o numerador e o denominador do CTR. Métricas são **por arte**, não por slot: se a ordem do carrossel girar, a arte leva o histórico dela e a tabela de efeito da posição mostra cliques por arte × slot. Cliques de outra arte que já ocupou o slot aparecem em "cliques de outras artes".
+- **Identidade do banner = local + destino do link** (não o arquivo da imagem, não o slot). Decisão de 13/10/2026: em 12/10 o Hugo trocou as artes por versões em resolução melhor e a contagem zerou, porque a versão anterior da página identificava o banner pelo arquivo (`creative_name`), que muda a cada upload. Agora o clique segue o link: trocar o arquivo da arte ou girar a ordem do carrossel NÃO zera nada. O destino é comparado em minúsculas e sem barra final (a captura traz a URL completa e o GA4, só o caminho). A arte é apenas uma "versão": a página mostra quantas versões de arte tiveram clique na janela e em quais slots o banner apareceu.
+- **Janela por banner:** começa no maior entre o início da janela, o 1º dia COMPLETO da tag (10/10/2026) e a 1ª captura do banner (local + destino); vale para o numerador e o denominador do CTR. A tabela de efeito da posição mostra cliques por banner × slot (a ordem girada aparece como o mesmo banner em dois slots).
+- **Troca de criativo com o MESMO link** (nova campanha de arte, não só resolução) continua sendo o mesmo banner. Para separar, o Hugo informa ao gerente de loja a data da troca e o corte é feito na leitura (o `cd_arte` e o dia de cada clique estão na `tb_ga4_promocao_dia`). Dois banners do mesmo local com o MESMO destino viram um só.
 - **Receita GA4** = o que o GA4 enxergou (piso); **margem** = soma da `tb_pedido` dos mesmos `transaction_id`.
 - **Home montada:** blocos na ordem do site (carrossel, quadrados, prateleiras), cartões de banner de 176 px (o de produto tem 138 px), arte mobile no carrossel.
 

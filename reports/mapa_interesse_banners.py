@@ -8,6 +8,11 @@ Regra de negócio: cliques/carrinhos/pedidos vêm da `tb_ga4_promocao_dia` e as 
 (dbt); a margem vem da `tb_pedido` (soma da az). Aqui só se calcula o SCORE (ranking de apresentação, mesma exceção da spec:
 GA4 está na região US e a az em us-east4, então o cruzamento é no pandas) e a taxa de carrinho suavizada.
 Os pesos, a escala de faixas e os quadrantes são os MESMOS do mapa de produtos (importados de `reports.mapa_interesse`).
+
+IDENTIDADE DO BANNER = LOCAL + DESTINO DO LINK (não o arquivo da imagem). O arquivo muda a cada upload (ex.: arte refeita em
+resolução melhor) e o slot muda quando a ordem do carrossel gira; o destino acompanha o banner nos dois casos. A arte é só uma
+"versão": a página conta quantas apareceram na janela e a contagem de cliques continua. Dois banners do mesmo local com o MESMO
+destino viram um só (limite documentado na spec).
 """
 import html
 import re
@@ -30,7 +35,7 @@ COLUNAS_METRICA = ["qt_cliques", "qt_sessoes_clique", "qt_sessoes_carrinho_pos",
 
 @st.cache_data(ttl=900)
 def carregar_banners(dias):
-    """Layout atual (última captura), data de entrada de cada arte, cliques/funil, sessões da home e margem dos pedidos.
+    """Layout atual (última captura), data em que cada banner (local + destino) apareceu pela 1ª vez, cliques/funil, sessões da home e margem dos pedidos.
     Devolve None quando a captura dos banners ainda não existe no BigQuery (extrator novo não implantado)."""
     client = bq.get_client()
     hoje = pd.Timestamp(_hoje_brt())
@@ -42,9 +47,9 @@ def carregar_banners(dias):
               FROM `{bq.PROJECT}.dbt_dw_stg.stg_nuvemshop_vitrine_bloco`
              WHERE ts_captura = (SELECT MAX(ts_captura) FROM `{bq.PROJECT}.dbt_dw_stg.stg_nuvemshop_vitrine_bloco`)""")
         entrada = bq.query_df(client, f"""
-            SELECT cd_arte, DATE(MIN(ts_captura), 'America/Sao_Paulo') AS dt_entrada
+            SELECT ds_bloco, ds_destino, DATE(MIN(ts_captura), 'America/Sao_Paulo') AS dt_entrada
               FROM `{bq.PROJECT}.dbt_dw_stg.stg_nuvemshop_vitrine_bloco`
-             WHERE cd_arte IS NOT NULL GROUP BY 1""")
+             WHERE ds_destino IS NOT NULL AND ds_bloco IN ('slider', 'categories') GROUP BY 1, 2""")
     except Exception:       # noqa: BLE001 — tabela ainda não existe: a página mostra o aviso em vez de quebrar
         return None
     promo = bq.query_df(client, f"""
@@ -86,6 +91,15 @@ def layout_banners(blocos):
     return pd.DataFrame(linhas)
 
 
+def destino_norm(url):
+    """Caminho do link em minúsculas e sem barra final, igual para a URL completa da captura e o `promotion_name` do GA4
+    (que já vem só com o caminho). Home = "/"."""
+    if not isinstance(url, str):
+        return ""
+    caminho = re.sub(r"[?#].*$", "", re.sub(r"^https?://[^/]+", "", url.strip())).rstrip("/").lower()
+    return caminho or "/"
+
+
 def _destino_curto(url):
     if not isinstance(url, str):
         return ""
@@ -106,27 +120,29 @@ def _pct(v, casas=1):
 
 def calcular_banners(lay, promo, sessoes, entrada, margens, ini, fim):
     """Uma linha por banner do layout atual, com cliques, CTR, funil, margem, pontos, score, faixa e quadrante.
-    A janela de cada banner começa no maior entre o início da janela, o 1º dia completo da tag v32 e a entrada da arte
-    (1ª captura), no numerador e no denominador, para o CTR não misturar dias em que a arte nem estava no ar."""
+    O banner é identificado por LOCAL + DESTINO do link: trocar o arquivo da arte ou girar a ordem do carrossel não zera a
+    contagem. A janela começa no maior entre o início da janela, o 1º dia completo da tag v32 e a 1ª captura do banner (local +
+    destino), no numerador e no denominador, para o CTR não misturar dias em que o banner nem estava no ar."""
     if lay.empty:
         return lay.copy(), 0.0
     promo = promo.copy()
     sessoes = sessoes.copy()
     promo["dt_data"] = pd.to_datetime(promo["dt_data"]).dt.date
+    promo["destino_norm"] = promo["ds_destino"].map(destino_norm)
     sessoes["dt_data"] = pd.to_datetime(sessoes["dt_data"]).dt.date
-    entradas = {r.cd_arte: pd.Timestamp(r.dt_entrada).date() for r in entrada.itertuples()} if len(entrada) else {}
+    local_do_bloco = {chave: v[0] for chave, v in LOCAIS.items()}
+    entradas = {(local_do_bloco.get(r.ds_bloco), destino_norm(r.ds_destino)): pd.Timestamp(r.dt_entrada).date() for r in entrada.itertuples()} if len(entrada) else {}
     mg = margens.set_index("cd_pedido_loja") if len(margens) else pd.DataFrame(columns=["vl_margem", "vl_receita"])
     saida = []
     for r in lay.to_dict("records"):
-        artes = {a for a in (r["cd_arte_desktop"], r["cd_arte_mobile"]) if isinstance(a, str)}
-        dt_ini = max([ini, INICIO_BANNERS] + [entradas[a] for a in artes if a in entradas])
-        mask_local = (promo["cd_local"] == r["cd_local"]) & (promo["dt_data"] >= dt_ini)
-        meu = promo[mask_local & promo["cd_arte"].isin(artes)]
-        outras = promo[mask_local & (promo["cd_slot"] == r["cd_slot"]) & ~promo["cd_arte"].isin(artes)]
+        chave = (r["cd_local"], destino_norm(r["ds_destino"]))
+        dt_ini = max(ini, INICIO_BANNERS, entradas.get(chave, ini))
+        meu = promo[(promo["cd_local"] == r["cd_local"]) & (promo["destino_norm"] == chave[1]) & (promo["dt_data"] >= dt_ini)]
         trans = {str(t) for lista in meu["ar_transacoes"] for t in (lista if lista is not None else [])}
         sess_home = sessoes[sessoes["dt_data"] >= dt_ini]["qt_sessoes_home"].sum()
         linha = {**r, "dt_inicio": dt_ini, "dias_no_ar": max((fim - dt_ini).days + 1, 0), "sessoes_home": float(sess_home),
-                 "qt_cliques_outras_artes": float(outras["qt_sessoes_clique"].sum()),
+                 "n_artes": int(meu.loc[meu["cd_arte"] != "(sem arte)", "cd_arte"].nunique()),
+                 "slots_vistos": ", ".join(sorted(meu["cd_slot"].unique(), key=_ordem_slot)),
                  "vl_margem": float(mg.loc[mg.index.intersection(list(trans)), "vl_margem"].sum()) if len(mg) else 0.0}
         for c in COLUNAS_METRICA:
             linha[c] = float(pd.to_numeric(meu[c]).sum())
@@ -140,6 +156,11 @@ def calcular_banners(lay, promo, sessoes, entrada, margens, ini, fim):
     d["taxa_carrinho"] = (d["qt_sessoes_carrinho_pos"] + K_SUAVIZACAO * p0) / (d["qt_sessoes_clique"] + K_SUAVIZACAO)
     d["quadrante"] = [_quadrante(x, p0) for x in d.itertuples()]
     return d, float(p0)
+
+
+def _ordem_slot(slot):
+    prefixo, _, n = str(slot).partition("_")
+    return (0 if prefixo == "hero" else 1, int(n) if n.isdigit() else 0)
 
 
 def _quadrante(r, p0):
@@ -163,8 +184,8 @@ def cartao_banner(r):
            f'onerror="this.style.display=\'none\'">') if isinstance(url, str) and url else f'<div style="height:{altura}px;background:#F1F5F9"></div>'
     ctr = _pct(r["ctr"])
     nome = html.escape(nome_banner(r.get("nm_rotulo"), r["ds_destino"]))[:44]
-    outras = (f'<div style="margin-top:3px;font-size:9px;color:#B45309">+{int(r["qt_cliques_outras_artes"])} cliques de outras artes neste slot</div>'
-              if r.get("qt_cliques_outras_artes", 0) > 0 else "")
+    outras = (f'<div style="margin-top:3px;font-size:9px;color:{COLORS["text_secondary"]}">{int(r["n_artes"])} versões de arte na janela (contagem contínua)</div>'
+              if r.get("n_artes", 0) > 1 else "")
     return f"""<div style="flex:0 0 {LARGURA_CARTAO}px;background:#fff;border:1px solid {COLORS['border']};border-radius:8px;overflow:hidden;position:relative">
       <div style="position:absolute;top:4px;left:4px;background:rgba(255,255,255,.92);border-radius:4px;padding:0 5px;font-size:10px;font-weight:700">{int(r['nr_posicao'])}º</div>
       {img}
@@ -202,7 +223,7 @@ def secao_banners(d, p0, dados, dias):
         "% dos cliques de banner": t["qt_sessoes_clique"] / max(cliques, 1), "CTR": t["ctr"],
         "Carrinhos": t["qt_sessoes_carrinho_pos"], "Checkouts": t["qt_sessoes_checkout_pos"], "Pedidos": t["qt_pedidos_pos"],
         "Receita GA4 (R$)": t["vl_receita_ga4_pos"], "Margem (R$)": t["vl_margem"], "Dias no ar": t["dias_no_ar"],
-        "Cliques de outras artes no slot": t["qt_cliques_outras_artes"]})
+        "Versões de arte": t["n_artes"], "Slots em que apareceu": t["slots_vistos"]})
     st.dataframe(tabela, hide_index=True, use_container_width=True, column_config={
         "Score": st.column_config.ProgressColumn(format="%.0f", min_value=0, max_value=100),
         "% dos cliques de banner": st.column_config.NumberColumn(format="percent"), "CTR": st.column_config.NumberColumn(format="percent"),
@@ -236,16 +257,13 @@ def secao_banners(d, p0, dados, dias):
     if p.empty:
         st.info("Ainda sem cliques de banner na janela.")
     else:
-        rot = {}
-        for r in d.itertuples():
-            for a in (r.cd_arte_desktop, r.cd_arte_mobile):
-                if isinstance(a, str):
-                    rot[a] = nome_banner(r.nm_rotulo, r.ds_destino)
-        g = p.groupby(["cd_local", "cd_slot", "cd_arte"]).agg(cliques=("qt_sessoes_clique", "sum")).reset_index()
-        g["Banner"] = g["cd_arte"].map(rot).fillna("(arte que saiu do ar)")
+        nomes = {(r.cd_local, destino_norm(r.ds_destino)): nome_banner(r.nm_rotulo, r.ds_destino) for r in d.itertuples()}
+        p["destino_norm"] = p["ds_destino"].map(destino_norm)
+        p["Banner"] = [nomes.get((loc, dn), "(banner que saiu do ar)") for loc, dn in zip(p["cd_local"], p["destino_norm"])]
+        g = p.groupby(["Banner", "cd_slot"]).agg(cliques=("qt_sessoes_clique", "sum")).reset_index()
         piv = g.pivot_table(index="Banner", columns="cd_slot", values="cliques", aggfunc="sum", fill_value=0)
-        ordem_cols = sorted(piv.columns, key=lambda c: (0 if c.startswith("hero") else 1, int(c.split("_")[1])))
+        ordem_cols = sorted(piv.columns, key=_ordem_slot)
         st.dataframe(piv[ordem_cols].reset_index(), hide_index=True, use_container_width=True)
-    note("Cliques por banner (linha) em cada slot (coluna). O carrossel gira sozinho: o slide 1 aparece primeiro e leva vantagem, por isso o teste limpo é <b>trocar a ordem "
-         "no meio da janela</b> e ver se o clique acompanha a arte (interesse real) ou a posição (viés). Banner em vários slots = a ordem já foi girada. "
+    note("Cliques por banner (linha, identificado pelo destino do link) em cada slot (coluna); trocar o arquivo da arte não cria linha nova. O carrossel gira sozinho: o slide 1 aparece primeiro e leva vantagem, por isso o teste limpo é <b>trocar a ordem "
+         "no meio da janela</b> e ver se o clique acompanha a arte (interesse real) ou a posição (viés). Banner em vários slots = a ordem já foi girada (o clique acompanha o banner, não o slot). "
          "Os dados começam em 10/10/2026 (1º dia completo da tag); antes disso não existe clique por banner.")
