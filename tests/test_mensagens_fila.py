@@ -26,7 +26,7 @@ def test_w1_um_produto_cita_o_item_de_forma_leve_e_traz_o_percentual():
     assert t.startswith("Oi Hugo, tudo bem? Aqui é o Robson, da Shibari Brasil.")
     assert "se deu tudo certo com a entrega. O kit *era como você esperava?*" in t
     assert "Kit Shibari Iniciante" not in t                       # nunca o nome completo
-    assert "*cashback de R$ 14,10* (equivale a 10% do valor do seu pedido) para a sua próxima compra" in t
+    assert "*cashback de R$ 14,10* (10% do seu último pedido) para a sua próxima compra" in t
     assert "*descontado automaticamente no carrinho*" in t
     assert "*até 06/11*" in t and "*R$ 120*" in t
     assert "*sticker exclusivo*" in t and "*3% de desconto pagando no Pix*" in t
@@ -43,7 +43,7 @@ def test_w1_varios_produtos_cita_o_principal_e_o_restante():
 def test_w1_dois_produtos_cita_os_dois():
     t = m.msg_jornada_w1("Ana", ["Corda de Juta Tratada - 6mm X 8m", "Tesoura de Segurança"], LINK, 20, 120, EXPIRA)
     assert "A corda e a tesoura *eram como você esperava?*" in t
-    assert "equivale a" not in t                                  # sem pct_do_pedido, o percentual não aparece
+    assert "do seu último pedido" not in t                                  # sem pct_do_pedido, o percentual não aparece
 
 
 def test_w1_item_fora_da_lista_neutra_fica_generico():

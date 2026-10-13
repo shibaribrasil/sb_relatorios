@@ -282,10 +282,10 @@ def _valor_cashback_txt(v) -> str:
 def msg_jornada_w1(nome, itens, link, valor, minimo, expira_em, pct_do_pedido=None) -> str:
     """W1 — check-in depois da entrega (entrega + 2 dias), com o cashback pessoal (uso único, validade REAL de `expira_em`, mínimo `minimo`).
     `itens` = nomes dos produtos do 1º pedido do MAIOR para o menor valor (ver `trecho_itens`). `pct_do_pedido` (ex.: 10): se informado, a
-    mensagem diz que o cashback equivale a esse percentual do pedido (use só quando for verdade; ver cup.cashback_e_10_por_cento).
+    mensagem diz que o cashback é esse percentual do último pedido do cliente (use só quando for verdade; ver cup.cashback_e_10_por_cento).
     Texto aprovado pelo Hugo em 07 e 13/10/2026."""
     ate = expira_em.strftime("%d/%m")
-    pct = f" (equivale a {int(pct_do_pedido)}% do valor do seu pedido)" if pct_do_pedido else ""
+    pct = f" ({int(pct_do_pedido)}% do seu último pedido)" if pct_do_pedido else ""
     return _fecha(_p(
         _oi(nome),
         "Vi que o seu pedido chegou e queria saber se deu tudo certo com a entrega. " + _pergunta_itens(trecho_itens(itens)),
