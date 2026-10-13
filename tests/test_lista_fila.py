@@ -80,3 +80,13 @@ def test_lista_da_w1_mostra_o_cashback_previsto_e_a_mensagem_usa_o_valor_do_cupo
     from urllib.parse import unquote
     texto = unquote(w.loc["6", "whatsapp"])
     assert "*cashback de R$ 22,80*" in texto and "CASHBACKPOSCOMPRAZZ77" in texto
+    assert "equivale a 10% do valor do seu pedido" in texto            # 22,80 = 10% de 228: sem piso nem teto
+    assert "Corda de juta" not in texto and "A corda *era como você esperava?*" in texto
+
+
+def test_percentual_so_aparece_quando_e_verdade():
+    from common import cupom as cup
+    assert cup.cashback_e_10_por_cento(22.8, 228.0)
+    assert not cup.cashback_e_10_por_cento(5.0, 30.0)     # piso aplicado: não é 10%
+    assert not cup.cashback_e_10_por_cento(50.0, 900.0)   # teto aplicado
+    assert not cup.cashback_e_10_por_cento(20.0, 228.0)   # valor diferente do calculado

@@ -816,15 +816,18 @@ def carregar_lote_fila():
           SELECT cd_contato, cd_codigo_interno
             FROM (SELECT DISTINCT cd_contato, cd_codigo_interno, dt_pedido FROM `{az}.tb_pedido` WHERE fg_pedido_valido AND NOT fg_brinde)
           QUALIFY ROW_NUMBER() OVER (PARTITION BY cd_contato ORDER BY dt_pedido, cd_codigo_interno) = 1
-        ), prod AS (
-          SELECT p1.cd_contato, ARRAY_AGG(t.nm_produto ORDER BY t.vl_liquido_item DESC LIMIT 1)[OFFSET(0)] AS nm_produto,
-                 SUM(t.vl_receita_liquida_produto) AS vl_pedido_base
+        ), itens AS (
+          SELECT p1.cd_contato, t.nm_produto, SUM(t.vl_receita_liquida_produto) AS vl_item
             FROM pedido1 p1 JOIN `{az}.tb_pedido` t ON t.cd_codigo_interno = p1.cd_codigo_interno WHERE NOT t.fg_brinde
-           GROUP BY p1.cd_contato
+           GROUP BY p1.cd_contato, t.nm_produto
+        ), prod AS (
+          SELECT cd_contato, ARRAY_AGG(nm_produto ORDER BY vl_item DESC LIMIT 1)[OFFSET(0)] AS nm_produto,
+                 STRING_AGG(nm_produto, '||' ORDER BY vl_item DESC) AS itens_pedido, SUM(vl_item) AS vl_pedido_base
+            FROM itens GROUP BY cd_contato
         )
         SELECT l.ds_campanha, l.cd_contato AS chave, l.dt_lote, l.dt_criacao, c.nm_contato AS nm_cliente, LOWER(c.ds_email) AS email,
                c.nr_telefone, c.dt_ult_pedido AS dt_ultima_compra, c.vl_total_pedido AS vl_total_gasto, c.qt_pedido AS qt_pedidos,
-               pr.nm_produto, pr.vl_pedido_base, ci.ds_faixa_valor,
+               pr.nm_produto, pr.itens_pedido, pr.vl_pedido_base, ci.ds_faixa_valor,
                EXISTS (SELECT 1 FROM nao_retomar n WHERE n.email = LOWER(c.ds_email)
                           AND NOT (n.tipo_tarefa = l.ds_campanha AND n.chave = l.cd_contato)) AS fg_nao_retomar,
                COALESCE(c.dt_ult_pedido >= DATE(l.dt_criacao, '{FUSO}'), FALSE) AS fg_comprou_depois,
@@ -891,7 +894,9 @@ def _lista_fila(df, tipo, cupons, feitos, agora=None):
         cupom_txt.append(f"{c['codigo']} — vence {c['expira_em'].strftime('%d/%m')}")
         link = cup.link_cupom(c["codigo"])
         if tipo == "jornada_w1":
-            texto = msg.msg_jornada_w1(r["nm_cliente"], r["nm_produto"], link, c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])
+            itens = [x for x in str(r.get("itens_pedido") or r.get("nm_produto") or "").split("||") if x]
+            texto = msg.msg_jornada_w1(r["nm_cliente"], itens, link, c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"],
+                                       pct_do_pedido=int(cup.PCT_CASHBACK * 100) if cup.cashback_e_10_por_cento(c["valor"], r["vl_pedido_base"]) else None)
         elif tipo == "jornada_w2":
             texto = msg.msg_jornada_w2(r["nm_cliente"], link, c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])
         elif tipo == "esgotamento_maturacao":

@@ -230,16 +230,67 @@ def _valor_curto(v) -> str:
 # aprovado do piloto dos Perdido e AGUARDAM a aprovação do Hugo antes do 1º envio. Padrão fixo do CLAUDE.md: rodapé SAIR, negrito nas partes
 # importantes, blocos separados por linha em branco, link sozinho na linha, sem emoji, "Shibari Brasil".
 
-def msg_jornada_w1(nome, produto, link, valor, minimo, expira_em) -> str:
+# Itens citados de forma leve na W1 (Hugo, 13/10/2026): nome CURTO (artigo + substantivo), nunca o nome completo, e SÓ de itens neutros. A marca promete
+# envio discreto e a prévia do WhatsApp pode aparecer na tela bloqueada: item fora desta lista NÃO é citado (a mensagem fala "o seu pedido").
+# Chave = primeira palavra do nome do produto, em minúsculas.
+ITENS_NEUTROS = {
+    "kit": "o kit", "corda": "a corda", "tesoura": "a tesoura", "óleo": "o óleo", "oleo": "o óleo", "cera": "a cera", "toalha": "a toalha",
+    "tenugui": "o tenugui", "furoshiki": "o furoshiki", "saquinho": "o saquinho", "gancho": "o gancho",
+}
+
+
+def nome_curto_item(nome_produto):
+    """"Kit Shibari Iniciante" -> "o kit"; "Corda de Juta Tratada - 6mm X 8m" -> "a corda"; item fora da lista neutra -> None."""
+    if not isinstance(nome_produto, str) or not nome_produto.strip():
+        return None
+    return ITENS_NEUTROS.get(nome_produto.strip().split(" ")[0].lower())
+
+
+def trecho_itens(itens) -> str:
+    """Como a W1 se refere ao que o cliente comprou. `itens` = nomes de produto do pedido, do MAIOR para o menor valor (ou um nome só).
+    1 item: "o kit"; 2: "a corda e a tesoura"; 3 ou mais: "a corda e o restante do pedido". Principal fora da lista neutra, sem itens ou sem
+    nome: "o seu pedido" (genérico)."""
+    if isinstance(itens, str):
+        itens = [itens]
+    itens = [i for i in (itens or []) if isinstance(i, str) and i.strip()]
+    if not itens:
+        return "o seu pedido"
+    principal = nome_curto_item(itens[0])
+    if not principal:
+        return "o seu pedido"
+    if len(itens) == 1:
+        return principal
+    segundo = nome_curto_item(itens[1])
+    if len(itens) == 2 and segundo:
+        return f"{principal} e {segundo}"
+    return f"{principal} e o restante do pedido"
+
+
+def _pergunta_itens(trecho: str) -> str:
+    if trecho == "o seu pedido":
+        return f"O seu pedido {_neg('chegou certinho e era como você esperava?')}"
+    inicial = trecho[0].upper() + trecho[1:]
+    verbo = "eram" if " e " in trecho else "era"
+    return f"{inicial} {_neg(verbo + ' como você esperava?')}"
+
+
+def _valor_cashback_txt(v) -> str:
+    """Cashback sempre com centavos ("R$ 14,10", "R$ 27,00"): como o valor varia por cliente, "R$ 27" ao lado de "R$ 14,10" ficaria estranho."""
+    return _valor(v)
+
+
+def msg_jornada_w1(nome, itens, link, valor, minimo, expira_em, pct_do_pedido=None) -> str:
     """W1 — check-in depois da entrega (entrega + 2 dias), com o cashback pessoal (uso único, validade REAL de `expira_em`, mínimo `minimo`).
-    `produto` = principal item do 1º pedido (se vazio, a pergunta fala do pedido)."""
+    `itens` = nomes dos produtos do 1º pedido do MAIOR para o menor valor (ver `trecho_itens`). `pct_do_pedido` (ex.: 10): se informado, a
+    mensagem diz que o cashback equivale a esse percentual do pedido (use só quando for verdade; ver cup.cashback_e_10_por_cento).
+    Texto aprovado pelo Hugo em 07 e 13/10/2026."""
     ate = expira_em.strftime("%d/%m")
-    item = f"o {str(produto).strip()}" if isinstance(produto, str) and produto.strip() else "o seu pedido"
+    pct = f" (equivale a {int(pct_do_pedido)}% do valor do seu pedido)" if pct_do_pedido else ""
     return _fecha(_p(
         _oi(nome),
-        f"Vi que o seu pedido chegou e queria saber como foi: {item} {_neg('chegou certinho e era como você esperava?')}",
-        "Se tiver qualquer dúvida de prática ou de segurança, me chama por aqui. E se puder, a sua avaliação do produto ajuda muito a gente.",
-        f"Como boas-vindas, separei um {_neg('cashback de ' + _valor_curto(valor))} para a sua próxima compra, que fica "
+        "Vi que o seu pedido chegou e queria saber se deu tudo certo com a entrega. " + _pergunta_itens(trecho_itens(itens)),
+        "Se tiver qualquer dúvida de prática ou de segurança, me chama por aqui. E se puder, a sua avaliação ajuda muito a gente.",
+        f"Como boas-vindas, separei um {_neg('cashback de ' + _valor_cashback_txt(valor))}{pct} para a sua próxima compra, que fica "
         f"{_neg('descontado automaticamente no carrinho')}. É só abrir este link:\n{link}",
         f"Vale {_neg('até ' + ate)}, é de uso único e vale em compras a partir de {_neg(_valor_curto(minimo))}. Na compra, você ainda leva um "
         f"{_neg('sticker exclusivo')} e tem {_neg('3% de desconto pagando no Pix')}."))
@@ -250,7 +301,7 @@ def msg_jornada_w2(nome, link, valor, minimo, expira_em) -> str:
     ate = expira_em.strftime("%d/%m")
     return _fecha(_p(
         _oi(nome),
-        f"Passando só para lembrar que o seu {_neg('cashback de ' + _valor_curto(valor))} continua valendo {_neg('até ' + ate)}. Ele entra "
+        f"Passando só para lembrar que o seu {_neg('cashback de ' + _valor_cashback_txt(valor))} continua valendo {_neg('até ' + ate)}. Ele entra "
         f"{_neg('descontado automaticamente no carrinho')} por este link:\n{link}",
         f"É de uso único, em compras a partir de {_neg(_valor_curto(minimo))}, e você ainda tem {_neg('3% de desconto pagando no Pix')}. "
         "Se quiser ajuda para escolher o próximo item, é só me chamar."))

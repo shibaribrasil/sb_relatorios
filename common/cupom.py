@@ -92,3 +92,19 @@ def carregar_cupons(campanha: str) -> pd.DataFrame:
     for c in ("valido_de", "expira_em"):
         df[c] = pd.to_datetime(df[c], utc=True).dt.tz_convert("America/Sao_Paulo").dt.tz_localize(None)
     return df
+
+
+def cashback_e_10_por_cento(valor, base) -> bool:
+    """Verdadeiro se o cashback `valor` é exatamente PCT_CASHBACK do pedido `base` (sem o piso ou o teto de segurança). A mensagem só diz
+    "10% do valor do seu pedido" nesse caso; com piso ou teto aplicado, o texto omite o percentual (para não afirmar o que não é verdade)."""
+    try:
+        v = float(valor)
+    except (TypeError, ValueError):
+        return False
+    if v != v:
+        return False
+    b = valor_cashback(base)
+    if b is None:
+        return False
+    return abs(v - b) < 0.005 and CASHBACK_MINIMO < b < CASHBACK_MAXIMO
+
