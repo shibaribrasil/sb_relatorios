@@ -816,14 +816,18 @@ def carregar_lote_fila():
           SELECT cd_contato, cd_codigo_interno
             FROM (SELECT DISTINCT cd_contato, cd_codigo_interno, dt_pedido FROM `{az}.tb_pedido` WHERE fg_pedido_valido AND NOT fg_brinde)
           QUALIFY ROW_NUMBER() OVER (PARTITION BY cd_contato ORDER BY dt_pedido, cd_codigo_interno) = 1
-        ), prod AS (
-          SELECT p1.cd_contato, ARRAY_AGG(t.nm_produto ORDER BY t.vl_liquido_item DESC LIMIT 1)[OFFSET(0)] AS nm_produto
+        ), itens AS (
+          SELECT p1.cd_contato, t.nm_produto, SUM(t.vl_receita_liquida_produto) AS vl_item
             FROM pedido1 p1 JOIN `{az}.tb_pedido` t ON t.cd_codigo_interno = p1.cd_codigo_interno WHERE NOT t.fg_brinde
-           GROUP BY p1.cd_contato
+           GROUP BY p1.cd_contato, t.nm_produto
+        ), prod AS (
+          SELECT cd_contato, ARRAY_AGG(nm_produto ORDER BY vl_item DESC LIMIT 1)[OFFSET(0)] AS nm_produto,
+                 STRING_AGG(nm_produto, '||' ORDER BY vl_item DESC) AS itens_pedido, SUM(vl_item) AS vl_pedido_base
+            FROM itens GROUP BY cd_contato
         )
         SELECT l.ds_campanha, l.cd_contato AS chave, l.dt_lote, l.dt_criacao, c.nm_contato AS nm_cliente, LOWER(c.ds_email) AS email,
                c.nr_telefone, c.dt_ult_pedido AS dt_ultima_compra, c.vl_total_pedido AS vl_total_gasto, c.qt_pedido AS qt_pedidos,
-               pr.nm_produto, ci.ds_faixa_valor,
+               pr.nm_produto, pr.itens_pedido, pr.vl_pedido_base, ci.ds_faixa_valor,
                EXISTS (SELECT 1 FROM nao_retomar n WHERE n.email = LOWER(c.ds_email)
                           AND NOT (n.tipo_tarefa = l.ds_campanha AND n.chave = l.cd_contato)) AS fg_nao_retomar,
                COALESCE(c.dt_ult_pedido >= DATE(l.dt_criacao, '{FUSO}'), FALSE) AS fg_comprou_depois,
@@ -871,6 +875,8 @@ def _lista_fila(df, tipo, cupons, feitos, agora=None):
         return el.assign(cupom=pd.Series(dtype=str), whatsapp=pd.Series(dtype=str), obs=pd.Series(dtype=str), pedidos_txt=pd.Series(dtype=str))
     el = el.copy()
     mapa = cupons.set_index("referencia") if not cupons.empty else pd.DataFrame(columns=["codigo", "valor", "expira_em"])
+    # cashback da jornada = 10% do pedido que gerou o contato (valor individual, ver cup.valor_cashback); só a W1 mostra a previsão antes de gerar
+    el["cashback_previsto"] = el["vl_pedido_base"].map(cup.valor_cashback) if "vl_pedido_base" in el.columns else None
     cupom_txt, whatsapp, obs = [], [], []
     for _, r in el.iterrows():
         sem_fone = _sem_whatsapp(r, "nr_telefone", "email")
@@ -888,7 +894,9 @@ def _lista_fila(df, tipo, cupons, feitos, agora=None):
         cupom_txt.append(f"{c['codigo']} — vence {c['expira_em'].strftime('%d/%m')}")
         link = cup.link_cupom(c["codigo"])
         if tipo == "jornada_w1":
-            texto = msg.msg_jornada_w1(r["nm_cliente"], r["nm_produto"], link, c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])
+            itens = [x for x in str(r.get("itens_pedido") or r.get("nm_produto") or "").split("||") if x]
+            texto = msg.msg_jornada_w1(r["nm_cliente"], itens, link, c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"],
+                                       pct_do_pedido=int(cup.PCT_CASHBACK * 100) if cup.cashback_e_10_por_cento(c["valor"], r["vl_pedido_base"]) else None)
         elif tipo == "jornada_w2":
             texto = msg.msg_jornada_w2(r["nm_cliente"], link, c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])
         elif tipo == "esgotamento_maturacao":
@@ -902,9 +910,45 @@ def _lista_fila(df, tipo, cupons, feitos, agora=None):
     return el
 
 
+def _form_gerar_cashback_individual(tipo, lista):
+    """W1: gera o cashback de UM cliente por vez (decisão do Hugo, 13/10/2026): o Robson escolhe o cliente, o valor (10% do pedido que gerou o
+    contato, com piso e teto) aparece antes de gerar e a mensagem sai 100% personalizada. A validade de 30 dias conta a partir do clique."""
+    pendentes = lista[lista["cupom"].str.startswith("— (gerar")] if not lista.empty else lista
+    if pendentes.empty:
+        return
+    com_valor = pendentes[pendentes["cashback_previsto"].notna()]
+    sem_valor = pendentes[pendentes["cashback_previsto"].isna()]
+    rotulos = {r["chave"]: f"{r['nm_cliente']} — {r['nm_produto'] or 'pedido'} — pedido {brl(r['vl_pedido_base'])} — cashback {brl(r['cashback_previsto'])}"
+               for _, r in com_valor.iterrows()}
+    with st.container(border=True):
+        st.markdown(f"**Gerar o cashback de um cliente ({int(cup.PCT_CASHBACK * 100)}% do pedido · uso único · 30 dias · mínimo {brl(cup.MIN_COMPRA_RETORNO)})**")
+        st.caption(f"O valor é {int(cup.PCT_CASHBACK * 100)}% do valor dos produtos do pedido que gerou este contato (mínimo {brl(cup.CASHBACK_MINIMO)}, "
+                   f"máximo {brl(cup.CASHBACK_MAXIMO)}). Gere **um cliente por vez, na hora de mandar a mensagem**: a validade de 30 dias começa no clique "
+                   "e o link \"Mensagem\" da tabela passa a trazer o valor e o código daquele cliente.")
+        if not sem_valor.empty:
+            st.warning("Sem valor de pedido para calcular o cashback (não gere): " + ", ".join(sem_valor["nm_cliente"].astype(str).head(5)))
+        if not rotulos:
+            return
+        col1, col2 = st.columns([3, 1], vertical_alignment="bottom")
+        ref = col1.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key=f"cashback_cliente_{tipo}")
+        if col2.button("Gerar cashback", type="primary", key=f"cashback_gerar_{tipo}"):
+            valor = float(com_valor.loc[com_valor["chave"] == ref, "cashback_previsto"].iloc[0])
+            try:
+                with st.spinner("Criando o cupom na Nuvemshop..."):
+                    cup.gerar_cupom(CUPOM_DA_CAMPANHA[tipo], ref, solicitante=f"sac_{tipo}", params={"valor": valor})
+            except Exception as e:
+                st.error(str(e))
+            else:
+                st.rerun()
+
+
 def _form_gerar_cupons_fila(tipo, lista, rotulo):
     """Gera o cupom pessoal (function) dos itens da campanha que ainda não têm. A validade conta a partir do clique: gere na hora de mandar as
-    mensagens. Repetir o clique não duplica (1 cupom por cliente e preset). A W2 não gera: reaproveita o cashback da W1."""
+    mensagens. Repetir o clique não duplica (1 cupom por cliente e preset). A W1 gera UM cliente por vez (`_form_gerar_cashback_individual`);
+    a W2 não gera: reaproveita o cashback da W1."""
+    if tipo == "jornada_w1":
+        _form_gerar_cashback_individual(tipo, lista)
+        return
     if tipo == "jornada_w2":
         return
     pendentes = lista[lista["cupom"].str.startswith("— (gerar")] if not lista.empty else lista
@@ -934,8 +978,9 @@ SECOES_FILA = {  # campanha -> (título da seção, nome do cupom no botão, not
                    "Lembrete <b>único</b> do mesmo cashback da W1, 15 dias depois, só para quem <b>ainda não comprou</b> e tem o cupom válido. "
                    "O link \"Mensagem\" traz o código da W1. <b>Não há terceiro contato nesta jornada.</b>"),
     "jornada_w1": ("W1 — check-in depois da entrega, com cashback", "cashback",
-                   "Cliente novo (1º pedido) que recebeu o pedido há 2 dias: conversa sobre a chegada, pedido de avaliação e <b>cashback pessoal</b> "
-                   "(descontado automaticamente no carrinho pelo link). <b>Não há limite diário</b>: todo cliente que cumpre a regra de data entra. "
+                   "Cliente novo (1º pedido) que recebeu o pedido há 2 dias: conversa sobre a chegada, pedido de avaliação e <b>cashback pessoal de 10% do valor "
+                   "do pedido</b> (descontado automaticamente no carrinho pelo link). O cashback é gerado <b>um cliente por vez</b>, abaixo da tabela, "
+                   "na hora de mandar a mensagem. <b>Não há limite diário</b>: todo cliente que cumpre a regra de data entra. "
                    "Se o cliente não for contatado até 7 dias depois, o item sai da lista."),
     "esgotamento_maturacao": ("Esgotamento — em maturação (31 a 90 dias)", "crédito de retorno",
                               "Base que já existia antes da jornada: <b>1 toque</b> com crédito pessoal para quem comprou entre 31 e 90 dias atrás. "
@@ -969,10 +1014,11 @@ def _render_fila_fluxo(df_lote, aviso_link, valor):
                    "Total gasto": "vl_total_gasto", "Cupom": "cupom", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None,
                    "Obs.": "obs"}
         if tipo == "jornada_w1":
-            colunas = {"Cliente": "nm_cliente", "Produto": "nm_produto", **{k: v for k, v in colunas.items() if k not in ("Cliente", "Última compra", "Total gasto", "Pedidos")}}
+            colunas = {"Cliente": "nm_cliente", "Produto": "nm_produto", "Pedido": "vl_pedido_base", "Cashback (10%)": "cashback_previsto",
+                       **{k: v for k, v in colunas.items() if k not in ("Cliente", "Última compra", "Total gasto", "Pedidos")}}
         _secao_checklist(
             titulo, tipo, lista, colunas=colunas,
-            column_config={"WhatsApp": COL_WHATSAPP, "Total gasto": valor, "Obs.": COL_OBS,
+            column_config={"WhatsApp": COL_WHATSAPP, "Total gasto": valor, "Pedido": valor, "Cashback (10%)": valor, "Obs.": COL_OBS,
                            "Última compra": st.column_config.DateColumn(format="DD/MM/YYYY")},
             nota=nota + " Quem responder <b>SAIR</b> ou pedir para não receber: marque a Resolução \"Não retomar contato\" (vale para todas as listas). "
                         "Quem comprar sai sozinho da lista. <b>Pare e avise o Hugo</b> se mais de 3% pedirem para sair, se o link não funcionar ou se "

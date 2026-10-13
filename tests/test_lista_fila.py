@@ -7,7 +7,7 @@ from reports import sac
 
 AGORA = datetime(2026, 10, 20, 10, 0)
 BASE = dict(dt_lote=pd.Timestamp("2026-10-19"), dt_criacao=pd.Timestamp("2026-10-19 08:00"), email="a@x.com", nr_telefone="+5521999990000",
-            dt_ultima_compra=pd.Timestamp("2026-10-01"), vl_total_gasto=200.0, qt_pedidos=1, nm_produto="Corda de juta", ds_faixa_valor="B",
+            dt_ultima_compra=pd.Timestamp("2026-10-01"), vl_total_gasto=200.0, qt_pedidos=1, nm_produto="Corda de juta", vl_pedido_base=228.0, ds_faixa_valor="B",
             fg_nao_retomar=False, fg_comprou_depois=False, fg_comprou_com_cupom=False, fg_na_fila=True)
 VAZIO = pd.DataFrame(columns=["referencia", "codigo", "valor", "valido_de", "expira_em"])
 
@@ -61,3 +61,32 @@ def test_sql_do_lote_nao_tem_limite_na_jornada_e_tem_no_esgotamento():
     j, e = sac._sql_liberar_jornada(), sac._sql_completar_esgotamento()
     assert "qt_limite_esgotamento_dia" not in j and "QUALIFY" not in j
     assert "qt_limite_esgotamento_dia" in e and "QUALIFY ROW_NUMBER()" in e and "l2.dt_lote = CURRENT_DATE" in e
+
+
+def test_cashback_previsto_e_10_por_cento_do_pedido_com_piso_e_teto():
+    from common import cupom as cup
+    assert cup.valor_cashback(228.0) == 22.8
+    assert cup.valor_cashback(144.99) == 14.49          # arredonda PARA BAIXO em centavos (nunca passa de 10%)
+    assert cup.valor_cashback(30) == 5.0                # piso
+    assert cup.valor_cashback(900) == 50.0              # teto
+    assert cup.valor_cashback(None) is None and cup.valor_cashback(0) is None and cup.valor_cashback(float("nan")) is None
+
+
+def test_lista_da_w1_mostra_o_cashback_previsto_e_a_mensagem_usa_o_valor_do_cupom():
+    w1 = sac._lista_fila(_df(), "jornada_w1", _cupons(), feitos={"5"}, agora=AGORA).set_index("chave")
+    assert w1.loc["1", "cashback_previsto"] == 22.8 and w1.loc["6", "cashback_previsto"] == 22.8
+    cupons = pd.DataFrame([{"referencia": "6", "codigo": "CASHBACKPOSCOMPRAZZ77", "valor": 22.8, "valido_de": AGORA, "expira_em": datetime(2026, 11, 19)}])
+    w = sac._lista_fila(_df(), "jornada_w1", cupons, feitos=set(), agora=AGORA).set_index("chave")
+    from urllib.parse import unquote
+    texto = unquote(w.loc["6", "whatsapp"])
+    assert "*cashback de R$ 22,80*" in texto and "CASHBACKPOSCOMPRAZZ77" in texto
+    assert "(10% do seu último pedido)" in texto            # 22,80 = 10% de 228: sem piso nem teto
+    assert "Corda de juta" not in texto and "A corda *era como você esperava?*" in texto
+
+
+def test_percentual_so_aparece_quando_e_verdade():
+    from common import cupom as cup
+    assert cup.cashback_e_10_por_cento(22.8, 228.0)
+    assert not cup.cashback_e_10_por_cento(5.0, 30.0)     # piso aplicado: não é 10%
+    assert not cup.cashback_e_10_por_cento(50.0, 900.0)   # teto aplicado
+    assert not cup.cashback_e_10_por_cento(20.0, 228.0)   # valor diferente do calculado
