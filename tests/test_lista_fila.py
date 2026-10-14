@@ -141,3 +141,14 @@ def test_percentual_so_aparece_quando_e_verdade():
     assert not cup.cashback_e_10_por_cento(5.0, 30.0)     # piso aplicado: não é 10%
     assert not cup.cashback_e_10_por_cento(50.0, 900.0)   # teto aplicado
     assert not cup.cashback_e_10_por_cento(20.0, 228.0)   # valor diferente do calculado
+
+
+def test_previa_mostra_mensagem_com_cupom_de_mentira_e_nao_grava():
+    """Pré-visualização (fila desligada): item sem cupom ganha link de mensagem com código PREVIA e a célula do cupom continua "gerar abaixo"."""
+    df = _df().assign(ds_campanha="jornada_w0")
+    w0 = sac._lista_fila(df, "jornada_w0", VAZIO, feitos=set(), agora=AGORA, previa=True).set_index("chave")
+    assert w0.loc["1|11", "cupom"].startswith("— (gerar") and "prévia" in w0.loc["1|11", "cupom"]
+    t = unquote(w0.loc["1|11", "whatsapp"])
+    assert "PREVIA" in t and "*cashback de R$ 22,80*" in t
+    normal = sac._lista_fila(df, "jornada_w0", VAZIO, feitos=set(), agora=AGORA).set_index("chave")
+    assert pd.isna(normal.loc["1|11", "whatsapp"])          # fora da prévia continua sem link até gerar o cupom de verdade
