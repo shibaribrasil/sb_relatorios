@@ -116,7 +116,7 @@ def test_esgotamento_nao_depende_de_estar_na_fila_do_dbt():
 def test_sql_da_jornada_nao_tem_limite_e_o_esgotamento_segue_a_meta_diaria():
     j, e = sac._sql_liberar_jornada(), sac._sql_completar_esgotamento()
     assert "ds_chave" in j and "QUALIFY" not in j
-    assert "qt_meta_diaria" in e and "nr_posicao_esgotamento" in e and "STARTS_WITH(ds_campanha, 'jornada')" in e
+    assert "GREATEST(0, 10 - p.n)" in e and "nr_posicao_esgotamento" in e and "STARTS_WITH(ds_campanha, 'jornada')" in e
     assert "QUALIFY ROW_NUMBER()" in e and "l2.dt_lote = CURRENT_DATE" in e and "qt_limite_esgotamento_dia" not in e
 
 
@@ -152,3 +152,16 @@ def test_previa_mostra_mensagem_com_cupom_de_mentira_e_nao_grava():
     assert "PREVIA" in t and "*cashback de R$ 22,80*" in t
     normal = sac._lista_fila(df, "jornada_w0", VAZIO, feitos=set(), agora=AGORA).set_index("chave")
     assert pd.isna(normal.loc["1|11", "whatsapp"])          # fora da prévia continua sem link até gerar o cupom de verdade
+
+
+def test_esgotamento_mostra_10_por_padrao_e_a_previa_corta_em_10():
+    assert sac.ESGOTAMENTO_PADRAO == 10 and sac.PASSO_PUXAR == 10
+    assert "SELECT 10 AS n" in sac._sql_corte_esgotamento()
+
+
+def test_grupos_na_ordem_do_hugo_e_perdidos_fora_da_pagina():
+    import inspect
+    src = inspect.getsource(sac.render)
+    ordem = [src.index(x) for x in ("_render_posvenda(", 'key="grupo_recuperacao"', 'key="grupo_problemas"', "_render_esgotamento(")]
+    assert ordem == sorted(ordem)
+    assert "carregar_recompra_piloto_seguro" not in src and "_completar_lote_seguro()" not in src.replace("_completar_lote_fila_seguro()", "")
