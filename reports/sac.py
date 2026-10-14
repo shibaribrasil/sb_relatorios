@@ -714,9 +714,8 @@ def _form_gerar_cupom(recontato):
     with st.container(border=True):
         st.markdown("**Gerar cupom SEGUNDACHANCE (20% · 48 horas)**")
         st.caption("Um cliente por vez, na hora de mandar a mensagem. O prazo começa no clique.")
-        col1, col2 = st.columns([3, 1], vertical_alignment="bottom")
-        ref = col1.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key="cupom_cliente")
-        if col2.button("Gerar cupom", type="primary", key="cupom_gerar"):
+        ref = st.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key="cupom_cliente")
+        if st.button("Gerar cupom", type="primary", key="cupom_gerar"):
             try:
                 with st.spinner("Criando o cupom na Nuvemshop..."):
                     cup.gerar_cupom(cup.CAMPANHA_RECUPERACAO_WHATSAPP, ref)
@@ -1067,7 +1066,7 @@ def _form_gerar_cashback_individual(tipo, lista):
     com_valor = pendentes[pendentes["cashback_previsto"].notna()]
     sem_valor = pendentes[pendentes["cashback_previsto"].isna()]
     rotulos = {r["chave"]: f"{r['nm_cliente']} — {r['pedido_nr_txt']} pedido — {r['nm_produto'] or 'pedido'} — pedido {brl(r['vl_pedido_base'])} — "
-                           f"cashback {brl(r['cashback_previsto'])} — {_validade_dias(r)} dias"
+                           f"cashback {brl(r['cashback_previsto'])}"
                for _, r in com_valor.iterrows()}
     with st.container(border=True):
         st.markdown("**Gerar cashback**")
@@ -1076,9 +1075,8 @@ def _form_gerar_cashback_individual(tipo, lista):
             st.warning("Sem valor de pedido para calcular o cashback (não gere): " + ", ".join(sem_valor["nm_cliente"].astype(str).head(5)))
         if not rotulos:
             return
-        col1, col2 = st.columns([3, 1], vertical_alignment="bottom")
-        ref = col1.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key=f"cashback_cliente_{tipo}")
-        if col2.button("Gerar cashback", type="primary", key=f"cashback_gerar_{tipo}", disabled=_modo_previa()):
+        ref = st.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key=f"cashback_cliente_{tipo}")
+        if st.button("Gerar cashback", type="primary", key=f"cashback_gerar_{tipo}", disabled=_modo_previa()):
             linha = com_valor.loc[com_valor["chave"] == ref].iloc[0]
             params = {"valor": float(linha["cashback_previsto"]), "validade_horas": _validade_dias(linha) * 24, "substituir_anteriores": True}
             try:
@@ -1101,9 +1099,8 @@ def _form_gerar_cupom_individual(tipo, lista, preset, solicitante, titulo, legen
     with st.container(border=True):
         st.markdown(f"**{titulo}**")
         st.caption(legenda)
-        col1, col2 = st.columns([3, 1], vertical_alignment="bottom")
-        ref = col1.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key=f"cupom_cliente_{tipo}")
-        if col2.button("Gerar cupom", type="primary", key=f"cupom_gerar_{tipo}", disabled=_modo_previa()):
+        ref = st.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key=f"cupom_cliente_{tipo}")
+        if st.button("Gerar cupom", type="primary", key=f"cupom_gerar_{tipo}", disabled=_modo_previa()):
             try:
                 with st.spinner("Criando o cupom na Nuvemshop..."):
                     cup.gerar_cupom(preset, ref, solicitante=solicitante)
