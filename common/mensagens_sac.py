@@ -279,8 +279,57 @@ def _valor_cashback_txt(v) -> str:
     return _valor(v)
 
 
-def msg_jornada_w1(nome, itens, link, valor, minimo, expira_em, pct_do_pedido=None) -> str:
-    """W1 — check-in depois da entrega (entrega + 2 dias), com o cashback pessoal (uso único, validade REAL de `expira_em`, mínimo `minimo`).
+def _ate(expira_em) -> str:
+    return expira_em.strftime("%d/%m")
+
+
+def msg_jornada_w0(nome, nr_pedido, link, valor, minimo, expira_em, substitui_anterior=False, prazo_maior=False, mostrar_pct=True) -> str:
+    """W0 — cashback logo depois do pagamento (até 1 dia útil), ANTES de o pedido chegar. Texto aprovado pelo Hugo em 14/10/2026.
+    `nr_pedido`: 1 = boas-vindas; 2 e 3 = agradece por voltar. `substitui_anterior`: avisa que o novo cashback substitui um anterior não usado
+    (a function o cancela). `prazo_maior` (3º pedido): "Como você já é de casa, deixei um prazo maior". O percentual só aparece aqui, como
+    "10% do seu pedido" (`mostrar_pct`: só quando o valor é mesmo 10% do pedido, sem piso nem teto: ver cup.cashback_e_10_por_cento)."""
+    pct = " (10% do seu pedido)" if mostrar_pct else ""
+    abertura = ("Obrigado pela sua compra! Separei um presente para você: um " if int(nr_pedido) <= 1 else
+                "Que bom ver você por aqui de novo, obrigado pela confiança! Separei um novo ")
+    oferta = (f"{abertura}{_neg('cashback de ' + _valor_cashback_txt(valor))}{pct} para a sua próxima compra, que fica "
+              f"{_neg('descontado automaticamente no carrinho')}. É só abrir este link:\n{link}")
+    substitui = "Ele substitui o cashback anterior, que deixou de valer." if substitui_anterior else ""
+    condicoes = (f"{'Como você já é de casa, deixei um prazo maior: vale' if prazo_maior else 'Vale'} {_neg('até ' + _ate(expira_em))}, é de uso único "
+                 f"e vale em compras a partir de {_neg(_valor_curto(minimo))}. {'Você' if int(nr_pedido) > 1 else 'Na compra, você'} ainda leva um "
+                 f"{_neg('sticker exclusivo')} e tem {_neg('3% de desconto pagando no Pix')}.")
+    fecho = ("Salve este número para falar com a gente quando quiser. Quando o seu pedido chegar, eu volto aqui para saber se deu tudo certo."
+             if int(nr_pedido) <= 1 else "Quando o pedido chegar, passo aqui para saber se deu tudo certo.")
+    return _fecha(_p(_oi(nome), oferta, substitui, condicoes, fecho))
+
+
+def msg_jornada_w1(nome, itens, link, valor, minimo, expira_em, com_lembrete=True) -> str:
+    """W1 — check-in depois da entrega confirmada (entrega + 2 dias; janela até entrega + 9), com LEMBRETE do cashback e da validade (o cashback já foi
+    enviado na W0). `itens` = nomes dos produtos do pedido do MAIOR para o menor valor (ver `trecho_itens`). `com_lembrete=False` (4º pedido em diante,
+    sem cupom): só o check-in. Texto aprovado pelo Hugo em 14/10/2026."""
+    lembrete = ""
+    if com_lembrete:
+        lembrete = (f"E só para lembrar: o seu {_neg('cashback de ' + _valor_cashback_txt(valor))} continua valendo {_neg('até ' + _ate(expira_em))}, "
+                    f"{_neg('descontado automaticamente no carrinho')}, em compras a partir de {_neg(_valor_curto(minimo))}. "
+                    f"É só abrir o mesmo link:\n{link}")
+    return _fecha(_p(
+        _oi(nome),
+        "Vi que o seu pedido chegou e queria saber se deu tudo certo com a entrega. " + _pergunta_itens(trecho_itens(itens)),
+        "Se tiver qualquer dúvida de prática ou de segurança, me chama por aqui. E se puder, a sua avaliação ajuda muito a gente.",
+        lembrete))
+
+
+def msg_jornada_w2_final(nome, link, valor, minimo, expira_em, dias) -> str:
+    """Lembrete FINAL (só o 3º pedido), cerca de 7 dias antes de o cashback vencer. Texto aprovado pelo Hugo em 14/10/2026."""
+    return _fecha(_p(
+        _oi(nome),
+        f"O seu {_neg('cashback de ' + _valor_cashback_txt(valor))} vence em {_neg(str(int(dias)) + ' dias')}, no dia {_neg(_ate(expira_em))}. "
+        f"Se ainda quiser usar, ele continua {_neg('descontado automaticamente no carrinho')} por este link:\n{link}",
+        f"É de uso único e vale em compras a partir de {_neg(_valor_curto(minimo))}. Se quiser ajuda para escolher, é só me chamar."))
+
+
+def msg_jornada_w0_combinada(nome, itens, link, valor, minimo, expira_em, pct_do_pedido=None) -> str:
+    """W0 COMBINADA (só na onda de lançamento, 14/10/2026): o pedido JÁ FOI ENTREGUE quando o cashback sai; uma mensagem só, check-in + cashback (a
+    W1 antiga aprovada em 07 e 13/10/2026) e o cliente sai da lista W1. Check-in depois da entrega, com o cashback pessoal (uso único, validade REAL de `expira_em`, mínimo `minimo`).
     `itens` = nomes dos produtos do 1º pedido do MAIOR para o menor valor (ver `trecho_itens`). `pct_do_pedido` (ex.: 10): se informado, a
     mensagem diz que o cashback é esse percentual do último pedido do cliente (use só quando for verdade; ver cup.cashback_e_10_por_cento).
     Texto aprovado pelo Hugo em 07 e 13/10/2026."""
@@ -297,7 +346,7 @@ def msg_jornada_w1(nome, itens, link, valor, minimo, expira_em, pct_do_pedido=No
 
 
 def msg_jornada_w2(nome, link, valor, minimo, expira_em) -> str:
-    """W2 — lembrete de uso do MESMO cashback da W1 (W1 + 15 dias, só se ainda não comprou e o cupom vale). Um único lembrete."""
+    """W2 — lembrete de uso do MESMO cashback da W0 (W1 + 15 dias, só se ainda não comprou e o cupom vale)."""
     ate = expira_em.strftime("%d/%m")
     return _fecha(_p(
         _oi(nome),
@@ -402,8 +451,12 @@ RESULTADOS = {
     # recompra: último contato dos "Perdido" (piloto). Quem responder SAIR vira "Não retomar contato".
     # fila do fluxo de pós-venda (B065 etapa 4): tipo_tarefa = campanha da `tb_posvenda_fila`; chave = cd_contato. "Não retomar contato" vale
     # em todas as listas; "Sem resposta" e "Respondeu — quer ver produtos" da W1 liberam o lembrete (W2).
+    # jornada por PEDIDO (14/10/2026): chave = "<cd_contato>|<cd_codigo_interno>". W0 = cashback logo após o pagamento; W1 = check-in; W2 = lembrete.
+    "jornada_w0": ["Enviado — sem resposta", "Respondeu — agradeceu", "Respondeu — quer ver produtos", "WhatsApp inválido", "Não retomar contato"],
     "jornada_w1": ["Comprou com o cashback", "Respondeu — quer ver produtos", "Respondeu — sem interesse", "Sem resposta",
                    "WhatsApp inválido", "Não retomar contato"],
+    "jornada_w2_final": ["Comprou com o cashback", "Respondeu — quer ver produtos", "Respondeu — sem interesse", "Sem resposta",
+                         "WhatsApp inválido", "Não retomar contato"],
     "jornada_w2": ["Comprou com o cashback", "Respondeu — quer ver produtos", "Respondeu — sem interesse", "Sem resposta",
                    "WhatsApp inválido", "Não retomar contato"],
     "esgotamento_maturacao": ["Comprou com o crédito", "Respondeu — quer ver produtos", "Respondeu — sem interesse", "Sem resposta",

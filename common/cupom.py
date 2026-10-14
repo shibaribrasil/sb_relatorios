@@ -17,7 +17,7 @@ from common import bigquery as bq
 
 URL_FUNCTION = "https://nuvemshop-criar-cupom-jpt6bmdtaa-uk.a.run.app"
 CAMPANHA_RECUPERACAO_WHATSAPP = "cupom_recuperacao_venda_whatsapp"
-CAMPANHA_CASHBACK = "cupom_cashback_posvenda"  # cashback da jornada (W1/W2): 10% do pedido, em reais, por cliente; 30 dias (preset na function)
+CAMPANHA_CASHBACK = "cupom_cashback_posvenda"  # cashback da jornada (W0 gera; W1/W2 reaproveitam): 10% do pedido, em reais, por cliente; 45 dias (60 no 3º pedido)
 # Cashback = PCT_CASHBACK do valor líquido de produtos do pedido que gerou o contato (Hugo, 13/10/2026), com piso e teto de segurança. Os mesmos
 # limites estão no preset da function (sb_data_pipeline, `writers/nuvemshop_cupom.py`: valor_min e valor_max); a function recusa fora deles.
 PCT_CASHBACK = 0.10
@@ -82,7 +82,7 @@ def carregar_cupons(campanha: str) -> pd.DataFrame:
     try:
         df = bq.query_df(client, f"""
             SELECT referencia, codigo, valor, valido_de, expira_em
-              FROM `{TABELA}` WHERE campanha = '{campanha}'
+              FROM `{TABELA}` WHERE campanha = '{campanha}' AND cancelado_em IS NULL
             QUALIFY ROW_NUMBER() OVER (PARTITION BY referencia ORDER BY criado_em DESC) = 1
         """)
     except Exception as e:  # tabela só nasce no 1º cupom gerado
