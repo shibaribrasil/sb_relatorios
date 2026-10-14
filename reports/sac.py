@@ -537,6 +537,11 @@ def _lista_proximidade(df, hoje=None):
 
 # --- Seção genérica com check persistente ---------------------------------------------------------------------
 
+def _modo_previa() -> bool:
+    """Pré-visualização da fila do fluxo (fila desligada): mostra a fila como ficaria, SEM liberar lote, SEM gerar cupom e SEM gravar nada."""
+    return bool(st.session_state.get("previa_fila", False))
+
+
 def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=None, cards_extra=None):
     """`itens` já vem com uma coluna `chave` (str). `colunas` = dict nome exibido → coluna em `itens`, NA ORDEM de exibição;
     as colunas editáveis entram com as chaves JA_TRATEI, RESOLUCAO e OBS_SAC (valor None) onde devem aparecer. "Resolução" = opções
@@ -570,9 +575,10 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
     chaves = base["chave"].to_numpy()  # fora da tabela exibida — usada só para gravar a mudança na chave certa
     # o editor guarda as trocas na tela; só vão para o BigQuery no botão "Salvar alterações" (versão na key = zera o editor após salvar)
     versao = st.session_state.get(f"versao_{tipo_tarefa}", 0)
+    somente_leitura = _modo_previa() and tipo_tarefa in CAMPANHAS_FILA  # pré-visualização: nada é gravado
     editado = st.data_editor(
         tabela, hide_index=True, use_container_width=True, key=f"editor_{tipo_tarefa}_{versao}",
-        disabled=[c for c in tabela.columns if c not in EDITAVEIS],
+        disabled=True if somente_leitura else [c for c in tabela.columns if c not in EDITAVEIS],
         column_config={
             **(column_config or {}),
             RESOLUCAO: st.column_config.SelectboxColumn(options=opcoes, width="medium", required=False,
@@ -592,7 +598,7 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
     n_mudou = int(mudou.sum())
     col_botao, col_aviso = st.columns([1, 4], vertical_alignment="center")
     salvar = col_botao.button(f"Salvar alterações ({n_mudou})" if n_mudou else "Salvar alterações",
-                              type="primary", disabled=not n_mudou, key=f"salvar_{tipo_tarefa}")
+                              type="primary", disabled=(not n_mudou) or somente_leitura, key=f"salvar_{tipo_tarefa}")
     if n_mudou:
         col_aviso.caption("Alterações ainda não salvas — só valem depois de clicar em Salvar. "
                           "Mudar o filtro \"Mostrar também os já tratados\" antes de salvar descarta as trocas.")
@@ -797,17 +803,26 @@ def completar_lote_fila() -> int:
     return novos
 
 
+def _sql_corte_esgotamento() -> str:
+    """Subconsulta de uma linha: quantos do esgotamento cabem hoje na meta (meta - jornada na fila). Usada só na pré-visualização."""
+    return (f"(SELECT GREATEST(0, CAST(MAX(qt_meta_diaria) AS INT64) - COUNTIF(STARTS_WITH(ds_campanha, 'jornada'))) AS n FROM `{TAB_FILA}`)")
+
+
 @st.cache_data(ttl=120)
-def carregar_backlog_esgotamento(limite: int = 30):
+def carregar_backlog_esgotamento(limite: int = 30, previa: bool = False):
     """Clientes do esgotamento que ainda NÃO estão na lista de hoje (backlog), na ordem de prioridade; `total` = quantos existem no backlog."""
     client = bq.get_client()
     az = f"{bq.PROJECT}.dbt_dw_az"
+    if previa:  # quem ficaria DEPOIS da lista do dia (a lista do dia é a prévia do lote)
+        filtro = f"STARTS_WITH(f.ds_campanha, 'esgotamento') AND f.nr_posicao_esgotamento > (SELECT n FROM {_sql_corte_esgotamento()})"
+    else:
+        filtro = (f"f.fg_ao_vivo AND STARTS_WITH(f.ds_campanha, 'esgotamento') AND NOT EXISTS (SELECT 1 FROM `{TAB_LOTE_FILA}` l "
+                  "WHERE l.ds_campanha = f.ds_campanha AND l.cd_contato = f.ds_chave)")
     return bq.query_df(client, f"""
         SELECT f.ds_chave AS chave, f.ds_campanha, c.nm_contato AS nm_cliente, f.ds_estado_ciclo, f.ds_faixa_valor, f.qt_pedido,
                c.dt_ult_pedido AS dt_ultima_compra, f.nr_posicao_esgotamento, COUNT(*) OVER () AS total
           FROM `{TAB_FILA}` f JOIN `{az}.tb_cliente` c ON CAST(c.cd_contato AS STRING) = f.ds_chave
-         WHERE f.fg_ao_vivo AND STARTS_WITH(f.ds_campanha, 'esgotamento')
-           AND NOT EXISTS (SELECT 1 FROM `{TAB_LOTE_FILA}` l WHERE l.ds_campanha = f.ds_campanha AND l.cd_contato = f.ds_chave)
+         WHERE {filtro}
          ORDER BY f.nr_posicao_esgotamento LIMIT {int(limite)}
     """)
 
@@ -840,7 +855,7 @@ def _completar_lote_fila_seguro():
 
 
 @st.cache_data(ttl=300)
-def carregar_lote_fila():
+def carregar_lote_fila(previa: bool = False):
     """Itens já liberados da fila do fluxo (`posvenda_fila_lote`) com os dados do cliente e do PEDIDO (a jornada é por pedido: chave = '<cd_contato>|<pedido>').
     Marcas do estado atual: `fg_nao_retomar` ("Não retomar contato" em QUALQUER lista do SAC, por e-mail; a marcação desta própria lista não conta),
     `fg_comprou_depois` (jornada: há pedido mais novo que o do item; esgotamento: pedido desde a liberação), `fg_comprou_com_cupom` (pedido com o código do
@@ -849,6 +864,11 @@ def carregar_lote_fila():
     client = bq.get_client()
     az = f"{bq.PROJECT}.dbt_dw_az"
     cupons = ", ".join(f"'{c}'" for c in sorted(set(CUPOM_DA_CAMPANHA.values())))
+    # PRÉVIA (fila desligada): o "lote" é a própria fila do dbt (jornada inteira + esgotamento até a meta menos a jornada); nada é gravado
+    lote_cte = (f"""lote AS (SELECT CURRENT_DATE('{FUSO}') AS dt_lote, f.ds_campanha, f.ds_chave AS cd_contato, CURRENT_TIMESTAMP() AS dt_criacao
+                       FROM `{TAB_FILA}` f CROSS JOIN {_sql_corte_esgotamento()} c
+                      WHERE STARTS_WITH(f.ds_campanha, 'jornada') OR f.nr_posicao_esgotamento <= c.n)""" if previa
+                else f"lote AS (SELECT * FROM `{TAB_LOTE_FILA}`)")
     df = bq.query_df(client, f"""
         WITH tarefa AS (
           SELECT tipo_tarefa, chave, ds_resultado, fg_feito, dt_atualizacao
@@ -866,9 +886,9 @@ def carregar_lote_fila():
           SELECT cd_codigo_interno, ARRAY_AGG(nm_produto ORDER BY vl_item DESC LIMIT 1)[OFFSET(0)] AS nm_produto,
                  STRING_AGG(nm_produto, '||' ORDER BY vl_item DESC) AS itens_pedido, SUM(vl_item) AS vl_pedido_base
             FROM itens GROUP BY cd_codigo_interno
-        ), base AS (
+        ), {lote_cte}, base AS (
           SELECT l.*, SPLIT(l.cd_contato, '|')[OFFSET(0)] AS cd_contato_txt, SPLIT(l.cd_contato, '|')[SAFE_OFFSET(1)] AS cd_pedido
-            FROM `{TAB_LOTE_FILA}` l
+            FROM lote l
         )
         SELECT b.ds_campanha, b.cd_contato AS chave, b.dt_lote, b.dt_criacao, c.nm_contato AS nm_cliente, LOWER(c.ds_email) AS email,
                c.nr_telefone, c.dt_ult_pedido AS dt_ultima_compra, c.vl_total_pedido AS vl_total_gasto, c.qt_pedido AS qt_pedidos,
@@ -899,10 +919,10 @@ def carregar_lote_fila():
     return df
 
 
-def carregar_lote_fila_seguro():
+def carregar_lote_fila_seguro(previa: bool = False):
     """A fila do fluxo não deve derrubar o resto da página do SAC se a carga falhar (nem enquanto a tabela ainda não tem lote)."""
     try:
-        return carregar_lote_fila()
+        return carregar_lote_fila(previa)
     except Exception as e:
         st.warning(f"Não consegui montar a fila de pós-venda (fluxo completo) agora: {e}")
         return None
@@ -950,7 +970,7 @@ def _texto_jornada(tipo, r, c, link, agora):
     return msg.msg_jornada_w2(r["nm_cliente"], link, c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])
 
 
-def _lista_fila(df, tipo, cupons, feitos, agora=None):
+def _lista_fila(df, tipo, cupons, feitos, agora=None, previa=False):
     """Itens da campanha prontos para a tabela: cupom (se já gerado) e link do WhatsApp (só com cupom ainda válido)."""
     agora = agora or _agora()
     el = elegivel_fila(df, tipo, feitos)
@@ -964,6 +984,23 @@ def _lista_fila(df, tipo, cupons, feitos, agora=None):
     for _, r in el.iterrows():
         sem_fone = _sem_whatsapp(r, "nr_telefone", "email")
         atraso = "W0 atrasada (passou de 1 dia útil)" if tipo == "jornada_w0" and bool(r.get("fg_atrasada")) else ""
+        if r["chave"] not in mapa.index and previa:
+            # PRÉVIA: cupom de mentira só para mostrar a mensagem (o código não existe na loja)
+            valor_f = r["cashback_previsto"] if tipo.startswith("jornada") else 20.0
+            if pd.isna(valor_f):
+                cupom_txt.append("— (prévia: sem valor de pedido)"); whatsapp.append(None); obs.append(sem_fone)
+                continue
+            c = {"codigo": "PREVIA", "valor": float(valor_f), "expira_em": agora + pd.Timedelta(days=_validade_dias(r) if tipo.startswith("jornada") else 21)}
+            cupom_txt.append("— (gerar abaixo · prévia)")
+            link = cup.link_cupom(c["codigo"])
+            if tipo.startswith("jornada"):
+                texto = _texto_jornada(tipo, r, c, link, agora)
+            elif tipo == "esgotamento_maturacao":
+                texto = msg.msg_esgotamento_maturacao(r["nm_cliente"], link, c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])
+            else:
+                texto = msg.msg_esgotamento_dormente(r["nm_cliente"], link, c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])
+            whatsapp.append(msg.link_whatsapp(r["nr_telefone"], texto)); obs.append(" · ".join(t for t in (atraso, sem_fone) if t))
+            continue
         if r["chave"] not in mapa.index:
             if tipo == "jornada_w0":
                 cupom_txt.append("— (gerar abaixo)")
@@ -1018,7 +1055,7 @@ def _form_gerar_cashback_individual(tipo, lista):
             return
         col1, col2 = st.columns([3, 1], vertical_alignment="bottom")
         ref = col1.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key=f"cashback_cliente_{tipo}")
-        if col2.button("Gerar cashback", type="primary", key=f"cashback_gerar_{tipo}"):
+        if col2.button("Gerar cashback", type="primary", key=f"cashback_gerar_{tipo}", disabled=_modo_previa()):
             linha = com_valor.loc[com_valor["chave"] == ref].iloc[0]
             params = {"valor": float(linha["cashback_previsto"]), "validade_horas": _validade_dias(linha) * 24, "substituir_anteriores": True}
             try:
@@ -1048,7 +1085,7 @@ def _form_gerar_cupons_fila(tipo, lista, rotulo):
         st.caption("A validade começa quando você clicar. Gere só na hora de mandar as mensagens; depois o link \"Mensagem\" da tabela já traz o "
                    "código e o link que aplica o desconto no carrinho.")
         lote = pendentes.head(LIMITE_CUPONS_POR_CLIQUE)
-        if st.button(f"Gerar cupons pendentes ({len(lote)})", type="primary", key=f"cupom_fila_{tipo}"):
+        if st.button(f"Gerar cupons pendentes ({len(lote)})", type="primary", key=f"cupom_fila_{tipo}", disabled=_modo_previa()):
             erros = []
             with st.spinner("Criando os cupons na Nuvemshop..."):
                 for ref in lote["chave"]:
@@ -1108,7 +1145,7 @@ def _resumo_meta(listas, df_lote):
 def _secao_backlog_esgotamento():
     """Backlog do esgotamento: quem ainda não está na lista de hoje, na ordem de prioridade; o Robson puxa mais clientes se tiver tempo."""
     try:
-        bl = carregar_backlog_esgotamento()
+        bl = carregar_backlog_esgotamento(previa=_modo_previa())
     except Exception as e:
         st.warning(f"Não consegui carregar o backlog do esgotamento agora: {e}")
         return
@@ -1124,7 +1161,7 @@ def _secao_backlog_esgotamento():
         st.dataframe(prev, hide_index=True, width="stretch")
         col1, col2 = st.columns([1, 2], vertical_alignment="bottom")
         n = col1.number_input("Quantos puxar", min_value=1, max_value=min(50, total), value=min(10, total), step=1, key="backlog_n")
-        if col2.button(f"Puxar {int(n)} para a lista de hoje", key="backlog_puxar"):
+        if col2.button(f"Puxar {int(n)} para a lista de hoje", key="backlog_puxar", disabled=_modo_previa()):
             try:
                 novos = puxar_backlog_esgotamento(int(n))
             except Exception as e:
@@ -1144,7 +1181,7 @@ def _render_fila_fluxo(df_lote, aviso_link, valor):
             feitos = set(carregar_tarefas(tipo).query("fg_feito")["chave"])
         except Exception:
             feitos = set()
-        listas[tipo] = _lista_fila(df_lote, tipo, cup.carregar_cupons(CUPOM_DA_CAMPANHA[tipo]), feitos)
+        listas[tipo] = _lista_fila(df_lote, tipo, cup.carregar_cupons(CUPOM_DA_CAMPANHA[tipo]), feitos, previa=_modo_previa())
     if all(l.empty for l in listas.values()):
         return
     _faixa_grupo("fluxo", sum(_pendentes(t, l) for t, l in listas.items()))
@@ -1292,7 +1329,7 @@ def render():
     )
 
     # a W1 (jornada) substitui a lista Pós-entrega: com a fila do fluxo ao vivo, a lista antiga some (14/10/2026)
-    if lst_prox is not None and not _fila_ao_vivo_seguro():
+    if lst_prox is not None and not _fila_ao_vivo_seguro() and not _modo_previa():
         _faixa_grupo("proximidade", _pendentes(TIPO_PROXIMIDADE, lst_prox))
         _secao_checklist(
             "Pós-entrega — como foi a experiência?",
@@ -1349,7 +1386,13 @@ def render():
     # Fila do fluxo completo (jornada + esgotamento em maturação e dormente), independente do piloto dos Perdido acima. Só libera lote com a
     # fila ligada na planilha de controle (`fila_ao_vivo` = 1); ligada ou não, mostra o que já foi liberado.
     _completar_lote_fila_seguro()
-    _render_fila_fluxo(carregar_lote_fila_seguro(), aviso_link, valor)
+    if not _fila_ao_vivo_seguro():
+        st.toggle("Pré-visualizar a fila do pós-venda (a fila está desligada)", value=False, key="previa_fila",
+                  help="Mostra W0, W1, W2 e esgotamento como ficariam hoje. Somente leitura: nada é liberado para o Robson, nenhum cupom é gerado e nada é gravado.")
+        if _modo_previa():
+            st.warning("PRÉ-VISUALIZAÇÃO: a fila está desligada. O que aparece abaixo é o que seria liberado hoje; os cupons e links de mensagem são de "
+                       "mentira (código PREVIA) e nenhum botão grava nada.")
+    _render_fila_fluxo(carregar_lote_fila_seguro(previa=_modo_previa()), aviso_link, valor)
 
     if fr:
         detalhe_atualizacao(fr)
