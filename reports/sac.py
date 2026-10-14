@@ -1237,6 +1237,14 @@ def render():
     if fr:
         alerta_atraso(fr)
 
+    # a chave da prévia fica no TOPO da página (é a primeira coisa que se procura)
+    if not _fila_ao_vivo_seguro():
+        st.toggle("Pré-visualizar a fila do pós-venda (a fila está desligada)", value=False, key="previa_fila",
+                  help="Mostra W0, W1, W2 e esgotamento como ficariam hoje. Somente leitura: nada é liberado para o Robson, nenhum cupom é gerado e nada é gravado.")
+        if _modo_previa():
+            st.warning("PRÉ-VISUALIZAÇÃO: a fila está desligada. O que aparece abaixo é o que seria liberado hoje; os cupons e links de mensagem são de "
+                       "mentira (código PREVIA) e nenhum botão grava nada.")
+
     with st.spinner("Carregando dados..."):
         try:
             logi = carregar_logistica()
@@ -1386,12 +1394,6 @@ def render():
     # Fila do fluxo completo (jornada + esgotamento em maturação e dormente), independente do piloto dos Perdido acima. Só libera lote com a
     # fila ligada na planilha de controle (`fila_ao_vivo` = 1); ligada ou não, mostra o que já foi liberado.
     _completar_lote_fila_seguro()
-    if not _fila_ao_vivo_seguro():
-        st.toggle("Pré-visualizar a fila do pós-venda (a fila está desligada)", value=False, key="previa_fila",
-                  help="Mostra W0, W1, W2 e esgotamento como ficariam hoje. Somente leitura: nada é liberado para o Robson, nenhum cupom é gerado e nada é gravado.")
-        if _modo_previa():
-            st.warning("PRÉ-VISUALIZAÇÃO: a fila está desligada. O que aparece abaixo é o que seria liberado hoje; os cupons e links de mensagem são de "
-                       "mentira (código PREVIA) e nenhum botão grava nada.")
     _render_fila_fluxo(carregar_lote_fila_seguro(previa=_modo_previa()), aviso_link, valor)
 
     if fr:
