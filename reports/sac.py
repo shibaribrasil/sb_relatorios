@@ -544,15 +544,39 @@ def _modo_previa() -> bool:
     return bool(st.session_state.get("previa_fila", False))
 
 
+def _grupo_do_tipo(tipo_tarefa):
+    if tipo_tarefa in (TIPO_CARRINHO, TIPO_CANCELADO, TIPO_RECONTATO):
+        return "recuperacao"
+    if tipo_tarefa == TIPO_ENTREGA_PROBLEMA:
+        return "problemas"
+    if tipo_tarefa == TIPO_PROXIMIDADE:
+        return "proximidade"
+    if tipo_tarefa == TIPO_RECOMPRA:
+        return "recompra"
+    if str(tipo_tarefa).startswith("jornada"):
+        return "fluxo"
+    if str(tipo_tarefa).startswith("esgotamento"):
+        return "esgotamento"
+    return None
+
+
+def _titulo_secao(titulo, tipo_tarefa):
+    """Título da subseção (W0, W1, Carrinhos...): grande e com a barra na cor do grupo, para o operador achar a lista de relance."""
+    g = _grupo_do_tipo(tipo_tarefa)
+    cor = GRUPOS[g][2] if g else "#0F172A"
+    st.html(f'<div style="margin:26px 0 12px 0;padding:6px 0 6px 14px;border-left:8px solid {cor};font-size:26px;font-weight:800;'
+            f'line-height:1.2;color:#0F172A">{titulo}</div>')
+
+
 def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=None, cards_extra=None):
     """`itens` já vem com uma coluna `chave` (str). `colunas` = dict nome exibido → coluna em `itens`, NA ORDEM de exibição;
     as colunas editáveis entram com as chaves JA_TRATEI, RESOLUCAO e OBS_SAC (valor None) onde devem aparecer. "Resolução" = opções
     de msg.RESULTADOS[tipo_tarefa] (gravada em sac_tarefas.ds_resultado); "Observação SAC" = texto livre (ds_observacao, a atual
     sobrescreve a anterior). As trocas ficam na tela e o botão "Salvar alterações" grava o estado das linhas alteradas
     no BigQuery (+ histórico) e reexecuta. `column_config` (por nome exibido) formata as demais colunas."""
-    section_title(titulo)
+    _titulo_secao(titulo, tipo_tarefa)
     if itens.empty:
-        note(nota + " Nenhum item na lista agora — nada pendente.")
+        note("Nada pendente.")
         return
     tarefas = carregar_tarefas(tipo_tarefa).set_index("chave")
     feito_atual = itens["chave"].map(lambda c: bool(tarefas.loc[c, "fg_feito"]) if c in tarefas.index else False)
@@ -571,7 +595,7 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
     if not mostrar_feitos:
         base = base[~base[JA_TRATEI]]
     if base.empty:
-        note("Tudo tratado por aqui. Ative \"Mostrar também os já tratados\" para conferir ou mudar uma resolução.")
+        note("Tudo tratado. Ative \"Mostrar também os já tratados\" para rever.")
         return
     tabela = pd.DataFrame({nome: base[nome if nome in EDITAVEIS else coluna].values for nome, coluna in colunas.items()})
     chaves = base["chave"].to_numpy()  # fora da tabela exibida — usada só para gravar a mudança na chave certa
@@ -602,8 +626,7 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
     salvar = col_botao.button(f"Salvar alterações ({n_mudou})" if n_mudou else "Salvar alterações",
                               type="primary", disabled=(not n_mudou) or somente_leitura, key=f"salvar_{tipo_tarefa}")
     if n_mudou:
-        col_aviso.caption("Alterações ainda não salvas — só valem depois de clicar em Salvar. "
-                          "Mudar o filtro \"Mostrar também os já tratados\" antes de salvar descarta as trocas.")
+        col_aviso.caption("Alterações não salvas: clique em Salvar.")
     if salvar:
         with st.spinner("Salvando..."):
             salvar_tarefas(tipo_tarefa, [
@@ -619,10 +642,10 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
 GRUPOS = {  # visual por grupo de listas: cor da faixa, fundo suave e propósito (uma linha)
     "recuperacao": ("Recuperação de venda", "Trazer de volta quem quase comprou", "#0284C7", "#E0F2FE"),
     "problemas": ("Problemas", "Resolver antes que vire reclamação", "#D97706", "#FEF3C7"),
-    "proximidade": ("Proximidade", "Cuidar de quem já é cliente — relacionamento, sem venda", "#16A34A", "#DCFCE7"),
-    "recompra": ("Recompra (piloto)", "Convidar para voltar quem já comprou, com um crédito pessoal", "#7C3AED", "#EDE9FE"),
-    "fluxo": ("Pós-venda", "Cashback do cliente novo, em ordem de prazo: W0, W1, W2 e lembrete final (mensagens obrigatórias)", "#0F766E", "#CCFBF1"),
-    "esgotamento": ("Esgotamento da base", "Quem comprou antes e sumiu: crédito pessoal de retorno, os mais prioritários primeiro", "#BE185D", "#FCE7F3"),
+    "proximidade": ("Proximidade", "Relacionamento depois da entrega, sem venda", "#16A34A", "#DCFCE7"),
+    "recompra": ("Recompra (piloto)", "Convidar para voltar quem já comprou", "#7C3AED", "#EDE9FE"),
+    "fluxo": ("Pós-venda", "Mensagens obrigatórias, em ordem de prazo", "#0F766E", "#CCFBF1"),
+    "esgotamento": ("Esgotamento da base", "Quem comprou antes e sumiu: 10 por vez", "#BE185D", "#FCE7F3"),
 }
 
 
@@ -689,8 +712,8 @@ def _form_gerar_cupom(recontato):
         return
     rotulos = {r["referencia"]: f"{r['nm_cliente']} — {r['origem_txt']} — {brl(r['vl_total'])}" for _, r in sem_cupom.iterrows()}
     with st.container(border=True):
-        st.markdown("**Gerar cupom SEGUNDACHANCE (20% · uso único · 48 horas)**")
-        st.caption("O prazo de 48h começa quando você clicar. Gere só na hora de mandar a mensagem; depois o link \"Mensagem\" da tabela já traz o código.")
+        st.markdown("**Gerar cupom SEGUNDACHANCE (20% · 48 horas)**")
+        st.caption("Um cliente por vez, na hora de mandar a mensagem. O prazo começa no clique.")
         col1, col2 = st.columns([3, 1], vertical_alignment="bottom")
         ref = col1.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key="cupom_cliente")
         if col2.button("Gerar cupom", type="primary", key="cupom_gerar"):
@@ -1047,11 +1070,8 @@ def _form_gerar_cashback_individual(tipo, lista):
                            f"cashback {brl(r['cashback_previsto'])} — {_validade_dias(r)} dias"
                for _, r in com_valor.iterrows()}
     with st.container(border=True):
-        st.markdown(f"**Gerar o cashback de um cliente ({int(cup.PCT_CASHBACK * 100)}% do pedido · uso único · 45 dias (60 no 3º pedido) · mínimo {brl(cup.MIN_COMPRA_RETORNO)})**")
-        st.caption(f"O valor é {int(cup.PCT_CASHBACK * 100)}% do valor dos produtos do pedido que gerou este contato (mínimo {brl(cup.CASHBACK_MINIMO)}, "
-                   f"máximo {brl(cup.CASHBACK_MAXIMO)}). Gere **um cliente por vez, na hora de mandar a mensagem**: a validade começa no clique e o link "
-                   "\"Mensagem\" da tabela passa a trazer o valor e o código daquele cliente. Se o cliente tinha um cashback anterior sem uso, o novo o substitui "
-                   "(a mensagem avisa).")
+        st.markdown("**Gerar cashback**")
+        st.caption("Um cliente por vez, na hora de mandar a mensagem. A validade começa no clique.")
         if not sem_valor.empty:
             st.warning("Sem valor de pedido para calcular o cashback (não gere): " + ", ".join(sem_valor["nm_cliente"].astype(str).head(5)))
         if not rotulos:
@@ -1107,34 +1127,17 @@ def _form_gerar_cupons_fila(tipo, lista, rotulo):
         ultima = r["dt_ultima_compra"].strftime("%d/%m/%Y") if pd.notna(r.get("dt_ultima_compra")) else "—"
         return f"{r['nm_cliente']} — faixa {r['ds_faixa_valor']} — {r['pedidos_txt']} pedido(s) — última compra {ultima}"
     _form_gerar_cupom_individual(
-        tipo, lista, CUPOM_DA_CAMPANHA[tipo], f"sac_{tipo}",
-        f"Gerar o {rotulo} de um cliente ({brl(20)} · uso único · 21 dias · mínimo {brl(cup.MIN_COMPRA_RETORNO)})",
-        "Gere **um cliente por vez, na hora de mandar a mensagem**: a validade começa no clique e o link \"Mensagem\" da tabela passa a trazer o código e o "
-        "link que aplica o crédito no carrinho.", rotulo_cliente)
+        tipo, lista, CUPOM_DA_CAMPANHA[tipo], f"sac_{tipo}", f"Gerar {rotulo} ({brl(20)} · 21 dias)",
+        "Um cliente por vez, na hora de mandar a mensagem. A validade começa no clique.", rotulo_cliente)
 
 
-SECOES_FILA = {  # campanha -> (título da seção, nome do cupom no botão, nota de operação)
-    "jornada_w0": ("W0 — cashback logo depois do pagamento", "cashback",
-                   "Cliente que acabou de pagar o pedido (1º, 2º ou 3º): envie o <b>cashback pessoal de 10% do valor do pedido</b> em <b>até 1 dia útil</b>, "
-                   "<b>antes de o pedido chegar</b>. O cashback é gerado <b>um cliente por vez</b>, abaixo da tabela, na hora de mandar a mensagem. "
-                   "Atrasada = passou de 1 dia útil (continua aqui até ser atendida; a W1 só entra depois da W0). Na onda de lançamento, quem já recebeu o pedido "
-                   "ganha <b>uma mensagem só</b> (check-in + cashback) e não entra na W1. <b>Não há limite diário</b>."),
-    "jornada_w1": ("W1 — check-in depois da entrega", "cashback",
-                   "Pedido <b>entregue</b> (entrega confirmada) há 2 dias, cujo cashback já foi enviado na W0: conversa sobre a chegada, pedido de avaliação e "
-                   "<b>lembrete do cashback e da validade</b> (do 4º pedido em diante a mensagem não traz cashback). O link \"Mensagem\" traz o cupom da W0. "
-                   "<b>Não há limite diário</b>. Se o cliente não for contatado até 7 dias depois, o item sai da lista."),
-    "jornada_w2": ("W2 — lembrete do cashback", "cashback",
-                   "Lembrete <b>único</b> do mesmo cashback, 15 dias depois da W1, só para quem <b>ainda não comprou</b> e tem o cupom válido. "
-                   "O link \"Mensagem\" traz o código da W0."),
-    "jornada_w2_final": ("W2 — lembrete final (3º pedido)", "cashback",
-                         "Só para o <b>3º pedido</b>: um lembrete a mais, cerca de 7 dias antes de o cashback (60 dias) vencer."),
-    "esgotamento_maturacao": ("Esgotamento — em maturação (31 a 90 dias)", "crédito de retorno",
-                              "Base que já existia antes da jornada: <b>1 toque</b> com crédito pessoal para quem comprou entre 31 e 90 dias atrás. "
-                              "A lista mostra <b>10 por vez</b> (contando o que ficou de ontem); terminou? Use <b>Puxar mais</b>: entram sempre os casos mais "
-                              "prioritários (3 pedidos ou mais primeiro)."),
-    "esgotamento_dormente": ("Esgotamento — dormente (91 a 365 dias)", "crédito de retorno",
-                             "Base que já existia antes da jornada: <b>1 toque</b> com crédito pessoal para quem comprou entre 91 e 365 dias atrás. "
-                             "Entra depois da lista de maturação; o botão <b>Puxar mais</b> traz os próximos mais prioritários."),
+SECOES_FILA = {  # campanha -> (título da seção, nome do cupom no botão, nota de uma frase; o procedimento está em "Como operar o SAC")
+    "jornada_w0": ("W0 — cashback logo depois do pagamento", "cashback", "Cashback de 10% do pedido em até 1 dia útil, antes de o pedido chegar."),
+    "jornada_w1": ("W1 — check-in depois da entrega", "cashback", "Pedido entregue há 2 dias: check-in e lembrete do cashback."),
+    "jornada_w2": ("W2 — lembrete do cashback", "cashback", "Lembrete do cashback, 15 dias depois da W1."),
+    "jornada_w2_final": ("W2 — lembrete final (3º pedido)", "cashback", "Lembrete perto do vencimento do cashback."),
+    "esgotamento_maturacao": ("Esgotamento — em maturação (31 a 90 dias)", "crédito de retorno", "Quem comprou entre 31 e 90 dias atrás. 10 por vez."),
+    "esgotamento_dormente": ("Esgotamento — dormente (91 a 365 dias)", "crédito de retorno", "Quem comprou entre 91 e 365 dias atrás. 10 por vez."),
 }
 
 
@@ -1180,8 +1183,7 @@ def _resumo_meta(listas, df_lote):
         c2.metric("Obrigatórias pendentes", obrig, help="W0 + W1 + W2 (têm prazo; vêm primeiro)")
         c3.metric("Esgotamento pendente", esg, help="Mostra 10 por vez; o botão Puxar mais traz os próximos")
         c4.metric("Falta para a meta", max(0, meta - obrig - esg))
-        st.caption(f"W0 {pend.get('jornada_w0', 0)} · W1 {pend.get('jornada_w1', 0)} · W2 {pend.get('jornada_w2', 0) + pend.get('jornada_w2_final', 0)}. "
-                   "Terminou antes do tempo? Puxe mais clientes no grupo Esgotamento, no fim da página.")
+        st.caption(f"W0 {pend.get('jornada_w0', 0)} · W1 {pend.get('jornada_w1', 0)} · W2 {pend.get('jornada_w2', 0) + pend.get('jornada_w2_final', 0)}")
 
 
 def _secao_fila(tipo, lista, aviso_link, valor):
@@ -1199,16 +1201,13 @@ def _secao_fila(tipo, lista, aviso_link, valor):
         column_config={"WhatsApp": COL_WHATSAPP, "Total gasto": valor, "Pedido": valor, "Cashback (10%)": valor, "Obs.": COL_OBS,
                        "Última compra": st.column_config.DateColumn(format="DD/MM/YYYY"), "Pago em": st.column_config.DateColumn(format="DD/MM/YYYY"),
                        "Entregue em": st.column_config.DateColumn(format="DD/MM/YYYY")},
-        nota=nota + " Quem responder <b>SAIR</b> ou pedir para não receber: marque a Resolução \"Não retomar contato\" (vale para todas as listas). "
-                    "Quem comprar de novo sai sozinho da lista. <b>Pare e avise o Hugo</b> se mais de 3% pedirem para sair, se o link não funcionar ou se "
-                    "o WhatsApp mostrar qualquer aviso. " + aviso_link,
+        nota=nota,
     )
     _form_gerar_cupons_fila(tipo, lista, rotulo_cupom)
 
 
 def _aviso_fila_desligada():
-    st.info("A fila do pós-venda está desligada. Ligue **Pré-visualizar a fila do pós-venda**, no topo da página, para ver como ficaria hoje "
-            "(somente leitura).")
+    st.info("Fila desligada. Ligue a pré-visualização, no topo da página, para ver como ficaria.")
 
 
 def _render_posvenda(listas, df_lote, aviso_link, valor):
@@ -1237,8 +1236,7 @@ def _secao_puxar_esgotamento():
     total = int(bl["total"].iloc[0]) if bl is not None and not bl.empty else 0
     with st.container(border=True):
         st.markdown(f"**Mais clientes do esgotamento — {total} esperando**")
-        st.caption(f"A lista mostra {ESGOTAMENTO_PADRAO} por vez. Terminou? Puxe mais {PASSO_PUXAR}: entram sempre os casos mais prioritários "
-                   "(3 pedidos ou mais, depois maturação, faixa de valor e margem), com o mesmo cupom e a mesma mensagem dos demais.")
+        st.caption(f"Entram sempre os mais prioritários, {PASSO_PUXAR} por clique.")
         if total == 0:
             st.caption("Ninguém esperando agora.")
             return
@@ -1284,21 +1282,21 @@ def render():
       <div>
         <div class="report-brand">shibari brasil · camada diária</div>
         <div class="report-title">SAC <span>—</span> Tarefas do Dia</div>
-        <div class="report-meta">Lista de trabalho com mensagem pronta e check de execução — o que fica marcado (ou sem marcar) permanece entre as atualizações de dados</div>
+        <div class="report-meta">Listas de trabalho do dia, com mensagem pronta</div>
       </div>
       {badge_atualizacao(fr) if fr else ""}
     </div>
     """)
     if fr:
         alerta_atraso(fr)
+    st.html('<div style="margin:0 0 12px 0;font-size:15px;color:#475569">Trabalhe de cima para baixo: cada grupo tem uma cor e uma ordem de prazo. '
+            '<a href="https://app.notion.com/p/3ea3ab3afc02810e8bf4ddc20b6a10c9" target="_blank" style="font-weight:700;color:#0F766E">Como operar o SAC (procedimento no Notion)</a></div>')
 
     # a chave da prévia fica no TOPO da página (é a primeira coisa que se procura)
     if not _fila_ao_vivo_seguro():
-        st.toggle("Pré-visualizar a fila do pós-venda (a fila está desligada)", value=False, key="previa_fila",
-                  help="Mostra W0, W1, W2 e esgotamento como ficariam hoje. Somente leitura: nada é liberado para o Robson, nenhum cupom é gerado e nada é gravado.")
+        st.toggle("Pré-visualizar a fila do pós-venda (fila desligada)", value=False, key="previa_fila")
         if _modo_previa():
-            st.warning("PRÉ-VISUALIZAÇÃO: a fila está desligada. O que aparece abaixo é o que seria liberado hoje; os cupons e links de mensagem são de "
-                       "mentira (código PREVIA) e nenhum botão grava nada.")
+            st.warning("PRÉ-VISUALIZAÇÃO: nada é gravado; cupons e links de mensagem são de teste.")
 
     with st.spinner("Carregando dados..."):
         try:
@@ -1338,11 +1336,7 @@ def render():
             },
             column_config={"WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS},
             cards_extra=lambda pend: [card("Valor em carrinhos pendentes", brl(pend["vl_total_carrinho"].sum()), "soma dos carrinhos sem check")],
-            nota=f"Carrinhos da Nuvemshop dos últimos {JANELA_CARRINHO} dias que não viraram pedido (o mesmo e-mail não comprou depois), sem "
-                 "contatos de teste e com valor acima de zero. Do mais recente para o mais antigo. Mensagens iguais às da antiga rotina de "
-                 "recuperação: uma para quem já é cliente, outra para cliente novo, as duas com o link que reabre o carrinho preenchido. "
-                 "Mesmo telefone em dois carrinhos = uma mensagem só (ver Obs.). A lista atualiza de hora em hora (extração da Nuvemshop + "
-                 "dbt); quando o cliente compra, o carrinho sai sozinho. " + aviso_link,
+            nota='Carrinhos dos últimos 15 dias que não viraram pedido.',
         )
 
         _secao_checklist(
@@ -1356,12 +1350,7 @@ def render():
                 "WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS,
                 "Cancelado em": st.column_config.DateColumn(format="DD/MM/YYYY"),
             },
-            nota=f"Pedidos da Nuvemshop cancelados nos últimos {JANELA_CANCELADO} dias. O tipo vem do motivo gravado na Nuvemshop: "
-                 "<b>automático</b> = o sistema cancelou porque o pagamento não foi concluído (Pix/boleto expirado) — é a melhor chance de "
-                 "recuperar a venda; os demais (\"cliente desistiu\", \"sem estoque\", \"outro motivo\") foram cancelados <b>por alguém "
-                 "da loja</b>, que escolheu o motivo — o cliente não cancela sozinho pela loja virtual. \"Pago, sem estorno\" = cancelado "
-                 "com o pagamento ainda como pago na Nuvemshop: confira se o dinheiro foi devolvido antes de chamar (aparece no topo, com o "
-                 "aviso em Obs.). Sai da lista quem já voltou a comprar (exceto estorno a conferir). " + aviso_link,
+            nota='Cancelados nos últimos 30 dias. Em "Pago, sem estorno", confira o estorno antes de chamar.',
         )
 
         _secao_checklist(
@@ -1376,12 +1365,7 @@ def render():
                 "WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS,
                 "1º contato em": st.column_config.DateColumn(format="DD/MM/YYYY"),
             },
-            nota=f"Última tentativa de vender para quem o SAC já contatou (carrinho abandonado ou pedido cancelado). Entra aqui quem teve o "
-                 f"1º contato marcado como tratado há <b>{DIAS_RECONTATO} dias ou mais</b>, <b>não comprou</b> desde então e cuja Resolução do "
-                 "1º contato não impede nova abordagem (fora: \"Não retomar contato\", \"WhatsApp inválido\", \"Comprou\", \"Refez o "
-                 "pedido\", estorno). Cada cliente aparece uma vez. O cupom <b>SEGUNDACHANCE</b> (20%, uso único, <b>48 horas</b>) só é "
-                 "criado quando você clica em \"Gerar cupom\" abaixo — a validade começa nesse momento, então gere na hora de enviar. "
-                 "Depois de gerado, o link \"Mensagem\" já leva o código e o prazo. " + aviso_link,
+            nota='Última tentativa, 7 dias depois do primeiro contato. Cupom de 48 horas, gerado um cliente por vez.',
         )
         _form_gerar_cupom(recontato)
 
@@ -1395,11 +1379,7 @@ def render():
                 "Dias sem evento": "qt_dias_sem_movimento", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None,
             },
             column_config={"WhatsApp": COL_WHATSAPP},
-            nota="Mesmo critério do Pulso do Dia (\"Entregas em risco\"): pedido atrasado, com problema de entrega ativo (devolução/tentativa "
-                 f"falha) ou parado {DIAS_PARADO}+ dias sem nenhum evento de rastreio. A mensagem muda conforme o motivo (problema de entrega "
-                 "tem prioridade sobre atraso, que tem prioridade sobre parado). " + aviso_link + " A marcação fica salva à parte dos dados e "
-                 "não some quando a base atualizar de novo; se o pedido sair da situação de risco (por exemplo, foi entregue), ele some da "
-                 "lista, mas o registro de que você tratou continua guardado.",
+            nota='Pedido atrasado, com problema de entrega ou parado há 10+ dias sem evento.',
         )
 
     # a W1 (jornada) substitui a lista Pós-entrega: com a fila do fluxo ao vivo, a lista antiga some (14/10/2026)
@@ -1421,15 +1401,7 @@ def render():
                     "Na lista desde": st.column_config.DateColumn(format="DD/MM/YYYY"),
                     "Atendido em": st.column_config.DateColumn(format="DD/MM/YYYY"),
                 },
-                nota="Contato amistoso, sem venda e sem cupom: pergunta como foi a experiência, se o produto cumpriu o que o cliente esperava "
-                     "e se ele tem algum feedback. Entra quem fez a <b>2ª compra ou mais</b> e teve a entrega confirmada, "
-                     "a partir do dia seguinte à entrega (\"Na lista desde\"). <b>O registro não some por tempo</b>: continua aqui até você "
-                     "tratar (fim de semana e folga não fazem o contato desaparecer); ao marcar \"Já tratei\" fica registrada a data em "
-                     "\"Atendido em\" (ative \"Mostrar também os já tratados\" para ver o histórico). O mais antigo aparece primeiro. "
-                     "Cada cliente recebe esse contato <b>uma vez só</b>: se já foi contatado em outro pedido, ou tem \"Não retomar contato\" "
-                     "em qualquer lista do SAC, não aparece. Entrega que atrasou leva uma mensagem que reconhece o atraso (ver Obs.). "
-                     "O que o cliente responder vai na <b>Observação SAC</b>; se for reclamação, escolha \"Reclamação — abrir tratativa\". "
-                     + aviso_link,
+                nota='Contato amistoso depois da entrega da 2ª compra em diante.',
             )
 
     _render_esgotamento(listas, aviso_link, valor)

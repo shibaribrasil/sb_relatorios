@@ -238,3 +238,9 @@ Fonte das regras: `planejamento/Fluxo de Pós-Venda — Especificação.md` (se�
 - **Esgotamento:** 10 por padrão (`ESGOTAMENTO_PADRAO`; conta o que ficou pendente de ontem) e botão **Puxar mais 10** (`PASSO_PUXAR`), que traz sempre os mais prioritários (3 pedidos ou mais, maturação, faixa, margem). Substitui o cálculo "35 − obrigatórias"; o cartão da meta (35) fica como referência.
 - **Cupom sempre individual:** toda seção que gera cupom tem o formulário "escolha o cliente e gere o cupom" (W0: cashback de 10% do pedido; esgotamento: crédito de R$ 20; recontato: SEGUNDACHANCE). Acabou o botão "Gerar cupons pendentes" em lote.
 - **Piloto dos Perdidos fora desta página** (Hugo, 14/10/2026): o código (`carregar_recompra_piloto`, `_sql_completar_lote`, `_form_gerar_cupons_recompra`...) continua no arquivo para uma página própria; a página deixou de liberar o lote diário dos Perdidos.
+
+## Página enxuta e subtítulos em destaque (14/10/2026, pedido do Hugo)
+
+- **Sem procedimento na tela:** o procedimento vive no Notion ("SOP — Filas de contato do SAC (página SAC)", em Processos e Docs, espelho da Base de Conhecimento 10.1.3). Abaixo do título há **uma frase de orientação** e o **link do SOP**; cada seção traz **uma frase** (`SECOES_FILA` e as notas das listas de recuperação e problemas), e os formulários de cupom, o cartão da meta e os avisos têm uma linha cada.
+- **Subtítulos das seções** (W0, Carrinhos, Esgotamento...): 26 px, peso 800, com barra de 8 px na cor do grupo (`_titulo_secao`, `_grupo_do_tipo`).
+- Mudou o procedimento? Atualizar o Notion e a Base de Conhecimento juntos; não pôr texto de procedimento de volta na página.
