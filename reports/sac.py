@@ -43,6 +43,8 @@ CUPOM_DA_CAMPANHA = {  # campanha da fila -> preset de cupom da function (W1, W2
     "esgotamento_maturacao": cup.CAMPANHA_RETORNO_MATURACAO, "esgotamento_dormente": cup.CAMPANHA_RETORNO_DORMENTE,
 }
 META_DIARIA_PADRAO = 35  # contatos por dia do pós-venda (Hugo, 14/10/2026); o valor vigente vem do dbt (`qt_meta_diaria`, planilha de controle)
+ESGOTAMENTO_PADRAO = 10  # clientes do esgotamento mostrados por padrão; o botão "Puxar mais" traz mais PASSO_PUXAR, sempre os mais prioritários (Hugo, 14/10/2026)
+PASSO_PUXAR = 10
 VALIDADE_CASHBACK_DIAS = 45  # padrão quando a fila não informa (`qt_validade_cashback_dias`); 3º pedido: 60
 LIMITE_CUPONS_POR_CLIQUE = 30  # trava de segurança do botão "Gerar cupons pendentes"
 LOTE_DIARIO_RECOMPRA = 20  # clientes sem contato registrado que a lista mantém (Hugo, 07/10/2026): o lote do dia completa até este número
@@ -619,7 +621,8 @@ GRUPOS = {  # visual por grupo de listas: cor da faixa, fundo suave e propósito
     "problemas": ("Problemas", "Resolver antes que vire reclamação", "#D97706", "#FEF3C7"),
     "proximidade": ("Proximidade", "Cuidar de quem já é cliente — relacionamento, sem venda", "#16A34A", "#DCFCE7"),
     "recompra": ("Recompra (piloto)", "Convidar para voltar quem já comprou, com um crédito pessoal", "#7C3AED", "#EDE9FE"),
-    "fluxo": ("Pós-venda — fluxo completo", "Jornada do cliente novo e esgotamento da base: cashback e crédito pessoal por WhatsApp", "#0F766E", "#CCFBF1"),
+    "fluxo": ("Pós-venda", "Cashback do cliente novo, em ordem de prazo: W0, W1, W2 e lembrete final (mensagens obrigatórias)", "#0F766E", "#CCFBF1"),
+    "esgotamento": ("Esgotamento da base", "Quem comprou antes e sumiu: crédito pessoal de retorno, os mais prioritários primeiro", "#BE185D", "#FCE7F3"),
 }
 
 
@@ -641,7 +644,7 @@ def _faixa_grupo(grupo, pendentes):
             f'{pendentes} pendente{"s" if pendentes != 1 else ""}</span>') if pendentes else (
             '<span style="color:#475569;font-size:12px;font-weight:600">nada pendente</span>')
     st.html(f'''
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:38px 0 6px 0;
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 10px 0;
                 padding:12px 18px;background:{fundo};border-left:6px solid {cor};border-radius:8px">
       <div>
         <div style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:{cor}">{titulo}</div>
@@ -750,9 +753,9 @@ def _sql_liberar_jornada() -> str:
 
 
 def _sql_completar_esgotamento() -> str:
-    """INSERT: completa o lote do ESGOTAMENTO até a META DIÁRIA (35, Hugo, 14/10/2026) menos a jornada pendente (W0 + W1 + W2 na fila agora) menos o
-    esgotamento que ficou pendente de dias anteriores: esgotamento do dia = meta - jornada - esgotamento pendente. Ordem: `nr_posicao_esgotamento` (3 pedidos
-    ou mais primeiro). No máximo UMA vez por dia (se já entrou esgotamento hoje, não faz nada); quem sobrar de tempo usa o backlog."""
+    """INSERT: completa o lote do ESGOTAMENTO até ESGOTAMENTO_PADRAO (10) clientes pendentes, contando o que ficou pendente de dias anteriores (Hugo,
+    14/10/2026: padrão de 10 + botão "Puxar mais", que traz sempre os mais prioritários). Ordem: `nr_posicao_esgotamento` (3 pedidos ou mais primeiro).
+    No máximo UMA vez por dia (se já entrou esgotamento hoje, não faz nada)."""
     return f"""
         INSERT INTO `{TAB_LOTE_FILA}` (dt_lote, ds_campanha, cd_contato, dt_criacao)
         WITH tarefa AS (
@@ -774,7 +777,7 @@ def _sql_completar_esgotamento() -> str:
                             WHERE l.ds_campanha = f.ds_campanha AND l.cd_contato = f.ds_chave)
            AND NOT EXISTS (SELECT 1 FROM `{TAB_LOTE_FILA}` l2
                             WHERE STARTS_WITH(l2.ds_campanha, 'esgotamento') AND l2.dt_lote = CURRENT_DATE('{FUSO}'))
-        QUALIFY ROW_NUMBER() OVER (ORDER BY f.nr_posicao_esgotamento) <= GREATEST(0, COALESCE(meta.m, 0) - j.n - p.n)
+        QUALIFY ROW_NUMBER() OVER (ORDER BY f.nr_posicao_esgotamento) <= GREATEST(0, {ESGOTAMENTO_PADRAO} - p.n)
     """
 
 
@@ -804,8 +807,8 @@ def completar_lote_fila() -> int:
 
 
 def _sql_corte_esgotamento() -> str:
-    """Subconsulta de uma linha: quantos do esgotamento cabem hoje na meta (meta - jornada na fila). Usada só na pré-visualização."""
-    return (f"(SELECT GREATEST(0, CAST(MAX(qt_meta_diaria) AS INT64) - COUNTIF(STARTS_WITH(ds_campanha, 'jornada'))) AS n FROM `{TAB_FILA}`)")
+    """Subconsulta de uma linha: quantos do esgotamento aparecem por padrão (ESGOTAMENTO_PADRAO). Usada só na pré-visualização."""
+    return f"(SELECT {ESGOTAMENTO_PADRAO} AS n)"
 
 
 @st.cache_data(ttl=120)
@@ -1068,35 +1071,46 @@ def _form_gerar_cashback_individual(tipo, lista):
                 st.rerun()
 
 
+def _form_gerar_cupom_individual(tipo, lista, preset, solicitante, titulo, legenda, rotulo_cliente):
+    """Geração de cupom INDIVIDUAL (regra do Hugo, 14/10/2026, vale para toda lista que gera cupom): o Robson escolhe o cliente e gera o cupom dele.
+    Aparece só para quem ainda não tem cupom (a célula do cupom começa com "— (gerar"). Repetir o clique não duplica (1 cupom por cliente e preset)."""
+    pendentes = lista[lista["cupom"].str.startswith("— (gerar")] if not lista.empty else lista
+    if pendentes.empty:
+        return
+    rotulos = {r["chave"]: rotulo_cliente(r) for _, r in pendentes.iterrows()}
+    with st.container(border=True):
+        st.markdown(f"**{titulo}**")
+        st.caption(legenda)
+        col1, col2 = st.columns([3, 1], vertical_alignment="bottom")
+        ref = col1.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key=f"cupom_cliente_{tipo}")
+        if col2.button("Gerar cupom", type="primary", key=f"cupom_gerar_{tipo}", disabled=_modo_previa()):
+            try:
+                with st.spinner("Criando o cupom na Nuvemshop..."):
+                    cup.gerar_cupom(preset, ref, solicitante=solicitante)
+            except Exception as e:
+                st.error(str(e))
+            else:
+                carregar_lote_fila.clear()
+                st.rerun()
+
+
 def _form_gerar_cupons_fila(tipo, lista, rotulo):
-    """Gera o cupom pessoal (function) dos itens da campanha que ainda não têm. A validade conta a partir do clique: gere na hora de mandar as
-    mensagens. Repetir o clique não duplica (1 cupom por cliente e preset). A W0 gera UM cliente por vez (`_form_gerar_cashback_individual`); W1, W2 e o
-    lembrete final não geram: reaproveitam o cashback da W0."""
+    """Gera o cupom pessoal (function) de UM cliente por vez, na hora de mandar a mensagem: a validade conta a partir do clique. A W0 usa
+    `_form_gerar_cashback_individual` (valor variável); o esgotamento usa o formulário genérico; W1, W2 e o lembrete final não geram: reaproveitam o
+    cashback da W0."""
     if tipo == "jornada_w0":
         _form_gerar_cashback_individual(tipo, lista)
         return
     if tipo.startswith("jornada"):
         return
-    pendentes = lista[lista["cupom"].str.startswith("— (gerar")] if not lista.empty else lista
-    if pendentes.empty:
-        return
-    with st.container(border=True):
-        st.markdown(f"**Gerar o {rotulo} ({brl(20)} · uso único · mínimo {brl(cup.MIN_COMPRA_RETORNO)})**")
-        st.caption("A validade começa quando você clicar. Gere só na hora de mandar as mensagens; depois o link \"Mensagem\" da tabela já traz o "
-                   "código e o link que aplica o desconto no carrinho.")
-        lote = pendentes.head(LIMITE_CUPONS_POR_CLIQUE)
-        if st.button(f"Gerar cupons pendentes ({len(lote)})", type="primary", key=f"cupom_fila_{tipo}", disabled=_modo_previa()):
-            erros = []
-            with st.spinner("Criando os cupons na Nuvemshop..."):
-                for ref in lote["chave"]:
-                    try:
-                        cup.gerar_cupom(CUPOM_DA_CAMPANHA[tipo], ref, solicitante=f"sac_{tipo}")
-                    except Exception as e:
-                        erros.append(f"{ref}: {e}")
-            if erros:
-                st.error("Alguns cupons não foram criados:\n\n" + "\n".join(erros[:5]))
-            else:
-                st.rerun()
+    def rotulo_cliente(r):
+        ultima = r["dt_ultima_compra"].strftime("%d/%m/%Y") if pd.notna(r.get("dt_ultima_compra")) else "—"
+        return f"{r['nm_cliente']} — faixa {r['ds_faixa_valor']} — {r['pedidos_txt']} pedido(s) — última compra {ultima}"
+    _form_gerar_cupom_individual(
+        tipo, lista, CUPOM_DA_CAMPANHA[tipo], f"sac_{tipo}",
+        f"Gerar o {rotulo} de um cliente ({brl(20)} · uso único · 21 dias · mínimo {brl(cup.MIN_COMPRA_RETORNO)})",
+        "Gere **um cliente por vez, na hora de mandar a mensagem**: a validade começa no clique e o link \"Mensagem\" da tabela passa a trazer o código e o "
+        "link que aplica o crédito no carrinho.", rotulo_cliente)
 
 
 SECOES_FILA = {  # campanha -> (título da seção, nome do cupom no botão, nota de operação)
@@ -1116,19 +1130,47 @@ SECOES_FILA = {  # campanha -> (título da seção, nome do cupom no botão, not
                          "Só para o <b>3º pedido</b>: um lembrete a mais, cerca de 7 dias antes de o cashback (60 dias) vencer."),
     "esgotamento_maturacao": ("Esgotamento — em maturação (31 a 90 dias)", "crédito de retorno",
                               "Base que já existia antes da jornada: <b>1 toque</b> com crédito pessoal para quem comprou entre 31 e 90 dias atrás. "
-                              "Entra para completar a <b>meta do dia</b> (35 contatos menos W0, W1 e W2), contando o que ficou de ontem. Quem tem 3 pedidos ou "
-                              "mais vem na frente."),
+                              "A lista mostra <b>10 por vez</b> (contando o que ficou de ontem); terminou? Use <b>Puxar mais</b>: entram sempre os casos mais "
+                              "prioritários (3 pedidos ou mais primeiro)."),
     "esgotamento_dormente": ("Esgotamento — dormente (91 a 365 dias)", "crédito de retorno",
                              "Base que já existia antes da jornada: <b>1 toque</b> com crédito pessoal para quem comprou entre 91 e 365 dias atrás. "
-                             "Entra depois da lista de maturação, dentro da mesma meta do dia."),
+                             "Entra depois da lista de maturação; o botão <b>Puxar mais</b> traz os próximos mais prioritários."),
 }
 
 
+POSVENDA = ("jornada_w0", "jornada_w1", "jornada_w2", "jornada_w2_final")  # mensagens obrigatórias do fluxo (têm prazo)
+ESGOTAMENTO = ("esgotamento_maturacao", "esgotamento_dormente")
+
+
+def _css_grupos():
+    """Fundo translúcido na cor de cada grupo, cobrindo toda a seção (container com `key="grupo_<nome>"`): o operador associa cor a tipo de trabalho."""
+    regras = []
+    for g, (_t, _p, cor, _f) in GRUPOS.items():
+        r, gg, b = (int(cor[k:k + 2], 16) for k in (1, 3, 5))
+        regras.append(f".st-key-grupo_{g}{{background:rgba({r},{gg},{b},.07);border:1px solid rgba({r},{gg},{b},.30);"
+                      "border-radius:16px;padding:18px 22px 24px 22px;margin:26px 0 0 0}")
+    st.html("<style>" + "".join(regras) + "</style>")
+
+
+def _listas_fila(df_lote):
+    """Listas prontas (uma por campanha da fila do fluxo); vazio se ainda não há lote (fila desligada e sem prévia)."""
+    listas = {}
+    if df_lote is None or df_lote.empty:
+        return listas
+    for tipo in CAMPANHAS_FILA:
+        try:
+            feitos = set(carregar_tarefas(tipo).query("fg_feito")["chave"])
+        except Exception:
+            feitos = set()
+        listas[tipo] = _lista_fila(df_lote, tipo, cup.carregar_cupons(CUPOM_DA_CAMPANHA[tipo]), feitos, previa=_modo_previa())
+    return listas
+
+
 def _resumo_meta(listas, df_lote):
-    """Cartão da meta do dia: obrigatórias pendentes (W0, W1, W2) e esgotamento pendente contra os 35 contatos."""
+    """Cartão da meta do dia (referência): obrigatórias pendentes (W0, W1, W2) e esgotamento pendente contra os 35 contatos."""
     pend = {t: _pendentes(t, l) for t, l in listas.items()}
-    obrig = sum(pend.get(t, 0) for t in ("jornada_w0", "jornada_w1", "jornada_w2", "jornada_w2_final"))
-    esg = pend.get("esgotamento_maturacao", 0) + pend.get("esgotamento_dormente", 0)
+    obrig = sum(pend.get(t, 0) for t in POSVENDA)
+    esg = sum(pend.get(t, 0) for t in ESGOTAMENTO)
     meta = META_DIARIA_PADRAO
     if df_lote is not None and "qt_meta_diaria" in df_lote.columns and df_lote["qt_meta_diaria"].notna().any():
         meta = int(df_lote["qt_meta_diaria"].dropna().iloc[0])
@@ -1136,79 +1178,92 @@ def _resumo_meta(listas, df_lote):
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Meta do dia", meta)
         c2.metric("Obrigatórias pendentes", obrig, help="W0 + W1 + W2 (têm prazo; vêm primeiro)")
-        c3.metric("Esgotamento pendente", esg, help="Completa a meta: meta − obrigatórias − esgotamento que ficou de ontem")
+        c3.metric("Esgotamento pendente", esg, help="Mostra 10 por vez; o botão Puxar mais traz os próximos")
         c4.metric("Falta para a meta", max(0, meta - obrig - esg))
         st.caption(f"W0 {pend.get('jornada_w0', 0)} · W1 {pend.get('jornada_w1', 0)} · W2 {pend.get('jornada_w2', 0) + pend.get('jornada_w2_final', 0)}. "
-                   "Terminou antes do tempo? Use o backlog do esgotamento, no fim desta área.")
+                   "Terminou antes do tempo? Puxe mais clientes no grupo Esgotamento, no fim da página.")
 
 
-def _secao_backlog_esgotamento():
-    """Backlog do esgotamento: quem ainda não está na lista de hoje, na ordem de prioridade; o Robson puxa mais clientes se tiver tempo."""
+def _secao_fila(tipo, lista, aviso_link, valor):
+    """Uma seção da fila do fluxo: tabela com cupom, mensagem, Já tratei, Resolução e Observação SAC, e o formulário de geração de cupom individual."""
+    titulo, rotulo_cupom, nota = SECOES_FILA[tipo]
+    colunas = {"Cliente": "nm_cliente", "Faixa": "ds_faixa_valor", "Última compra": "dt_ultima_compra", "Pedidos": "pedidos_txt",
+               "Total gasto": "vl_total_gasto", "Cupom": "cupom", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None,
+               "Obs.": "obs"}
+    if tipo.startswith("jornada"):
+        colunas = {"Cliente": "nm_cliente", "Pedido nº": "pedido_nr_txt", "Pago em": "dt_pedido", "Produto": "nm_produto", "Pedido": "vl_pedido_base",
+                   "Cashback (10%)": "cashback_previsto", "Entregue em": "dt_entrega",
+                   **{k: v for k, v in colunas.items() if k not in ("Cliente", "Faixa", "Última compra", "Total gasto", "Pedidos")}}
+    _secao_checklist(
+        titulo, tipo, lista, colunas=colunas,
+        column_config={"WhatsApp": COL_WHATSAPP, "Total gasto": valor, "Pedido": valor, "Cashback (10%)": valor, "Obs.": COL_OBS,
+                       "Última compra": st.column_config.DateColumn(format="DD/MM/YYYY"), "Pago em": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                       "Entregue em": st.column_config.DateColumn(format="DD/MM/YYYY")},
+        nota=nota + " Quem responder <b>SAIR</b> ou pedir para não receber: marque a Resolução \"Não retomar contato\" (vale para todas as listas). "
+                    "Quem comprar de novo sai sozinho da lista. <b>Pare e avise o Hugo</b> se mais de 3% pedirem para sair, se o link não funcionar ou se "
+                    "o WhatsApp mostrar qualquer aviso. " + aviso_link,
+    )
+    _form_gerar_cupons_fila(tipo, lista, rotulo_cupom)
+
+
+def _aviso_fila_desligada():
+    st.info("A fila do pós-venda está desligada. Ligue **Pré-visualizar a fila do pós-venda**, no topo da página, para ver como ficaria hoje "
+            "(somente leitura).")
+
+
+def _render_posvenda(listas, df_lote, aviso_link, valor):
+    """Grupo Pós-venda: W0, W1, W2 e lembrete final (mensagens obrigatórias do fluxo), com o cartão da meta do dia."""
+    pend = sum(_pendentes(t, listas[t]) for t in POSVENDA if t in listas)
+    with st.container(key="grupo_fluxo"):
+        _faixa_grupo("fluxo", pend)
+        if not listas:
+            _aviso_fila_desligada()
+            return
+        _resumo_meta(listas, df_lote)
+        if all(listas[t].empty for t in POSVENDA if t in listas):
+            st.caption("Nada pendente nas mensagens obrigatórias do pós-venda agora.")
+        for tipo in POSVENDA:
+            if tipo in listas and not listas[tipo].empty:
+                _secao_fila(tipo, listas[tipo], aviso_link, valor)
+
+
+def _secao_puxar_esgotamento():
+    """Botão "Puxar mais": traz os próximos clientes do esgotamento (sempre os mais prioritários) para a lista de hoje."""
     try:
         bl = carregar_backlog_esgotamento(previa=_modo_previa())
     except Exception as e:
-        st.warning(f"Não consegui carregar o backlog do esgotamento agora: {e}")
+        st.warning(f"Não consegui carregar a fila do esgotamento agora: {e}")
         return
-    if bl is None or bl.empty:
-        return
-    total = int(bl["total"].iloc[0])
+    total = int(bl["total"].iloc[0]) if bl is not None and not bl.empty else 0
     with st.container(border=True):
-        st.markdown(f"**Backlog do esgotamento — {total} clientes além da lista de hoje**")
-        st.caption("Sobrou tempo? Puxe mais clientes para a lista do esgotamento de hoje, na ordem de prioridade (3 pedidos ou mais primeiro, depois "
-                   "maturação, faixa de valor e margem). Eles ganham o mesmo cupom e a mesma mensagem dos demais.")
-        prev = bl.head(10).assign(ciclo=lambda d: d["ds_estado_ciclo"], pedidos=lambda d: d["qt_pedido"])[["nm_cliente", "ciclo", "ds_faixa_valor", "pedidos", "dt_ultima_compra"]]
-        prev.columns = ["Cliente", "Ciclo", "Faixa", "Pedidos", "Última compra"]
-        st.dataframe(prev, hide_index=True, width="stretch")
-        col1, col2 = st.columns([1, 2], vertical_alignment="bottom")
-        n = col1.number_input("Quantos puxar", min_value=1, max_value=min(50, total), value=min(10, total), step=1, key="backlog_n")
-        if col2.button(f"Puxar {int(n)} para a lista de hoje", key="backlog_puxar", disabled=_modo_previa()):
+        st.markdown(f"**Mais clientes do esgotamento — {total} esperando**")
+        st.caption(f"A lista mostra {ESGOTAMENTO_PADRAO} por vez. Terminou? Puxe mais {PASSO_PUXAR}: entram sempre os casos mais prioritários "
+                   "(3 pedidos ou mais, depois maturação, faixa de valor e margem), com o mesmo cupom e a mesma mensagem dos demais.")
+        if total == 0:
+            st.caption("Ninguém esperando agora.")
+            return
+        if st.button(f"Puxar mais {PASSO_PUXAR}", type="primary", key="esgotamento_puxar", disabled=_modo_previa()):
             try:
-                novos = puxar_backlog_esgotamento(int(n))
+                novos = puxar_backlog_esgotamento(PASSO_PUXAR)
             except Exception as e:
                 st.error(str(e))
             else:
-                st.success(f"{novos} clientes entraram na lista do esgotamento de hoje.")
+                st.success(f"{novos} clientes entraram na lista do esgotamento.")
                 st.rerun()
 
 
-def _render_fila_fluxo(df_lote, aviso_link, valor):
-    """Seções da fila do fluxo (uma por campanha) com o mesmo padrão do piloto: cupom, mensagem, Já tratei, Resolução e Observação SAC."""
-    if df_lote is None or df_lote.empty:
-        return
-    listas = {}
-    for tipo in CAMPANHAS_FILA:
-        try:
-            feitos = set(carregar_tarefas(tipo).query("fg_feito")["chave"])
-        except Exception:
-            feitos = set()
-        listas[tipo] = _lista_fila(df_lote, tipo, cup.carregar_cupons(CUPOM_DA_CAMPANHA[tipo]), feitos, previa=_modo_previa())
-    if all(l.empty for l in listas.values()):
-        return
-    _faixa_grupo("fluxo", sum(_pendentes(t, l) for t, l in listas.items()))
-    _resumo_meta(listas, df_lote)
-    for tipo in CAMPANHAS_FILA:
-        lista = listas[tipo]
-        if lista.empty:
-            continue
-        titulo, rotulo_cupom, nota = SECOES_FILA[tipo]
-        colunas = {"Cliente": "nm_cliente", "Faixa": "ds_faixa_valor", "Última compra": "dt_ultima_compra", "Pedidos": "pedidos_txt",
-                   "Total gasto": "vl_total_gasto", "Cupom": "cupom", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None,
-                   "Obs.": "obs"}
-        if tipo.startswith("jornada"):
-            colunas = {"Cliente": "nm_cliente", "Pedido nº": "pedido_nr_txt", "Pago em": "dt_pedido", "Produto": "nm_produto", "Pedido": "vl_pedido_base",
-                       "Cashback (10%)": "cashback_previsto", "Entregue em": "dt_entrega",
-                       **{k: v for k, v in colunas.items() if k not in ("Cliente", "Faixa", "Última compra", "Total gasto", "Pedidos")}}
-        _secao_checklist(
-            titulo, tipo, lista, colunas=colunas,
-            column_config={"WhatsApp": COL_WHATSAPP, "Total gasto": valor, "Pedido": valor, "Cashback (10%)": valor, "Obs.": COL_OBS,
-                           "Última compra": st.column_config.DateColumn(format="DD/MM/YYYY"), "Pago em": st.column_config.DateColumn(format="DD/MM/YYYY"),
-                           "Entregue em": st.column_config.DateColumn(format="DD/MM/YYYY")},
-            nota=nota + " Quem responder <b>SAIR</b> ou pedir para não receber: marque a Resolução \"Não retomar contato\" (vale para todas as listas). "
-                        "Quem comprar de novo sai sozinho da lista. <b>Pare e avise o Hugo</b> se mais de 3% pedirem para sair, se o link não funcionar ou se "
-                        "o WhatsApp mostrar qualquer aviso. " + aviso_link,
-        )
-        _form_gerar_cupons_fila(tipo, lista, rotulo_cupom)
-    _secao_backlog_esgotamento()
+def _render_esgotamento(listas, aviso_link, valor):
+    """Grupo Esgotamento da base: 10 por padrão + "Puxar mais" (sempre os mais prioritários); cupom sempre individual."""
+    pend = sum(_pendentes(t, listas[t]) for t in ESGOTAMENTO if t in listas)
+    with st.container(key="grupo_esgotamento"):
+        _faixa_grupo("esgotamento", pend)
+        if not listas:
+            _aviso_fila_desligada()
+            return
+        for tipo in ESGOTAMENTO:
+            if tipo in listas and not listas[tipo].empty:
+                _secao_fila(tipo, listas[tipo], aviso_link, valor)
+        _secao_puxar_esgotamento()
 
 
 def _fila_ao_vivo_seguro() -> bool:
@@ -1263,138 +1318,121 @@ def render():
     df_prox = carregar_proximidade_seguro()
     lst_prox = _lista_proximidade(df_prox) if df_prox is not None else None
 
-    _faixa_grupo("recuperacao", _pendentes(TIPO_CARRINHO, lst_car) + _pendentes(TIPO_CANCELADO, lst_canc) + _pendentes(TIPO_RECONTATO, recontato))
-    _secao_checklist(
-        "Carrinhos abandonados — recuperar a venda",
-        TIPO_CARRINHO, lst_car,
-        colunas={
-            "Cliente": "nm_cliente", "Valor": "vl_total_carrinho", "Já é cliente?": "cliente_antigo",
-            "Abandonado há": "abandonado_ha", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
-        },
-        column_config={"WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS},
-        cards_extra=lambda pend: [card("Valor em carrinhos pendentes", brl(pend["vl_total_carrinho"].sum()), "soma dos carrinhos sem check")],
-        nota=f"Carrinhos da Nuvemshop dos últimos {JANELA_CARRINHO} dias que não viraram pedido (o mesmo e-mail não comprou depois), sem "
-             "contatos de teste e com valor acima de zero. Do mais recente para o mais antigo. Mensagens iguais às da antiga rotina de "
-             "recuperação: uma para quem já é cliente, outra para cliente novo, as duas com o link que reabre o carrinho preenchido. "
-             "Mesmo telefone em dois carrinhos = uma mensagem só (ver Obs.). A lista atualiza de hora em hora (extração da Nuvemshop + "
-             "dbt); quando o cliente compra, o carrinho sai sozinho. " + aviso_link,
-    )
+    # O piloto dos Perdidos saiu desta página (Hugo, 14/10/2026); o código (`carregar_recompra_piloto`, `_sql_completar_lote`...) continua no arquivo
+    # para uma página própria. Ordem dos grupos: Pós-venda -> Recuperação de venda -> Problemas -> Esgotamento.
+    _completar_lote_fila_seguro()
+    df_lote = carregar_lote_fila_seguro(previa=_modo_previa())
+    listas = _listas_fila(df_lote)
+    _css_grupos()
 
-    _secao_checklist(
-        "Pedidos cancelados — entender e recuperar",
-        TIPO_CANCELADO, lst_canc,
-        colunas={
-            "Pedido": "codigo", "Cliente": "nm_cliente", "Valor": "vl_total_pedido", "Já é cliente?": "cliente_antigo",
-            "Cancelado em": "dt_cancelamento", "Tipo": "tipo", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
-        },
-        column_config={
-            "WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS,
-            "Cancelado em": st.column_config.DateColumn(format="DD/MM/YYYY"),
-        },
-        nota=f"Pedidos da Nuvemshop cancelados nos últimos {JANELA_CANCELADO} dias. O tipo vem do motivo gravado na Nuvemshop: "
-             "<b>automático</b> = o sistema cancelou porque o pagamento não foi concluído (Pix/boleto expirado) — é a melhor chance de "
-             "recuperar a venda; os demais (\"cliente desistiu\", \"sem estoque\", \"outro motivo\") foram cancelados <b>por alguém "
-             "da loja</b>, que escolheu o motivo — o cliente não cancela sozinho pela loja virtual. \"Pago, sem estorno\" = cancelado "
-             "com o pagamento ainda como pago na Nuvemshop: confira se o dinheiro foi devolvido antes de chamar (aparece no topo, com o "
-             "aviso em Obs.). Sai da lista quem já voltou a comprar (exceto estorno a conferir). " + aviso_link,
-    )
+    _render_posvenda(listas, df_lote, aviso_link, valor)
 
-    _secao_checklist(
-        "Recontato com cupom — última tentativa",
-        TIPO_RECONTATO, recontato,
-        colunas={
-            "Cliente": "nm_cliente", "Origem": "origem_txt", "Valor": "vl_total", "1º contato em": "contato_em",
-            "Resolução do 1º contato": "ds_resolucao_contato", "Cupom": "cupom", "WhatsApp": "whatsapp",
-            JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
-        },
-        column_config={
-            "WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS,
-            "1º contato em": st.column_config.DateColumn(format="DD/MM/YYYY"),
-        },
-        nota=f"Última tentativa de vender para quem o SAC já contatou (carrinho abandonado ou pedido cancelado). Entra aqui quem teve o "
-             f"1º contato marcado como tratado há <b>{DIAS_RECONTATO} dias ou mais</b>, <b>não comprou</b> desde então e cuja Resolução do "
-             "1º contato não impede nova abordagem (fora: \"Não retomar contato\", \"WhatsApp inválido\", \"Comprou\", \"Refez o "
-             "pedido\", estorno). Cada cliente aparece uma vez. O cupom <b>SEGUNDACHANCE</b> (20%, uso único, <b>48 horas</b>) só é "
-             "criado quando você clica em \"Gerar cupom\" abaixo — a validade começa nesse momento, então gere na hora de enviar. "
-             "Depois de gerado, o link \"Mensagem\" já leva o código e o prazo. " + aviso_link,
-    )
-    _form_gerar_cupom(recontato)
-
-    _faixa_grupo("problemas", _pendentes(TIPO_ENTREGA_PROBLEMA, lst_ent))
-    _secao_checklist(
-        "Entregas com problema — falar com o cliente",
-        TIPO_ENTREGA_PROBLEMA, lst_ent,
-        colunas={
-            "Pedido": "codigo", "Cliente": "nm_cliente", "Motivo": "motivo", "Rastreio": "cd_rastreio",
-            "Dias sem evento": "qt_dias_sem_movimento", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None,
-        },
-        column_config={"WhatsApp": COL_WHATSAPP},
-        nota="Mesmo critério do Pulso do Dia (\"Entregas em risco\"): pedido atrasado, com problema de entrega ativo (devolução/tentativa "
-             f"falha) ou parado {DIAS_PARADO}+ dias sem nenhum evento de rastreio. A mensagem muda conforme o motivo (problema de entrega "
-             "tem prioridade sobre atraso, que tem prioridade sobre parado). " + aviso_link + " A marcação fica salva à parte dos dados e "
-             "não some quando a base atualizar de novo; se o pedido sair da situação de risco (por exemplo, foi entregue), ele some da "
-             "lista, mas o registro de que você tratou continua guardado.",
-    )
-
-    # a W1 (jornada) substitui a lista Pós-entrega: com a fila do fluxo ao vivo, a lista antiga some (14/10/2026)
-    if lst_prox is not None and not _fila_ao_vivo_seguro() and not _modo_previa():
-        _faixa_grupo("proximidade", _pendentes(TIPO_PROXIMIDADE, lst_prox))
+    with st.container(key="grupo_recuperacao"):
+        _faixa_grupo("recuperacao", _pendentes(TIPO_CARRINHO, lst_car) + _pendentes(TIPO_CANCELADO, lst_canc) + _pendentes(TIPO_RECONTATO, recontato))
         _secao_checklist(
-            "Pós-entrega — como foi a experiência?",
-            TIPO_PROXIMIDADE, lst_prox,
+            "Carrinhos abandonados — recuperar a venda",
+            TIPO_CARRINHO, lst_car,
             colunas={
-                "Cliente": "nm_cliente", "Pedido": "codigo", "Compra": "compra_txt", "Produto": "nm_produto_principal",
-                "Valor": "vl_total_pedido", "Entregue em": "dt_entrega", "Na lista desde": "na_lista_desde", "Atendido em": "atendido_em",
-                "WhatsApp": "whatsapp",
+                "Cliente": "nm_cliente", "Valor": "vl_total_carrinho", "Já é cliente?": "cliente_antigo",
+                "Abandonado há": "abandonado_ha", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
+            },
+            column_config={"WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS},
+            cards_extra=lambda pend: [card("Valor em carrinhos pendentes", brl(pend["vl_total_carrinho"].sum()), "soma dos carrinhos sem check")],
+            nota=f"Carrinhos da Nuvemshop dos últimos {JANELA_CARRINHO} dias que não viraram pedido (o mesmo e-mail não comprou depois), sem "
+                 "contatos de teste e com valor acima de zero. Do mais recente para o mais antigo. Mensagens iguais às da antiga rotina de "
+                 "recuperação: uma para quem já é cliente, outra para cliente novo, as duas com o link que reabre o carrinho preenchido. "
+                 "Mesmo telefone em dois carrinhos = uma mensagem só (ver Obs.). A lista atualiza de hora em hora (extração da Nuvemshop + "
+                 "dbt); quando o cliente compra, o carrinho sai sozinho. " + aviso_link,
+        )
+
+        _secao_checklist(
+            "Pedidos cancelados — entender e recuperar",
+            TIPO_CANCELADO, lst_canc,
+            colunas={
+                "Pedido": "codigo", "Cliente": "nm_cliente", "Valor": "vl_total_pedido", "Já é cliente?": "cliente_antigo",
+                "Cancelado em": "dt_cancelamento", "Tipo": "tipo", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
+            },
+            column_config={
+                "WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS,
+                "Cancelado em": st.column_config.DateColumn(format="DD/MM/YYYY"),
+            },
+            nota=f"Pedidos da Nuvemshop cancelados nos últimos {JANELA_CANCELADO} dias. O tipo vem do motivo gravado na Nuvemshop: "
+                 "<b>automático</b> = o sistema cancelou porque o pagamento não foi concluído (Pix/boleto expirado) — é a melhor chance de "
+                 "recuperar a venda; os demais (\"cliente desistiu\", \"sem estoque\", \"outro motivo\") foram cancelados <b>por alguém "
+                 "da loja</b>, que escolheu o motivo — o cliente não cancela sozinho pela loja virtual. \"Pago, sem estorno\" = cancelado "
+                 "com o pagamento ainda como pago na Nuvemshop: confira se o dinheiro foi devolvido antes de chamar (aparece no topo, com o "
+                 "aviso em Obs.). Sai da lista quem já voltou a comprar (exceto estorno a conferir). " + aviso_link,
+        )
+
+        _secao_checklist(
+            "Recontato com cupom — última tentativa",
+            TIPO_RECONTATO, recontato,
+            colunas={
+                "Cliente": "nm_cliente", "Origem": "origem_txt", "Valor": "vl_total", "1º contato em": "contato_em",
+                "Resolução do 1º contato": "ds_resolucao_contato", "Cupom": "cupom", "WhatsApp": "whatsapp",
                 JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
             },
             column_config={
                 "WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS,
-                "Entregue em": st.column_config.DateColumn(format="DD/MM/YYYY"),
-                "Na lista desde": st.column_config.DateColumn(format="DD/MM/YYYY"),
-                "Atendido em": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                "1º contato em": st.column_config.DateColumn(format="DD/MM/YYYY"),
             },
-            nota="Contato amistoso, sem venda e sem cupom: pergunta como foi a experiência, se o produto cumpriu o que o cliente esperava "
-                 "e se ele tem algum feedback. Entra quem fez a <b>2ª compra ou mais</b> e teve a entrega confirmada, "
-                 "a partir do dia seguinte à entrega (\"Na lista desde\"). <b>O registro não some por tempo</b>: continua aqui até você "
-                 "tratar (fim de semana e folga não fazem o contato desaparecer); ao marcar \"Já tratei\" fica registrada a data em "
-                 "\"Atendido em\" (ative \"Mostrar também os já tratados\" para ver o histórico). O mais antigo aparece primeiro. "
-                 "Cada cliente recebe esse contato <b>uma vez só</b>: se já foi contatado em outro pedido, ou tem \"Não retomar contato\" "
-                 "em qualquer lista do SAC, não aparece. Entrega que atrasou leva uma mensagem que reconhece o atraso (ver Obs.). "
-                 "O que o cliente responder vai na <b>Observação SAC</b>; se for reclamação, escolha \"Reclamação — abrir tratativa\". "
-                 + aviso_link,
+            nota=f"Última tentativa de vender para quem o SAC já contatou (carrinho abandonado ou pedido cancelado). Entra aqui quem teve o "
+                 f"1º contato marcado como tratado há <b>{DIAS_RECONTATO} dias ou mais</b>, <b>não comprou</b> desde então e cuja Resolução do "
+                 "1º contato não impede nova abordagem (fora: \"Não retomar contato\", \"WhatsApp inválido\", \"Comprou\", \"Refez o "
+                 "pedido\", estorno). Cada cliente aparece uma vez. O cupom <b>SEGUNDACHANCE</b> (20%, uso único, <b>48 horas</b>) só é "
+                 "criado quando você clica em \"Gerar cupom\" abaixo — a validade começa nesse momento, então gere na hora de enviar. "
+                 "Depois de gerado, o link \"Mensagem\" já leva o código e o prazo. " + aviso_link,
         )
+        _form_gerar_cupom(recontato)
 
-    _completar_lote_seguro()
-    df_rec = carregar_recompra_piloto_seguro()
-    if df_rec is not None and not df_rec.empty:
-        lst_rec = _lista_recompra_piloto(df_rec, cup.carregar_cupons(cup.CAMPANHA_RETORNO_PERDIDO))
-        _faixa_grupo("recompra", _pendentes(TIPO_RECOMPRA, lst_rec))
+    with st.container(key="grupo_problemas"):
+        _faixa_grupo("problemas", _pendentes(TIPO_ENTREGA_PROBLEMA, lst_ent))
         _secao_checklist(
-            "Último contato — voltar a explorar (piloto)",
-            TIPO_RECOMPRA, lst_rec,
+            "Entregas com problema — falar com o cliente",
+            TIPO_ENTREGA_PROBLEMA, lst_ent,
             colunas={
-                "Cliente": "nm_cliente", "Última compra": "dt_ultima_compra", "Pedidos": "pedidos_txt", "Total gasto": "vl_total_gasto",
-                "Cupom": "cupom", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
+                "Pedido": "codigo", "Cliente": "nm_cliente", "Motivo": "motivo", "Rastreio": "cd_rastreio",
+                "Dias sem evento": "qt_dias_sem_movimento", "WhatsApp": "whatsapp", JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None,
             },
-            column_config={
-                "WhatsApp": COL_WHATSAPP, "Total gasto": valor, "Obs.": COL_OBS,
-                "Última compra": st.column_config.DateColumn(format="DD/MM/YYYY"),
-            },
-            nota="Piloto do Ecossistema de Pós-Venda: contato humano para quem não compra há mais de 1 ano e <b>já aceitou receber "
-                 "mensagens</b> (consentimento conferido na Nuvemshop). <b>Todo dia</b>, na 1ª abertura da página, a lista é completada até "
-                 f"<b>{LOTE_DIARIO_RECOMPRA} clientes sem contato registrado</b>: quem sobrou de ontem continua aqui e só entra a diferença. Cada cliente leva um <b>crédito de retorno pessoal</b> (uso único, 21 dias, com valor mínimo de compra): clique em "
-                 "\"Gerar cupons pendentes\" e depois use o link \"Mensagem\" de cada linha — o crédito já entra aplicado no carrinho. "
-                 "Quem responder <b>SAIR</b> ou pedir para não receber: marque a Resolução \"Não retomar contato\" (vale para todas as listas). "
-                 "Quem comprar (com o cupom ou não) sai sozinho da lista. <b>Pare e avise o Hugo</b> se mais de 3% pedirem para sair, se o "
-                 "link do crédito não funcionar ou se o WhatsApp mostrar qualquer aviso. " + aviso_link,
+            column_config={"WhatsApp": COL_WHATSAPP},
+            nota="Mesmo critério do Pulso do Dia (\"Entregas em risco\"): pedido atrasado, com problema de entrega ativo (devolução/tentativa "
+                 f"falha) ou parado {DIAS_PARADO}+ dias sem nenhum evento de rastreio. A mensagem muda conforme o motivo (problema de entrega "
+                 "tem prioridade sobre atraso, que tem prioridade sobre parado). " + aviso_link + " A marcação fica salva à parte dos dados e "
+                 "não some quando a base atualizar de novo; se o pedido sair da situação de risco (por exemplo, foi entregue), ele some da "
+                 "lista, mas o registro de que você tratou continua guardado.",
         )
-        _form_gerar_cupons_recompra(lst_rec)
 
-    # Fila do fluxo completo (jornada + esgotamento em maturação e dormente), independente do piloto dos Perdido acima. Só libera lote com a
-    # fila ligada na planilha de controle (`fila_ao_vivo` = 1); ligada ou não, mostra o que já foi liberado.
-    _completar_lote_fila_seguro()
-    _render_fila_fluxo(carregar_lote_fila_seguro(previa=_modo_previa()), aviso_link, valor)
+    # a W1 (jornada) substitui a lista Pós-entrega: com a fila do fluxo ao vivo, a lista antiga some (14/10/2026)
+    if lst_prox is not None and not _fila_ao_vivo_seguro() and not _modo_previa():
+        with st.container(key="grupo_proximidade"):
+            _faixa_grupo("proximidade", _pendentes(TIPO_PROXIMIDADE, lst_prox))
+            _secao_checklist(
+                "Pós-entrega — como foi a experiência?",
+                TIPO_PROXIMIDADE, lst_prox,
+                colunas={
+                    "Cliente": "nm_cliente", "Pedido": "codigo", "Compra": "compra_txt", "Produto": "nm_produto_principal",
+                    "Valor": "vl_total_pedido", "Entregue em": "dt_entrega", "Na lista desde": "na_lista_desde", "Atendido em": "atendido_em",
+                    "WhatsApp": "whatsapp",
+                    JA_TRATEI: None, RESOLUCAO: None, OBS_SAC: None, "Obs.": "obs",
+                },
+                column_config={
+                    "WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS,
+                    "Entregue em": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                    "Na lista desde": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                    "Atendido em": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                },
+                nota="Contato amistoso, sem venda e sem cupom: pergunta como foi a experiência, se o produto cumpriu o que o cliente esperava "
+                     "e se ele tem algum feedback. Entra quem fez a <b>2ª compra ou mais</b> e teve a entrega confirmada, "
+                     "a partir do dia seguinte à entrega (\"Na lista desde\"). <b>O registro não some por tempo</b>: continua aqui até você "
+                     "tratar (fim de semana e folga não fazem o contato desaparecer); ao marcar \"Já tratei\" fica registrada a data em "
+                     "\"Atendido em\" (ative \"Mostrar também os já tratados\" para ver o histórico). O mais antigo aparece primeiro. "
+                     "Cada cliente recebe esse contato <b>uma vez só</b>: se já foi contatado em outro pedido, ou tem \"Não retomar contato\" "
+                     "em qualquer lista do SAC, não aparece. Entrega que atrasou leva uma mensagem que reconhece o atraso (ver Obs.). "
+                     "O que o cliente responder vai na <b>Observação SAC</b>; se for reclamação, escolha \"Reclamação — abrir tratativa\". "
+                     + aviso_link,
+            )
+
+    _render_esgotamento(listas, aviso_link, valor)
 
     if fr:
         detalhe_atualizacao(fr)

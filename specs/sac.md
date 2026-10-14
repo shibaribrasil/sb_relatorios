@@ -230,3 +230,11 @@ Fonte das regras: `planejamento/Fluxo de Pós-Venda — Especificação.md` (se�
 - **Backlog do esgotamento:** seção com os próximos clientes (ordem: 3 pedidos ou mais, maturação, faixa, margem) e botão para puxar N para a lista de hoje (`_sql_puxar_backlog`, máx. 50 por clique).
 - **Lista "Pós-entrega — como foi a experiência?" (Proximidade):** some quando a fila do fluxo está ao vivo (a W1 a substitui).
 - **Cupons cancelados:** `carregar_cupons` ignora cupom com `cancelado_em`. Dependências em produção, **nesta ordem:** `ALTER TABLE raw_control.cupons_gerados` (colunas `cancelado_em` e `motivo_cancelamento`), views de contato (`sb_data_pipeline`, `views_contato_cliente.sql`), function de cupons (sb_data_pipeline#33), dbt (`tb_posvenda_fila`, `tb_posvenda_cupom_a_cancelar`) e, por último, este PR.
+
+## Reorganização da página por grupos coloridos (14/10/2026, pedido do Hugo)
+
+- **Fundo translúcido por grupo:** cada grupo de listas fica dentro de um container com `key="grupo_<nome>"` e CSS (`_css_grupos`) que pinta o bloco inteiro com a cor do grupo (7% de opacidade, borda de 30%). O operador associa cor a tipo de trabalho.
+- **Ordem e cores:** **Pós-venda** (verde-azulado: W0, W1, W2 e lembrete final, as mensagens obrigatórias do fluxo, com o cartão da meta do dia) → **Recuperação de venda** (azul: carrinhos, cancelados, recontato com cupom) → **Problemas** (âmbar: entregas) → **Esgotamento da base** (rosa). A lista Pós-entrega (Proximidade, verde) só aparece com a fila desligada e sem prévia; a W1 a substitui.
+- **Esgotamento:** 10 por padrão (`ESGOTAMENTO_PADRAO`; conta o que ficou pendente de ontem) e botão **Puxar mais 10** (`PASSO_PUXAR`), que traz sempre os mais prioritários (3 pedidos ou mais, maturação, faixa, margem). Substitui o cálculo "35 − obrigatórias"; o cartão da meta (35) fica como referência.
+- **Cupom sempre individual:** toda seção que gera cupom tem o formulário "escolha o cliente e gere o cupom" (W0: cashback de 10% do pedido; esgotamento: crédito de R$ 20; recontato: SEGUNDACHANCE). Acabou o botão "Gerar cupons pendentes" em lote.
+- **Piloto dos Perdidos fora desta página** (Hugo, 14/10/2026): o código (`carregar_recompra_piloto`, `_sql_completar_lote`, `_form_gerar_cupons_recompra`...) continua no arquivo para uma página própria; a página deixou de liberar o lote diário dos Perdidos.
