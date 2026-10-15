@@ -50,7 +50,7 @@ def test_w0_cupom_link_e_aviso_de_atraso():
     link = w0.loc["1|11", "whatsapp"]
     assert link.startswith("https://wa.me/5521999990000?text=") and "%0A%0A" in link and "CASHBACKPOSCOMPRAAB12" in link and "SAIR" in link
     assert w0.loc["5|55", "cupom"].endswith("expirado") and pd.isna(w0.loc["5|55", "whatsapp"])  # cupom vencido: sem link de mensagem
-    assert w0.loc["6|66", "cupom"].startswith("— (gerar") and "W0 atrasada" in w0.loc["6|66", "obs"]
+    assert w0.loc["6|66", "cupom"].startswith("— (a gerar") and "W0 atrasada" in w0.loc["6|66", "obs"]
     assert w0.loc["6|66", "cashback_previsto"] == 22.8 and w0.loc["1|11", "pedido_nr_txt"] == "1º"
 
 
@@ -147,7 +147,7 @@ def test_previa_mostra_mensagem_com_cupom_de_mentira_e_nao_grava():
     """Pré-visualização (fila desligada): item sem cupom ganha link de mensagem com código PREVIA e a célula do cupom continua "gerar abaixo"."""
     df = _df().assign(ds_campanha="jornada_w0")
     w0 = sac._lista_fila(df, "jornada_w0", VAZIO, feitos=set(), agora=AGORA, previa=True).set_index("chave")
-    assert w0.loc["1|11", "cupom"].startswith("— (gerar") and "prévia" in w0.loc["1|11", "cupom"]
+    assert w0.loc["1|11", "cupom"].startswith("— (a gerar") and "prévia" in w0.loc["1|11", "cupom"]
     t = unquote(w0.loc["1|11", "whatsapp"])
     assert "PREVIA" in t and "*cashback de R$ 22,80*" in t
     normal = sac._lista_fila(df, "jornada_w0", VAZIO, feitos=set(), agora=AGORA).set_index("chave")
@@ -165,3 +165,35 @@ def test_grupos_na_ordem_do_hugo_e_perdidos_fora_da_pagina():
     ordem = [src.index(x) for x in ("_render_posvenda(", 'key="grupo_recuperacao"', 'key="grupo_problemas"', "_render_esgotamento(")]
     assert ordem == sorted(ordem)
     assert "carregar_recompra_piloto_seguro" not in src and "_completar_lote_seguro()" not in src.replace("_completar_lote_fila_seguro()", "")
+
+
+def test_geracao_em_lote_gera_um_cupom_por_cliente_com_o_valor_de_cada_um(monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(sac.cup, "gerar_cupom", lambda preset, ref, solicitante="", params=None: chamadas.append((preset, ref, params)) or {})
+    monkeypatch.setattr(sac.carregar_lote_fila, "clear", lambda: None)
+    df = _df().assign(ds_campanha="jornada_w0")
+    lista = sac._lista_fila(df, "jornada_w0", VAZIO, feitos=set(), agora=AGORA, previa=True)
+    sem_cupom = lista[lista["chave"].isin(["1|11", "6|66"])]
+    gerar = sac._gerar_da_fila("jornada_w0")
+    sac._gerar_cupons_em_lote("jornada_w0", sem_cupom, gerar)
+    assert [c[1] for c in chamadas] == ["6|66", "1|11"]
+    assert all(c[0] == sac.cup.CAMPANHA_CASHBACK and c[2]["valor"] == 22.8 and c[2]["validade_horas"] == 45 * 24 and c[2]["substituir_anteriores"] for c in chamadas)
+    assert sac.st.session_state["resultado_cupons_jornada_w0"][0] == 2
+
+
+def test_geracao_em_lote_segue_apos_um_erro_e_conta_os_dois(monkeypatch):
+    def falha_no_segundo(preset, ref, solicitante="", params=None):
+        if ref == "6|66":
+            raise RuntimeError("Nuvemshop recusou")
+        return {}
+    monkeypatch.setattr(sac.cup, "gerar_cupom", falha_no_segundo)
+    monkeypatch.setattr(sac.carregar_lote_fila, "clear", lambda: None)
+    lista = sac._lista_fila(_df().assign(ds_campanha="jornada_w0"), "jornada_w0", VAZIO, feitos=set(), agora=AGORA, previa=True)
+    sac._gerar_cupons_em_lote("jornada_w0", lista[lista["chave"].isin(["1|11", "6|66"])], sac._gerar_da_fila("jornada_w0"))
+    ok, erros = sac.st.session_state["resultado_cupons_jornada_w0"]
+    assert ok == 1 and len(erros) == 1 and "Nuvemshop recusou" in erros[0]
+
+
+def test_so_w0_e_esgotamento_geram_cupom():
+    assert sac._gerar_da_fila("jornada_w0") and sac._gerar_da_fila("esgotamento_dormente") and sac._gerar_da_fila("esgotamento_maturacao")
+    assert sac._gerar_da_fila("jornada_w1") is None and sac._gerar_da_fila("jornada_w2") is None and sac._gerar_da_fila("jornada_w2_final") is None

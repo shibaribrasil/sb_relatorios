@@ -244,3 +244,9 @@ Fonte das regras: `planejamento/Fluxo de Pós-Venda — Especificação.md` (se�
 - **Sem procedimento na tela:** o procedimento vive no Notion ("SOP — Filas de contato do SAC (página SAC)", em Processos e Docs, espelho da Base de Conhecimento 10.1.3). Abaixo do título há **uma frase de orientação** e o **link do SOP**; cada seção traz **uma frase** (`SECOES_FILA` e as notas das listas de recuperação e problemas), e os formulários de cupom, o cartão da meta e os avisos têm uma linha cada.
 - **Subtítulos das seções** (W0, Carrinhos, Esgotamento...): 26 px, peso 800, com barra de 8 px na cor do grupo (`_titulo_secao`, `_grupo_do_tipo`).
 - Mudou o procedimento? Atualizar o Notion e a Base de Conhecimento juntos; não pôr texto de procedimento de volta na página.
+
+## Geração de cupom em lote por seleção (15/10/2026, proposta do Robson)
+
+- **Antes:** um cliente por vez em um seletor, e a página recarregava a cada cupom. **Agora:** coluna **Gerar cupom** na tabela (W0, esgotamento em maturação e dormente, recontato com cupom), toggle **Marcar todos sem cupom** e botão **Gerar cupons dos selecionados (N)**. Cada cliente recebe o **seu** cupom (W0: 10% do pedido dele, 45 dias, 60 no 3º pedido, substituindo o anterior não usado), mas a geração roda em sequência, com barra de progresso, e a página recarrega **uma vez** no fim, mostrando quantos foram gerados e quais falharam.
+- Só gera para quem **ainda não tem cupom**; no recontato, quem recebeu negativa na Resolução ("Sem interesse", "WhatsApp inválido", "Não retomar contato") fica de fora. Na prévia (fila desligada) o botão fica desligado. Um erro em um cliente não interrompe os demais.
+- A célula do cupom pendente passou a dizer "— (a gerar)". Acabaram os formulários com seletor de cliente (`_form_gerar_cashback_individual`, `_form_gerar_cupom_individual` e `_form_gerar_cupom`); a configuração de cada lista está em `_gerar_da_fila` (W1, W2 e lembrete final não geram: usam o cupom da W0).

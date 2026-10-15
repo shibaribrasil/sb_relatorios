@@ -58,8 +58,10 @@ JANELA_CARRINHO = 15    # dias: carrinho mais velho que isso não vale mais cont
 JANELA_CANCELADO = 30   # dias desde o cancelamento
 FUSO = "America/Sao_Paulo"
 
+GERAR = "Gerar cupom"  # coluna de marcação para a geração em lote (só nas listas que geram cupom)
 JA_TRATEI, RESOLUCAO, OBS_SAC = "Já tratei", "Resolução", "Observação SAC"  # colunas editáveis; entram em `colunas` na posição desejada
 EDITAVEIS = (JA_TRATEI, RESOLUCAO, OBS_SAC)
+EDITAVEIS_COM_GERAR = EDITAVEIS + (GERAR,)
 COL_WHATSAPP = st.column_config.LinkColumn("WhatsApp", display_text="Mensagem", width="small")
 COL_OBS = st.column_config.TextColumn("Obs.", width="large")
 
@@ -348,7 +350,7 @@ def _lista_recompra_piloto(df, cupons, agora=None):
     for _, r in el.iterrows():
         sem_fone = _sem_whatsapp(r, "nr_telefone", "email")
         if r["chave"] not in mapa.index:
-            cupom_txt.append("— (gerar abaixo)"); whatsapp.append(None); obs.append(sem_fone)
+            cupom_txt.append("— (a gerar)"); whatsapp.append(None); obs.append(sem_fone)
             continue
         c = mapa.loc[r["chave"]]
         if c["expira_em"] <= agora:
@@ -485,7 +487,7 @@ def _lista_recontato(df, cupons, agora=None):
     for _, r in el.iterrows():
         sem_fone = _sem_whatsapp(r, "nr_telefone", "ds_email_cliente")
         if r["referencia"] not in mapa.index:
-            cupom_txt.append("— (gerar abaixo)"); whatsapp.append(None); obs.append(sem_fone)
+            cupom_txt.append("— (a gerar)"); whatsapp.append(None); obs.append(sem_fone)
             continue
         c = mapa.loc[r["referencia"]]
         if c["expira_em"] <= agora:
@@ -568,12 +570,34 @@ def _titulo_secao(titulo, tipo_tarefa):
             f'line-height:1.2;color:#0F172A">{titulo}</div>')
 
 
-def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=None, cards_extra=None):
+def _gerar_cupons_em_lote(tipo_tarefa, linhas, gerar):
+    """Gera os cupons das `linhas` marcadas (DataFrame com as linhas da lista), UM cupom por cliente, na sequência, com uma barra de progresso, e
+    guarda o resultado para mostrar depois da recarga (uma recarga só no fim, não uma por cupom). `gerar` = {preset, ref_col, solicitante, params_fn}."""
+    ok, erros = 0, []
+    barra = st.progress(0.0, text="Criando os cupons na Nuvemshop...")
+    total = len(linhas)
+    for i, (_, r) in enumerate(linhas.iterrows(), start=1):
+        nome = str(r.get("nm_cliente", ""))
+        try:
+            params = gerar["params_fn"](r) if gerar.get("params_fn") else None
+            cup.gerar_cupom(gerar["preset"], str(r[gerar["ref_col"]]), solicitante=gerar["solicitante"], params=params)
+            ok += 1
+        except Exception as e:
+            erros.append(f"{nome}: {e}")
+        barra.progress(i / total, text=f"Criando os cupons na Nuvemshop... {i} de {total}")
+    barra.empty()
+    carregar_lote_fila.clear()
+    st.session_state[f"resultado_cupons_{tipo_tarefa}"] = (ok, erros)
+
+
+def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=None, cards_extra=None, gerar=None):
     """`itens` já vem com uma coluna `chave` (str). `colunas` = dict nome exibido → coluna em `itens`, NA ORDEM de exibição;
     as colunas editáveis entram com as chaves JA_TRATEI, RESOLUCAO e OBS_SAC (valor None) onde devem aparecer. "Resolução" = opções
     de msg.RESULTADOS[tipo_tarefa] (gravada em sac_tarefas.ds_resultado); "Observação SAC" = texto livre (ds_observacao, a atual
     sobrescreve a anterior). As trocas ficam na tela e o botão "Salvar alterações" grava o estado das linhas alteradas
-    no BigQuery (+ histórico) e reexecuta. `column_config` (por nome exibido) formata as demais colunas."""
+    no BigQuery (+ histórico) e reexecuta. `column_config` (por nome exibido) formata as demais colunas.
+    `gerar` (listas que geram cupom): acrescenta a coluna "Gerar cupom" e o botão "Gerar cupons dos selecionados (N)": o operador marca vários
+    clientes e gera todos de uma vez, cada um com o SEU cupom (proposta do Robson, 15/10/2026; antes era um cliente por vez e a página recarregava a cada cupom)."""
     _titulo_secao(titulo, tipo_tarefa)
     if itens.empty:
         note("Nada pendente.")
@@ -590,7 +614,17 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
         card("Já tratados", f"{concluidos}", "marcados nesta lista"),
         *(cards_extra(itens[~feito_atual.values]) if cards_extra else []),
     ])
-    mostrar_feitos = st.toggle("Mostrar também os já tratados", value=False, key=f"toggle_{tipo_tarefa}")
+    resultado_cupons = st.session_state.pop(f"resultado_cupons_{tipo_tarefa}", None)
+    if resultado_cupons:
+        ok, erros = resultado_cupons
+        if ok:
+            st.success(f"{ok} cupom(ns) gerado(s). Os links de \"Mensagem\" já trazem o código de cada cliente.")
+        if erros:
+            st.error("Não foram gerados:\n\n" + "\n".join(erros[:8]))
+    col_t1, col_t2 = st.columns([1, 1])
+    mostrar_feitos = col_t1.toggle("Mostrar também os já tratados", value=False, key=f"toggle_{tipo_tarefa}")
+    marcar_todos = bool(gerar) and col_t2.toggle("Marcar todos sem cupom", value=False, key=f"marcar_{tipo_tarefa}",
+                                                 help="Marca a coluna Gerar cupom de todos os que ainda não têm cupom. Desmarcar recarrega a tabela.")
     base = itens.assign(**{JA_TRATEI: feito_atual.values, RESOLUCAO: resultado_atual.values, OBS_SAC: obs_atual.values})
     if not mostrar_feitos:
         base = base[~base[JA_TRATEI]]
@@ -598,13 +632,16 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
         note("Tudo tratado. Ative \"Mostrar também os já tratados\" para rever.")
         return
     tabela = pd.DataFrame({nome: base[nome if nome in EDITAVEIS else coluna].values for nome, coluna in colunas.items()})
+    sem_cupom = base["cupom"].astype(str).str.startswith("— (a gerar").to_numpy() if "cupom" in base.columns else None
+    if gerar:
+        tabela.insert(0, GERAR, (sem_cupom & marcar_todos) if sem_cupom is not None else False)
     chaves = base["chave"].to_numpy()  # fora da tabela exibida — usada só para gravar a mudança na chave certa
     # o editor guarda as trocas na tela; só vão para o BigQuery no botão "Salvar alterações" (versão na key = zera o editor após salvar)
     versao = st.session_state.get(f"versao_{tipo_tarefa}", 0)
     somente_leitura = _modo_previa() and tipo_tarefa in CAMPANHAS_FILA  # pré-visualização: nada é gravado
     editado = st.data_editor(
-        tabela, hide_index=True, use_container_width=True, key=f"editor_{tipo_tarefa}_{versao}",
-        disabled=True if somente_leitura else [c for c in tabela.columns if c not in EDITAVEIS],
+        tabela, hide_index=True, use_container_width=True, key=f"editor_{tipo_tarefa}_{versao}_{int(marcar_todos)}",
+        disabled=True if somente_leitura else [c for c in tabela.columns if c not in EDITAVEIS_COM_GERAR],
         column_config={
             **(column_config or {}),
             RESOLUCAO: st.column_config.SelectboxColumn(options=opcoes, width="medium", required=False,
@@ -612,6 +649,7 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
             OBS_SAC: st.column_config.TextColumn(width="large", max_chars=500,
                                                  help="Texto livre do SAC sobre este contato. Salva junto com o resto; o texto atual sobrescreve o anterior."),
             JA_TRATEI: st.column_config.CheckboxColumn(width=90),
+            GERAR: st.column_config.CheckboxColumn(width=90, help="Marque os clientes que vão receber cupom e clique em Gerar cupons dos selecionados."),
         },
     )
     # comparação por posição (não por índice): data_editor mantém a ordem das linhas, não reordena/filtra sozinho
@@ -622,9 +660,24 @@ def _secao_checklist(titulo, tipo_tarefa, itens, colunas, nota, column_config=No
     mudou = ((editado[JA_TRATEI].to_numpy() != tabela[JA_TRATEI].to_numpy()) | (_norm(editado[RESOLUCAO]) != _norm(tabela[RESOLUCAO]))
              | (_texto(editado[OBS_SAC]) != _texto(tabela[OBS_SAC])))
     n_mudou = int(mudou.sum())
-    col_botao, col_aviso = st.columns([1, 4], vertical_alignment="center")
+    # marcados para gerar cupom: só quem ainda não tem cupom e não recebeu uma negativa na Resolução
+    sel = None
+    n_gerar = 0
+    if gerar and sem_cupom is not None:
+        negativas = set(getattr(msg, "RESOLUCOES_SEM_CUPOM", ())) if gerar.get("bloqueia_negativas") else set()
+        res_ed = editado[RESOLUCAO].tolist()
+        sel = [bool(m) and bool(sc) and (r not in negativas) and (gerar["pode_fn"](base.iloc[i]) if gerar.get("pode_fn") else True)
+               for i, (m, sc, r) in enumerate(zip(editado[GERAR].tolist(), sem_cupom.tolist(), res_ed))]
+        n_gerar = sum(sel)
+    col_botao, col_gerar, col_aviso = st.columns([1, 1.4, 3], vertical_alignment="center")
     salvar = col_botao.button(f"Salvar alterações ({n_mudou})" if n_mudou else "Salvar alterações",
                               type="primary", disabled=(not n_mudou) or somente_leitura, key=f"salvar_{tipo_tarefa}")
+    if gerar:
+        gerar_clique = col_gerar.button(f"Gerar cupons dos selecionados ({n_gerar})", disabled=(n_gerar == 0) or somente_leitura,
+                                        key=f"gerar_{tipo_tarefa}")
+        if gerar_clique:
+            _gerar_cupons_em_lote(tipo_tarefa, base.iloc[[i for i, v in enumerate(sel) if v]], gerar)
+            st.rerun()
     if n_mudou:
         col_aviso.caption("Alterações não salvas: clique em Salvar.")
     if salvar:
@@ -696,33 +749,6 @@ def carregar_recontato_seguro():
         return pd.DataFrame(columns=["tipo_tarefa", "chave", "ds_resolucao_contato", "ts_contato", "origem", "nm_cliente", "nr_telefone",
                                      "ds_email_cliente", "vl_total", "cd_pedido_loja", "ds_url_recuperacao", "fg_comprou", "fg_teste",
                                      "ds_motivo_cancelamento"])
-
-
-def _form_gerar_cupom(recontato):
-    """Gera o cupom (function) para 1 cliente da lista que ainda não tem cupom. A validade de 48h conta a partir do clique."""
-    sem_cupom = recontato[recontato["cupom"].str.startswith("—")] if not recontato.empty else recontato
-    if not sem_cupom.empty:
-        # O Robson pode registrar uma negativa na Resolução da própria repescagem ("Sem interesse", "WhatsApp inválido", "Não retomar contato")
-        # ANTES de gerar o cupom: decidiu não gerar. Depois de salvar, o cliente sai da lista de geração (a Resolução fica gravada em
-        # sac_tarefas com a chave = referência do recontato). O restante da tabela segue como está.
-        resolucao = carregar_tarefas(TIPO_RECONTATO).set_index("chave")["ds_resultado"] if not sem_cupom.empty else pd.Series(dtype=str)
-        negativa = sem_cupom["chave"].map(lambda c: resolucao.get(c) in msg.RESOLUCOES_SEM_CUPOM)
-        sem_cupom = sem_cupom[~negativa]
-    if sem_cupom.empty:
-        return
-    rotulos = {r["referencia"]: f"{r['nm_cliente']} — {r['origem_txt']} — {brl(r['vl_total'])}" for _, r in sem_cupom.iterrows()}
-    with st.container(border=True):
-        st.markdown("**Gerar cupom SEGUNDACHANCE (20% · 48 horas)**")
-        st.caption("Um cliente por vez, na hora de mandar a mensagem. O prazo começa no clique.")
-        ref = st.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key="cupom_cliente")
-        if st.button("Gerar cupom", type="primary", key="cupom_gerar"):
-            try:
-                with st.spinner("Criando o cupom na Nuvemshop..."):
-                    cup.gerar_cupom(cup.CAMPANHA_RECUPERACAO_WHATSAPP, ref)
-            except Exception as e:
-                st.error(str(e))
-            else:
-                st.rerun()
 
 
 def _form_gerar_cupons_recompra(lista):
@@ -1016,7 +1042,7 @@ def _lista_fila(df, tipo, cupons, feitos, agora=None, previa=False):
                 cupom_txt.append("— (prévia: sem valor de pedido)"); whatsapp.append(None); obs.append(sem_fone)
                 continue
             c = {"codigo": "PREVIA", "valor": float(valor_f), "expira_em": agora + pd.Timedelta(days=_validade_dias(r) if tipo.startswith("jornada") else 21)}
-            cupom_txt.append("— (gerar abaixo · prévia)")
+            cupom_txt.append("— (a gerar · prévia)")
             link = cup.link_cupom(c["codigo"])
             if tipo.startswith("jornada"):
                 texto = _texto_jornada(tipo, r, c, link, agora)
@@ -1028,11 +1054,11 @@ def _lista_fila(df, tipo, cupons, feitos, agora=None, previa=False):
             continue
         if r["chave"] not in mapa.index:
             if tipo == "jornada_w0":
-                cupom_txt.append("— (gerar abaixo)")
+                cupom_txt.append("— (a gerar)")
             elif tipo.startswith("jornada"):
                 cupom_txt.append("— (cashback da W0 não encontrado)")
             else:
-                cupom_txt.append("— (gerar abaixo)")
+                cupom_txt.append("— (a gerar)")
             whatsapp.append(None); obs.append(" · ".join(t for t in (atraso, sem_fone) if t))
             continue
         c = mapa.loc[r["chave"]]
@@ -1056,76 +1082,18 @@ def _lista_fila(df, tipo, cupons, feitos, agora=None, previa=False):
     return el
 
 
-def _form_gerar_cashback_individual(tipo, lista):
-    """W0: gera o cashback de UM cliente por vez (decisão do Hugo, 13/10/2026): o Robson escolhe o cliente, o valor (10% do pedido que gerou o contato, com piso
-    e teto) aparece antes de gerar e a mensagem sai 100% personalizada. A validade (45 dias; 60 no 3º pedido) conta a partir do clique e o cashback novo
-    cancela o anterior não usado do mesmo cliente (um cupom ativo por cliente)."""
-    pendentes = lista[lista["cupom"].str.startswith("— (gerar")] if not lista.empty else lista
-    if pendentes.empty:
-        return
-    com_valor = pendentes[pendentes["cashback_previsto"].notna()]
-    sem_valor = pendentes[pendentes["cashback_previsto"].isna()]
-    rotulos = {r["chave"]: f"{r['nm_cliente']} — {r['pedido_nr_txt']} pedido — {r['nm_produto'] or 'pedido'} — pedido {brl(r['vl_pedido_base'])} — "
-                           f"cashback {brl(r['cashback_previsto'])}"
-               for _, r in com_valor.iterrows()}
-    with st.container(border=True):
-        st.markdown("**Gerar cashback**")
-        st.caption("Um cliente por vez, na hora de mandar a mensagem. A validade começa no clique.")
-        if not sem_valor.empty:
-            st.warning("Sem valor de pedido para calcular o cashback (não gere): " + ", ".join(sem_valor["nm_cliente"].astype(str).head(5)))
-        if not rotulos:
-            return
-        ref = st.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key=f"cashback_cliente_{tipo}")
-        if st.button("Gerar cashback", type="primary", key=f"cashback_gerar_{tipo}", disabled=_modo_previa()):
-            linha = com_valor.loc[com_valor["chave"] == ref].iloc[0]
-            params = {"valor": float(linha["cashback_previsto"]), "validade_horas": _validade_dias(linha) * 24, "substituir_anteriores": True}
-            try:
-                with st.spinner("Criando o cupom na Nuvemshop..."):
-                    cup.gerar_cupom(CUPOM_DA_CAMPANHA[tipo], ref, solicitante=f"sac_{tipo}", params=params)
-            except Exception as e:
-                st.error(str(e))
-            else:
-                carregar_lote_fila.clear()
-                st.rerun()
-
-
-def _form_gerar_cupom_individual(tipo, lista, preset, solicitante, titulo, legenda, rotulo_cliente):
-    """Geração de cupom INDIVIDUAL (regra do Hugo, 14/10/2026, vale para toda lista que gera cupom): o Robson escolhe o cliente e gera o cupom dele.
-    Aparece só para quem ainda não tem cupom (a célula do cupom começa com "— (gerar"). Repetir o clique não duplica (1 cupom por cliente e preset)."""
-    pendentes = lista[lista["cupom"].str.startswith("— (gerar")] if not lista.empty else lista
-    if pendentes.empty:
-        return
-    rotulos = {r["chave"]: rotulo_cliente(r) for _, r in pendentes.iterrows()}
-    with st.container(border=True):
-        st.markdown(f"**{titulo}**")
-        st.caption(legenda)
-        ref = st.selectbox("Cliente", list(rotulos), format_func=rotulos.get, key=f"cupom_cliente_{tipo}")
-        if st.button("Gerar cupom", type="primary", key=f"cupom_gerar_{tipo}", disabled=_modo_previa()):
-            try:
-                with st.spinner("Criando o cupom na Nuvemshop..."):
-                    cup.gerar_cupom(preset, ref, solicitante=solicitante)
-            except Exception as e:
-                st.error(str(e))
-            else:
-                carregar_lote_fila.clear()
-                st.rerun()
-
-
-def _form_gerar_cupons_fila(tipo, lista, rotulo):
-    """Gera o cupom pessoal (function) de UM cliente por vez, na hora de mandar a mensagem: a validade conta a partir do clique. A W0 usa
-    `_form_gerar_cashback_individual` (valor variável); o esgotamento usa o formulário genérico; W1, W2 e o lembrete final não geram: reaproveitam o
-    cashback da W0."""
+def _gerar_da_fila(tipo):
+    """Configuração da geração de cupom em lote de cada lista da fila (None = a lista não gera cupom: W1, W2 e o lembrete final usam o cupom da W0)."""
     if tipo == "jornada_w0":
-        _form_gerar_cashback_individual(tipo, lista)
-        return
-    if tipo.startswith("jornada"):
-        return
-    def rotulo_cliente(r):
-        ultima = r["dt_ultima_compra"].strftime("%d/%m/%Y") if pd.notna(r.get("dt_ultima_compra")) else "—"
-        return f"{r['nm_cliente']} — faixa {r['ds_faixa_valor']} — {r['pedidos_txt']} pedido(s) — última compra {ultima}"
-    _form_gerar_cupom_individual(
-        tipo, lista, CUPOM_DA_CAMPANHA[tipo], f"sac_{tipo}", f"Gerar {rotulo} ({brl(20)} · 21 dias)",
-        "Um cliente por vez, na hora de mandar a mensagem. A validade começa no clique.", rotulo_cliente)
+        return {
+            "preset": CUPOM_DA_CAMPANHA[tipo], "ref_col": "chave", "solicitante": f"sac_{tipo}",
+            # cashback individual: valor = 10% do pedido deste cliente; validade 45 dias (60 no 3º pedido); o novo cancela o anterior não usado
+            "params_fn": lambda r: {"valor": float(r["cashback_previsto"]), "validade_horas": _validade_dias(r) * 24, "substituir_anteriores": True},
+            "pode_fn": lambda r: pd.notna(r.get("cashback_previsto")),
+        }
+    if tipo.startswith("esgotamento"):
+        return {"preset": CUPOM_DA_CAMPANHA[tipo], "ref_col": "chave", "solicitante": f"sac_{tipo}"}
+    return None
 
 
 SECOES_FILA = {  # campanha -> (título da seção, nome do cupom no botão, nota de uma frase; o procedimento está em "Como operar o SAC")
@@ -1198,9 +1166,8 @@ def _secao_fila(tipo, lista, aviso_link, valor):
         column_config={"WhatsApp": COL_WHATSAPP, "Total gasto": valor, "Pedido": valor, "Cashback (10%)": valor, "Obs.": COL_OBS,
                        "Última compra": st.column_config.DateColumn(format="DD/MM/YYYY"), "Pago em": st.column_config.DateColumn(format="DD/MM/YYYY"),
                        "Entregue em": st.column_config.DateColumn(format="DD/MM/YYYY")},
-        nota=nota,
+        nota=nota, gerar=_gerar_da_fila(tipo),
     )
-    _form_gerar_cupons_fila(tipo, lista, rotulo_cupom)
 
 
 def _aviso_fila_desligada():
@@ -1362,9 +1329,9 @@ def render():
                 "WhatsApp": COL_WHATSAPP, "Valor": valor, "Obs.": COL_OBS,
                 "1º contato em": st.column_config.DateColumn(format="DD/MM/YYYY"),
             },
-            nota='Última tentativa, 7 dias depois do primeiro contato. Cupom de 48 horas, gerado um cliente por vez.',
+            nota='Última tentativa, 7 dias depois do primeiro contato. Cupom de 48 horas para cada cliente marcado.',
+            gerar={"preset": cup.CAMPANHA_RECUPERACAO_WHATSAPP, "ref_col": "referencia", "solicitante": "sac_recontato", "bloqueia_negativas": True},
         )
-        _form_gerar_cupom(recontato)
 
     with st.container(key="grupo_problemas"):
         _faixa_grupo("problemas", _pendentes(TIPO_ENTREGA_PROBLEMA, lst_ent))
