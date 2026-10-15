@@ -56,6 +56,8 @@ Mudar opções: **acrescentar** é seguro; renomear/remover faz o valor antigo g
 
 Coluna **WhatsApp** (`LinkColumn`, texto "Mensagem") com `https://wa.me/<telefone>?text=<mensagem>` — abre a conversa com a mensagem **já escrita para aquela situação**; o atendente revisa e envia (nada é enviado sozinho). Textos em `common/mensagens_sac.py` (assinatura: "Robson, da Shibari Brasil" — constantes `ATENDENTE` e `LOJA`).
 
+**Padrão das mensagens (decisão do Hugo, 07/10/2026 — vale para TODA mensagem de WhatsApp a cliente, as atuais e as novas):** (1) **rodapé obrigatório** no fim: "Se preferir não receber mais mensagens, é só responder *SAIR*." (`RODAPE_SAIR`; cada `msg_*` fecha com `_fecha` e `link_whatsapp` garante o rodapé, sem duplicar; quem responde SAIR vira "Não retomar contato"); (2) **negrito do WhatsApp** (`*texto*`, `_neg`) nas partes importantes: cupom/código, vantagem oferecida (% ou crédito, sticker, Pix), prazo/validade, valor mínimo e a pergunta ou ação principal; nome e saudação sem negrito, nunca colado em link. (3) **quebra de linha**: blocos curtos separados por linha em branco (saudação, contexto, pergunta/oferta, link sozinho na linha, rodapé), nunca parágrafo corrido (`_p`; `_sem_emoji` preserva as quebras). Vale para todo registro ainda não tratado, porque o texto é gerado na hora a partir do código. A regra completa está no `CLAUDE.md` do projeto e no cabeçalho de `common/mensagens_sac.py`.
+
 **Regras de texto (decisão do Hugo, 28/09/2026 — valem para toda mensagem nova):** (1) **sem emoji** — não renderiza quando a mensagem é enviada pelo link; `link_whatsapp` ainda remove qualquer emoji que escape (`_sem_emoji`); (2) **nome da loja sempre completo, "Shibari Brasil"**, nunca só "Shibari". Telefone: só dígitos, com DDI 55. Sem telefone → link vazio e a coluna **Obs.** mostra o e-mail.
 
 ## Seção "Carrinhos abandonados — recuperar a venda"
@@ -96,7 +98,7 @@ Lista nova (tipo de tarefa `recontato_cupom`), paralela a carrinhos e cancelados
 - **Não pode ter comprado:** carrinho `fg_recuperado` / pedido `fg_recomprou` (dbt) — some sozinho quando o cliente compra.
 - **Resolução do 1º contato** não pode estar em `msg.RESOLUCOES_SEM_RECONTATO`: "Não retomar contato", "WhatsApp inválido", "Telefone inválido / sem WhatsApp", "Comprou", "Refez o pedido", "Estorno confirmado", "Estorno pendente — resolver". Resolução vazia não impede. Fora também: teste e cancelamento por fraude.
 - **1 linha por cliente** (telefone, senão e-mail): vale o contato mais recente.
-- **Cupom `SEGUNDACHANCE`** (código único `SEGUNDACHANCE`+4 caracteres; 20%, uso único, 48 horas): criado pelo botão **Gerar cupom** (Cloud Function `nuvemshop-criar-cupom`, preset `cupom_recuperacao_venda_whatsapp`) — a validade de 48h começa no clique, por isso a mensagem só sai com cupom já gerado. 1 cupom por item (referência `<tipo_tarefa>:<chave>`; repetir o clique devolve o mesmo cupom). Estado em `raw_control.cupons_gerados`. Cupom vencido: sem link, aviso em Obs. (a última tentativa já foi usada).
+- **Cupom `SEGUNDACHANCE`** (código único `SEGUNDACHANCE`+4 caracteres; 20%, uso único, 48 horas): criado pelo botão **Gerar cupom** (Cloud Function `nuvemshop-criar-cupom`, preset `cupom_recuperacao_venda_whatsapp`) — a validade de 48h começa no clique, por isso a mensagem só sai com cupom já gerado. 1 cupom por item (referência `<tipo_tarefa>:<chave>`; repetir o clique devolve o mesmo cupom). Estado em `raw_control.cupons_gerados`. Cupom vencido: sem link, aviso em Obs. (a última tentativa já foi usada). **Negativa antes de gerar (Hugo, 07/10/2026):** se o Robson registrar na Resolução da própria repescagem "Sem interesse", "WhatsApp inválido" ou "Não retomar contato" (`msg.RESOLUCOES_SEM_CUPOM`) e salvar, o cliente sai da lista "Gerar cupom" na próxima execução (a Resolução fica gravada com a chave = referência do recontato). "Vai pensar" e "Sem resposta" não cancelam a geração. A Resolução do 1º contato (carrinho/cancelado) segue como antes: "Sem interesse" e "Desistiu" continuam entrando na repescagem.
 - Mensagem: `msg.msg_recontato_cupom` (sem emoji, "Shibari Brasil", escassez de 48h com data e hora de vencimento). Resoluções do recontato: `RESULTADOS["recontato_cupom"]`.
 - A carga (`carregar_recontato`) vem de `raw_control` + `az` (mesma região); falha nela não derruba o resto da página.
 - Cliente que compra com o cupom: cruzar `cupons_gerados.codigo` com `orders.coupon_code` (medição de conversão — ainda não construída).
@@ -108,3 +110,147 @@ Lista nova (tipo de tarefa `recontato_cupom`), paralela a carrinhos e cancelados
 - **Uma vez por cliente:** fora quem já teve contato de proximidade tratado em OUTRO pedido (exceto "WhatsApp inválido", que não chegou ao cliente) e quem tem **"Não retomar contato" em qualquer lista** do SAC (cruzado por e-mail: carrinho, cancelado, entrega, recontato e a própria proximidade em outro pedido). Cliente com 2 pedidos na janela entra uma vez (o mais recente).
 - **Mensagem** (`msg.msg_proximidade`): pergunta como foi a experiência, se o produto cumpriu o esperado, se há feedback; cita pedido e produto principal; "chegou ontem" (1 dia), "chegou há N dias" (2 e 3) e "chegou faz alguns dias" (acima disso, registro que ficou aguardando); variante que **reconhece o atraso e pede desculpa** quando `fg_entrega_atrasada`; agradece a 2ª compra ("voltar a comprar") ou as seguintes ("continuar comprando"). Sem emoji, "Shibari Brasil".
 - **Resoluções:** "Respondeu — satisfeito", "Respondeu — com feedback", "Reclamação — abrir tratativa", "Sem resposta", "WhatsApp inválido", "Não retomar contato". O texto do feedback vai na **Observação SAC**.
+
+## Recompra — último contato dos "Perdido" (piloto, 07/10/2026, pedido do Hugo)
+Lista nova de **WhatsApp**, parte do Ecossistema de Pós-Venda (`sb_admin_team/planejamento/Ecossistema de Pós-Venda.md` e `Plano de Ação — Ecossistema de Pós-Venda.md`). É o **piloto do WhatsApp**, e sai dos clientes "Perdido" (última compra há mais de 365 dias) de propósito: é a base de menor valor futuro, então um erro de texto, de link ou de cupom custa o mínimo e protege a base "Dormente". Roda **sem esperar o motor**: a lista é montada à mão e liberada em ondas.
+
+**Esta lista é uma exceção à regra "regra de negócio mora no dbt"**, por ser operacional e temporária: a seleção é uma decisão do sócio e do analista, gravada em tabela de controle; o Streamlit só mostra o que foi liberado. Quando o motor (`tb_cliente_ciclo`) existir, a seleção passa a ser calculada lá e esta tabela vira a fila do dia.
+
+- **Fonte:** `raw_control.posvenda_lista` (não gerenciada pelo dbt, mesma natureza de `sac_tarefas` e `cupons_gerados`). Uma linha por (`campanha`, cliente). Colunas: `campanha` (`perdido_ultimo_contato`), `chave` (id do cliente na Nuvemshop, texto; é a chave do checklist e a referência do cupom), `id_nuvemshop`, `email`, `nm_cliente`, `nr_telefone`, `dt_ultima_compra`, `vl_total_gasto`, `qt_pedidos` (do DW; nulo para quem comprou só antes de nov/2023), `ordem`, `onda`, `fg_liberado`, `dt_liberacao` (quando o cliente foi liberado), `ds_consentimento` (`pendente`, `true` ou `false`), `dt_verificacao_consentimento`, `ds_origem`, `criado_em`.
+- **Quem entra na tabela (carga de 07/10/2026):** contatos **ativos** no Perfit (fora descadastrado, rebote e spam), cuja **última compra na Nuvemshop** (data que o Perfit traz da Nuvemshop, que cobre antes do DW) é de mais de 365 dias, com telefone de tamanho válido e sem "Não retomar contato" no SAC. Total na carga: 1.030.
+- **Estados de `ds_consentimento` (07/10/2026):** `true` = aceite de marketing na Nuvemshop (`raw_nuvemshop.customers.accepts_marketing`, que o extrator horário traz desde 07/10/2026) **com data individual** (no cadastro ou em outra data própria); `em_massa` = aceite marcado, mas com a data do **lote de 30/06/2026** (1.388 clientes na loja inteira, todos "aceita") ou de 01 a 02/10/2026: **não é opt-in individual verificável**, então não entra até o Hugo explicar o que foi esse evento (a decisão é reversível com um UPDATE); `false` = não aceita; `pausado` = consentimento individual conferido, segurado até o pedido de teste (cupom + Pix + link) dar certo (para retomar: `UPDATE ... SET ds_consentimento = 'true' WHERE ds_consentimento = 'pausado'`); `pendente` = ainda não conferido. Na carga de 07/10/2026, dos 1.030 "Perdido": 248 individuais (`true` ou `pausado`), 781 `em_massa`, 1 `false`.
+- **Quem aparece na tela:** só `fg_liberado` **e** `ds_consentimento = 'true'`. A liberação é automática, em **lote diário** (abaixo); nunca entra quem não tem consentimento conferido.
+- **Lote diário (decisão do Hugo, 07/10/2026):** a lista mantém **20 clientes sem contato registrado** (`LOTE_DIARIO_RECOMPRA`). Na 1ª abertura da página em cada dia, `completar_lote_diario_recompra` libera os próximos da fila (ordem por `ordem`, só `ds_consentimento = 'true'`) para completar 20: se sobraram 7 sem o check "Já tratei", entram 13. "Sem contato registrado" = liberado, visível (sem "Não retomar contato" em outra lista, sem compra depois da criação da lista nem com o cupom) e sem o check em `sac_tarefas`. Roda **no máximo uma vez por dia** (`dt_liberacao`), então tratar tudo de manhã não puxa mais gente na mesma tarde; sem cliente consentido na fila, não libera nada. Linhas de teste (`chave` começando com `teste`) ficam fora da conta e da liberação. Cada liberação grava `dt_liberacao` e incrementa `onda` (número do lote). **Para pausar o piloto:** `UPDATE raw_control.posvenda_lista SET ds_consentimento = 'pausado' WHERE campanha = 'perdido_ultimo_contato' AND NOT fg_liberado` (a fila deixa de ser consumida; os já liberados continuam). **Consentimento:** o campo `tn_accepts_marketing` do Perfit está **defasado** (12 de 17 clientes conferidos divergem da Nuvemshop), então o consentimento vale só depois de conferido na Nuvemshop (`accepts_marketing` do cliente) e gravado com data. Onda 1: 20 clientes, todos conferidos em 07/10/2026.
+- **Some da tela:** cliente com "Não retomar contato" em **qualquer** lista do SAC (cruzado por e-mail; inclui "SAIR" respondido pelo cliente, que o atendente registra como "Não retomar contato"); cliente que **comprou com o cupom**; cliente que **comprou depois** da criação da lista (`tb_cliente.dt_ult_pedido >= data de criação`). O item tratado continua visível em "Mostrar também os já tratados".
+- **Cupom (`RETORNOPERDIDO` + 4 caracteres):** preset `cupom_retorno_perdido` na Cloud Function `nuvemshop-criar-cupom`: **R$ 20 fixo, uso único, validade de 21 dias, **combina com outros descontos** (decisão do Hugo, 07/10/2026: o desconto de 3% do Pix só vale junto se o cupom combinar), valor mínimo de compra de R$ 120** (confirmado pelo Hugo em 07/10/2026; o mesmo valor está em `MIN_COMPRA_RETORNO`, em `common/cupom.py`, porque entra no texto). Criado pelo botão **Gerar cupons pendentes**; a validade começa no clique, então gere na hora de enviar. 1 cupom por cliente (referência = `chave`; repetir o clique devolve o mesmo cupom). Estado em `raw_control.cupons_gerados`. **A function precisa de redeploy** para conhecer o preset novo.
+- **Link:** `https://shibaribrasil.com.br/discount/<código>` aplica o cupom ao entrar na loja (documentação da Nuvemshop). **Ainda não testado nesta loja**: a primeira mensagem do piloto é o teste (conferir com carrinho vazio e com item, valor mínimo e uso único).
+- **Mensagem:** `msg.msg_recompra_ultimo_contato`: pergunta humana sobre a prática, crédito de R$ 20 pessoal "para curtir nossas novidades" com validade e valor mínimo (R$ 120, confirmado pelo Hugo em 07/10/2026), link que aplica o cupom, lembrete do **sticker exclusivo** e de **3% de desconto pagando no Pix**, e saída por "SAIR". Partes importantes em *negrito* do WhatsApp (asteriscos colados, sem espaço por dentro; pedido do Hugo em 07/10/2026): o crédito de R$ 20, a validade, o mínimo de compra, o sticker exclusivo, os 3% no Pix e a palavra SAIR. Sem emoji, "Shibari Brasil", sem urgência artificial (a validade é a real). **Texto aprovado pelo Hugo em 07/10/2026.** **Pendência antes da onda 1:** o cupom é criado com `combina_com_outros = True` (decisão do Hugo, 07/10/2026), porque o único pedido histórico com um cupom que não combina (SEGUNDACHANCE) pagou no Pix sem o desconto de pagamento. Conferir num pedido de teste (cupom + Pix) que o desconto do Pix aparece.
+- **Resoluções** (`RESULTADOS["recompra_piloto"]`): "Comprou com o cupom", "Respondeu — quer ver produtos", "Respondeu — sem interesse", "Sem resposta", "WhatsApp inválido", "Não retomar contato". Quem responder SAIR vira "Não retomar contato".
+- **Medição:** cupom usado = `tb_pedido.ds_codigo_cupom_nuvemshop` igual ao código gerado (a lista mostra "Comprou com o cupom" em Obs.). Comparação com a taxa histórica de recompra do mesmo recorte; ~10% de cada onda pode ficar sem contato como comparação (decisão do Hugo).
+- **Gatilho de parada:** mais de 3% de respostas "SAIR" em uma onda, bloqueios percebidos ou aviso do WhatsApp: o Robson para e o Hugo revisa o texto antes da onda seguinte.
+- **Quem faz o quê:** a seleção e a liberação são do sócio e do analista; o envio é do Robson, na página SAC; nada sai sozinho.
+
+### Carga da tabela (SQL usado em 07/10/2026)
+A exportação do Perfit ("Contatos da Nuvemshop") foi carregada em `raw_control.perfit_export_20261007` (colunas mínimas: e-mail, nome, estado, qualidade, último envio, última atividade, estágio, aceite do Perfit, total gasto e última compra; **sem CPF**, sobrenome, gênero, aniversário nem interesses). A tabela da lista foi criada por:
+
+```sql
+-- Lista operacional do pós-venda (piloto "último contato" dos Perdido). Criada em 07/10/2026 a partir da exportação do Perfit.
+-- Perdido = última compra na Nuvemshop há mais de 365 dias (data que o Perfit traz da Nuvemshop; o DW só começa em nov/2023).
+-- Entram só contatos ATIVOS no Perfit (fora descadastrado, rebote e spam), com telefone de tamanho válido e sem "Não retomar contato" no SAC.
+-- Consentimento nasce 'pendente': é conferido na Nuvemshop (accepts_marketing) antes de liberar cada cliente.
+CREATE OR REPLACE TABLE `igneous-sandbox-381622.raw_control.posvenda_lista` AS
+WITH p AS (
+  SELECT LOWER(TRIM(email)) AS email, estado, SAFE.PARSE_DATE('%Y-%m-%d', ultima_compra) AS dt_ultima_compra,
+         SAFE_CAST(total_gastado AS FLOAT64) AS vl_total_gasto
+    FROM `igneous-sandbox-381622.raw_control.perfit_export_20261007`
+), n AS (
+  SELECT LOWER(TRIM(email)) AS email, ANY_VALUE(id) AS id_nuvemshop, ANY_VALUE(name) AS nm_cliente, ANY_VALUE(phone) AS nr_telefone
+    FROM `igneous-sandbox-381622.raw_nuvemshop.customers` GROUP BY 1
+), c AS (
+  SELECT LOWER(TRIM(ds_email)) AS email, ANY_VALUE(qt_pedido) AS qt_pedidos
+    FROM `igneous-sandbox-381622.dbt_dw_az.tb_cliente` GROUP BY 1
+), tarefa AS (
+  SELECT tipo_tarefa, chave, ds_resultado
+    FROM `igneous-sandbox-381622.raw_control.sac_tarefas`
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_tarefa, chave ORDER BY dt_atualizacao DESC) = 1
+), nao_retomar AS (
+  SELECT LOWER(cr.ds_email_cliente) AS email FROM tarefa t JOIN `igneous-sandbox-381622.dbt_dw_az.tb_carrinho_abandonado` cr
+    ON t.tipo_tarefa = 'carrinho_abandonado' AND t.chave = CAST(cr.cd_carrinho AS STRING) WHERE t.ds_resultado = 'Não retomar contato'
+  UNION ALL
+  SELECT LOWER(pc.ds_email_cliente) FROM tarefa t JOIN `igneous-sandbox-381622.dbt_dw_az.tb_pedido_cancelado` pc
+    ON t.tipo_tarefa = 'pedido_cancelado' AND t.chave = CAST(pc.cd_pedido_nuvemshop AS STRING) WHERE t.ds_resultado = 'Não retomar contato'
+  UNION ALL
+  SELECT LOWER(lp.ds_email_cliente) FROM tarefa t JOIN `igneous-sandbox-381622.dbt_dw_az.tb_logistica_pedido` lp
+    ON t.tipo_tarefa = 'entrega_problema' AND t.chave = lp.cd_codigo_interno WHERE t.ds_resultado = 'Não retomar contato'
+  UNION ALL
+  SELECT LOWER(r.ds_email_cliente) FROM tarefa t JOIN `igneous-sandbox-381622.dbt_dw_az.tb_pedido_recompra_entregue` r
+    ON t.tipo_tarefa = 'proximidade_pos_entrega' AND t.chave = r.cd_codigo_interno WHERE t.ds_resultado = 'Não retomar contato'
+)
+SELECT
+  'perdido_ultimo_contato' AS campanha,
+  CAST(n.id_nuvemshop AS STRING) AS chave,
+  n.id_nuvemshop,
+  p.email,
+  n.nm_cliente,
+  n.nr_telefone,
+  p.dt_ultima_compra,
+  p.vl_total_gasto,
+  c.qt_pedidos,
+  ROW_NUMBER() OVER (ORDER BY p.dt_ultima_compra DESC, p.vl_total_gasto DESC) AS ordem,
+  CAST(NULL AS INT64) AS onda,
+  FALSE AS fg_liberado,
+  'pendente' AS ds_consentimento,
+  CAST(NULL AS TIMESTAMP) AS dt_verificacao_consentimento,
+  'perfit_export_20261007' AS ds_origem,
+  CURRENT_TIMESTAMP() AS criado_em
+FROM p
+JOIN n USING (email)
+LEFT JOIN c USING (email)
+WHERE p.estado = 'ACTIVE'
+  AND DATE_DIFF(CURRENT_DATE('America/Sao_Paulo'), p.dt_ultima_compra, DAY) > 365
+  AND LENGTH(REGEXP_REPLACE(IFNULL(n.nr_telefone, ''), r'\D', '')) BETWEEN 10 AND 13
+  AND p.email NOT IN (SELECT email FROM nao_retomar WHERE email IS NOT NULL);
+```
+
+Para liberar uma onda: `UPDATE raw_control.posvenda_lista SET fg_liberado = TRUE WHERE campanha = 'perdido_ultimo_contato' AND onda = 1 AND ds_consentimento = 'true';`
+Para conferir o consentimento de novos clientes: consultar a Nuvemshop (`accepts_marketing`) e gravar `ds_consentimento` e `dt_verificacao_consentimento` antes de marcar `onda`.
+
+### Convenção de prefixos de cupom (padrão de 07/10/2026)
+O **prefixo identifica a ação** que gerou o cupom, para medir as vendas de cada ação sem cruzar tabelas: no painel da Nuvemshop, em `tb_pedido.ds_codigo_cupom_nuvemshop` (`LIKE 'RETORNOPERDIDO%'`) e em `raw_control.cupons_gerados.campanha`. Regras (também no código da function, com validação no import): MAIÚSCULAS e dígitos, palavra legível da ação, **um prefixo por ação**, e **nenhum prefixo é começo de outro**. Em uso: `SEGUNDACHANCE` (recuperação de venda) e `RETORNOPERDIDO` (crédito de retorno, piloto dos "Perdido"). Reservados: `RETORNOJANELA`, `RETORNODORMENTE`, `RETORNOREATIVACAO`. Código universal fora da function: `EXPLORAR20` (Área VIP).
+Medição por ação: view `raw_control.vw_vendas_cupom_acao` (uma linha por cupom gerado, com o pedido, a data, o valor, o desconto de cupom, o desconto de pagamento e a margem de contribuição quando houve compra).
+
+## Supressão "Não retomar contato" (07/10/2026)
+
+O bloco `nao_retomar` das consultas de Proximidade, Recompra (piloto) e do lote diário lê `raw_control.vw_tarefa_pessoa` (sb_data_pipeline, `sql/raw_control/views_contato_cliente.sql`) em vez de repetir 8 JOINs. A mesma view alimenta o motor de pós-venda (`vw_supressao_contato`). Lista nova do SAC = 1 ramo novo na view. Comportamento idêntico ao anterior.
+
+
+## Fila do fluxo de pós-venda: jornada e esgotamento (B065 etapa 4, 08/10/2026)
+
+Grupo "Pós-venda — fluxo completo", **separado do piloto dos Perdido** (que segue com a lista `posvenda_lista`, 20 por dia). Fonte da regra: `planejamento/Fluxo de Pós-Venda — Especificação.md` (sb_admin_team).
+
+- **Quem entra:** a fila é calculada pelo dbt (`dbt_dw_az.tb_posvenda_fila`: consentimento, supressões, 1 toque comercial a cada 7 dias, janelas). O SAC só **congela o lote do dia** em `raw_control.posvenda_fila_lote` e mostra.
+- **Campanhas (tipo_tarefa = campanha; chave = `cd_contato`):** `jornada_w2` (lembrete do cashback, W1 + 15 dias), `jornada_w1` (check-in depois da entrega, com cashback), `esgotamento_maturacao` e `esgotamento_dormente` (1 toque com crédito pessoal).
+- **Lote:** a **jornada não tem limite diário** (todo cliente na fila entra, idempotente); o **esgotamento** completa até o limite próprio da planilha de controle (`qt_limite_esgotamento_dia`), descontando o que ficou pendente de dias anteriores, **uma vez por dia**.
+- **Sombra x ao vivo:** o SAC só libera lote quando `fg_ao_vivo` for verdadeiro (parâmetro `fila_ao_vivo` da planilha de controle, padrão 0). Desligado, não aparece nada novo; o que já foi liberado continua visível.
+- **Saem da tela sozinhos:** "Não retomar contato" em outra lista, compra depois da liberação ou com o cupom; na jornada, a W1 que envelheceu (saiu da fila) e não foi tratada.
+- **Cupons:** esgotamento: botão "Gerar cupons pendentes" (lote) com os presets `cupom_retorno_maturacao` e `cupom_retorno_dormente`. **Cashback da jornada (W1): valor VARIÁVEL por cliente = 10% do valor líquido de produtos do pedido que gerou o contato** (`common/cupom.py::valor_cashback`: arredondado para baixo em centavos, piso R$ 5, teto R$ 50; a function recusa fora desses limites), **gerado individualmente**: o Robson escolhe o cliente, vê o valor e clica "Gerar cashback" (a validade de 30 dias começa no clique); a mensagem sai com o valor e o código daquele cliente. A W2 reaproveita o cashback da W1 (mesmo valor). Decisão do Hugo, 13/10/2026.
+- **Mensagens:** `msg_jornada_w1` (versão de 13/10/2026: cita o produto de forma leve por nome curto, só itens neutros; o cashback aparece com centavos e, quando for exatamente 10% do pedido, o percentual), `msg_jornada_w2` (textos aprovados em 07/10/2026) e `msg_esgotamento_maturacao`/`msg_esgotamento_dormente` (texto proposto, **aguarda aprovação do Hugo**), no padrão fixo de `common/mensagens_sac.py`.
+- **Resolução:** Comprou com o cashback (ou crédito), Respondeu — quer ver produtos, Respondeu — sem interesse, Sem resposta, WhatsApp inválido, Não retomar contato. "Sem resposta" e "Respondeu — quer ver produtos" da W1 liberam a W2.
+- **Dependências para publicar:** dbt com `fg_ao_vivo` (sb_dw_dbt#39) e views/tabela do lote (sb_data_pipeline#29, já aplicadas); function de cupons com os presets do esgotamento (sb_data_pipeline#28).
+
+## Revisão de 14/10/2026: W0, jornada por pedido, meta de 35 e backlog (pedido do Hugo)
+
+Fonte das regras: `planejamento/Fluxo de Pós-Venda — Especificação.md` (seção 12) e textos aprovados em `planejamento/Textos do Fluxo de Pós-Venda.md` (seção 0), no repositório `sb_admin_team`.
+
+- **Listas da fila do fluxo (ordem = prioridade):** W0 (`jornada_w0`), W1 (`jornada_w1`), W2 (`jornada_w2`), lembrete final do 3º pedido (`jornada_w2_final`), esgotamento em maturação e dormente. A jornada é **por pedido**: a chave do item (tela, tarefas `sac_tarefas`, lote `posvenda_fila_lote`, cupom `referencia`) é `<cd_contato>|<cd_codigo_interno>`; no esgotamento é `<cd_contato>`. O dbt (`tb_posvenda_fila`) entrega `ds_chave`, `nr_pedido_cliente`, `dt_pedido`, `dt_entrega`, `vl_pedido_base`, `fg_atrasada`, `qt_validade_cashback_dias`, `nr_posicao_esgotamento` e `qt_meta_diaria`.
+- **W0 (cashback logo após o pagamento, até 1 dia útil):** gera o cashback **um cliente por vez** (10% do valor dos produtos do pedido, piso R$ 5, teto R$ 50; validade de **45 dias, 60 no 3º pedido**, vinda da fila/planilha); o cupom novo **cancela o anterior não usado** do mesmo cliente (`params.substituir_anteriores`), e a mensagem do 2º pedido avisa a substituição (lida de `cupons_gerados.motivo_cancelamento`). W0 atrasada fica na lista, marcada na Obs.; a W1 só entra depois que a W0 é feita. Pedido **já entregue** no dia do envio (onda de lançamento): a mensagem é a **combinada** (check-in + cashback) e o cliente não entra na W1.
+- **W1 (check-in, entrega confirmada + 2 dias, janela de 7 dias):** reaproveita o cupom da W0; traz o lembrete do cashback e da validade (sem o lembrete do 4º pedido em diante). Gatilho = `dt_entrega` confirmada (nunca `fg_entregue`).
+- **W2 (W1 + 15 dias) e lembrete final (3º pedido, 7 dias antes de vencer):** só com o cupom do pedido válido e não cancelado. Compra nova tira W1/W2 do pedido anterior (o dbt usa só o último pedido do cliente).
+- **Meta do dia = 35 contatos** (`qt_meta_diaria`): jornada inteira + esgotamento até a meta, descontando o esgotamento que ficou de ontem (`_sql_completar_esgotamento`). Cartão "Meta do dia" no topo da área.
+- **Backlog do esgotamento:** seção com os próximos clientes (ordem: 3 pedidos ou mais, maturação, faixa, margem) e botão para puxar N para a lista de hoje (`_sql_puxar_backlog`, máx. 50 por clique).
+- **Lista "Pós-entrega — como foi a experiência?" (Proximidade):** some quando a fila do fluxo está ao vivo (a W1 a substitui).
+- **Cupons cancelados:** `carregar_cupons` ignora cupom com `cancelado_em`. Dependências em produção, **nesta ordem:** `ALTER TABLE raw_control.cupons_gerados` (colunas `cancelado_em` e `motivo_cancelamento`), views de contato (`sb_data_pipeline`, `views_contato_cliente.sql`), function de cupons (sb_data_pipeline#33), dbt (`tb_posvenda_fila`, `tb_posvenda_cupom_a_cancelar`) e, por último, este PR.
+
+## Reorganização da página por grupos coloridos (14/10/2026, pedido do Hugo)
+
+- **Fundo translúcido por grupo:** cada grupo de listas fica dentro de um container com `key="grupo_<nome>"` e CSS (`_css_grupos`) que pinta o bloco inteiro com a cor do grupo (7% de opacidade, borda de 30%). O operador associa cor a tipo de trabalho.
+- **Ordem e cores:** **Pós-venda** (verde-azulado: W0, W1, W2 e lembrete final, as mensagens obrigatórias do fluxo, com o cartão da meta do dia) → **Recuperação de venda** (azul: carrinhos, cancelados, recontato com cupom) → **Problemas** (âmbar: entregas) → **Esgotamento da base** (rosa). A lista Pós-entrega (Proximidade, verde) só aparece com a fila desligada e sem prévia; a W1 a substitui.
+- **Esgotamento:** 10 por padrão (`ESGOTAMENTO_PADRAO`; conta o que ficou pendente de ontem) e botão **Puxar mais 10** (`PASSO_PUXAR`), que traz sempre os mais prioritários (3 pedidos ou mais, maturação, faixa, margem). Substitui o cálculo "35 − obrigatórias"; o cartão da meta (35) fica como referência.
+- **Cupom sempre individual:** toda seção que gera cupom tem o formulário "escolha o cliente e gere o cupom" (W0: cashback de 10% do pedido; esgotamento: crédito de R$ 20; recontato: SEGUNDACHANCE). Acabou o botão "Gerar cupons pendentes" em lote.
+- **Piloto dos Perdidos fora desta página** (Hugo, 14/10/2026): o código (`carregar_recompra_piloto`, `_sql_completar_lote`, `_form_gerar_cupons_recompra`...) continua no arquivo para uma página própria; a página deixou de liberar o lote diário dos Perdidos.
+
+## Página enxuta e subtítulos em destaque (14/10/2026, pedido do Hugo)
+
+- **Sem procedimento na tela:** o procedimento vive no Notion ("SOP — Filas de contato do SAC (página SAC)", em Processos e Docs, espelho da Base de Conhecimento 10.1.3). Abaixo do título há **uma frase de orientação** e o **link do SOP**; cada seção traz **uma frase** (`SECOES_FILA` e as notas das listas de recuperação e problemas), e os formulários de cupom, o cartão da meta e os avisos têm uma linha cada.
+- **Subtítulos das seções** (W0, Carrinhos, Esgotamento...): 26 px, peso 800, com barra de 8 px na cor do grupo (`_titulo_secao`, `_grupo_do_tipo`).
+- Mudou o procedimento? Atualizar o Notion e a Base de Conhecimento juntos; não pôr texto de procedimento de volta na página.
+
+## Geração de cupom em lote por seleção (15/10/2026, proposta do Robson)
+
+- **Antes:** um cliente por vez em um seletor, e a página recarregava a cada cupom. **Agora:** coluna **Gerar cupom** na tabela (W0, esgotamento em maturação e dormente, recontato com cupom), toggle **Marcar todos sem cupom** e botão **Gerar cupons dos selecionados (N)**. Cada cliente recebe o **seu** cupom (W0: 10% do pedido dele, 45 dias, 60 no 3º pedido, substituindo o anterior não usado), mas a geração roda em sequência, com barra de progresso, e a página recarrega **uma vez** no fim, mostrando quantos foram gerados e quais falharam.
+- Só gera para quem **ainda não tem cupom**; no recontato, quem recebeu negativa na Resolução ("Sem interesse", "WhatsApp inválido", "Não retomar contato") fica de fora. Na prévia (fila desligada) o botão fica desligado. Um erro em um cliente não interrompe os demais.
+- A célula do cupom pendente passou a dizer "— (a gerar)". Acabaram os formulários com seletor de cliente (`_form_gerar_cashback_individual`, `_form_gerar_cupom_individual` e `_form_gerar_cupom`); a configuração de cada lista está em `_gerar_da_fila` (W1, W2 e lembrete final não geram: usam o cupom da W0).
+
+### Valor do pedido e do cashback sem frete; ordem da jornada (15/10/2026)
+- **Valor do pedido (coluna "Pedido") e cashback (10%) nunca incluem frete.** A base é `vl_pedido_base` da `tb_posvenda_fila` = soma de `vl_receita_liquida_produto` (itens menos desconto de venda), vinda do dbt; a página só usa a conta própria dos itens como reserva quando a linha não está na fila. Nunca usar `vl_liquido_item` (inclui o frete rateado) nem `vl_total_pedido`. É valor **depois** de desconto (cupom, Pix, promoção) e **sem** frete.
+- **Ordem da jornada (W0, W1, W2 e lembrete final):** pedido mais antigo primeiro (é a prioridade de envio); no mesmo dia, pelo id do pedido (`<cd_codigo_interno>` da chave), que cresce com o tempo, e não pelo id do cliente.

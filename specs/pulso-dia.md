@@ -9,8 +9,8 @@ Página operacional: responde "como está hoje, o que está parado e se o mês v
 - **Faturamento** = Σ `vl_liquido_item` (produtos líquidos de desconto + frete pago), 1 linha por pedido válido; mesma base da meta. Brinde não conta como item.
 - **Hoje** está em andamento: não comparar com dia fechado.
 - **A postar** = pedido válido com `ds_status_pedido = 'EM ABERTO'` (pago, aguardando postagem). **Dias úteis** = nº de dias úteis (`tb_tempo.fg_dia_util`) depois da data de pagamento (`dt_pagamento_nuvemshop`, senão `dt_pedido`) até hoje inclusive. **Atrasado** = mais de 2 dias úteis (decisão de 21/set/2026; alinhado ao B048).
-- **Dias úteis do mês** = Σ `fg_dia_util` do mês; "fechados" = dias úteis com data < hoje.
-- **Projeção do mês** = faturamento dos dias fechados ÷ dias úteis fechados × dias úteis do mês. Vendas de fim de semana entram no numerador. Referência de ritmo, não previsão; sem projeção no 1º dia do mês. Comparada à meta do mês (a meta ainda precisa ser revista).
+- **Dias do mês** = dias corridos do mês; "fechados" = dias com data < hoje (decisão do Hugo, 07/10/2026: ritmo e projeção em dias corridos, igual a Vendas & Margem). Dias úteis seguem só na regra de "a postar".
+- **Projeção do mês** = média de vendas por dia (faturamento dos dias fechados ÷ dias corridos fechados) × dias do mês. Referência de ritmo, não previsão; sem projeção no 1º dia do mês. Comparada à meta do mês (a meta ainda precisa ser revista).
 - **Meta acumulada / atingimento:** `vl_meta_dia_acumulado` da data de hoje; atingimento = faturamento do mês ÷ meta acumulada.
 - **Semana** = segunda a domingo. Comparação justa: semana atual até hoje × mesmos dias da semana anterior; mais a semana anterior inteira.
 - **Origem** = `ds_origem_venda`/`ds_midia_venda` (URL de entrada); "(sem parametro)" agrega sem UTM/clique e sem landing_url. Últimos 7 dias.

@@ -55,7 +55,7 @@ def carregar_dados(dias):
     ini, fim = pd.Timestamp(ini).date(), pd.Timestamp(fim).date()
 
     home = bq.query_df(client, f"""
-        SELECT nm_bloco, nr_ordem_bloco, nr_posicao, cd_produto_nuvemshop, ts_captura
+        SELECT ds_secao, nm_bloco, nr_ordem_bloco, nr_posicao, cd_produto_nuvemshop, ts_captura
           FROM `{bq.PROJECT}.dbt_dw_stg.stg_nuvemshop_vitrine`
          WHERE ds_tipo = 'home'
            AND ts_captura = (SELECT MAX(ts_captura) FROM `{bq.PROJECT}.dbt_dw_stg.stg_nuvemshop_vitrine` WHERE ds_tipo = 'home')
@@ -200,6 +200,38 @@ def _prateleiras(layout):
         yield ordem, nome, g
 
 
+def _blocos_na_ordem_do_site(home, bn):
+    """[(ordem, nome, html)] com os banners (carrossel e quadrados) e as prateleiras de produto na MESMA ordem em que
+    aparecem na home. A ordem global vem da captura dos blocos; sem ela, só as prateleiras (ordem relativa antiga)."""
+    itens = []
+    if bn is not None:
+        for bloco, g in bn["d"].groupby("ds_bloco"):
+            from reports import mapa_interesse_banners as mb
+            itens.append((int(g["nr_ordem_bloco"].iloc[0]), mb.LOCAIS[bloco][2] + (" (rotativo, na ordem do site)" if bloco == "slider" else ""), mb.linha_de_banners(g)))
+    ordem_prat = bn["ordem_prateleiras"] if bn is not None else {}
+    for (ordem, nome), g in home.sort_values(["nr_ordem_bloco", "nr_posicao"]).groupby(["nr_ordem_bloco", "nm_bloco"], sort=True):
+        chave = g["ds_secao"].iloc[0] if "ds_secao" in g else None
+        cartoes = "".join(_cartao(r) for r in g.to_dict("records"))
+        itens.append((ordem_prat.get(chave, 1000 + int(ordem)), nome, f'<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px">{cartoes}</div>'))
+    return sorted(itens, key=lambda x: x[0])
+
+
+def _carregar_banners_calculados(janela_dias):
+    """Layout + métricas dos banners, ou None se a captura não existir. Nunca derruba a página."""
+    from reports import mapa_interesse_banners as mb
+    try:
+        dados = mb.carregar_banners(janela_dias)
+        if dados is None or dados["blocos"].empty:
+            return None
+        lay = mb.layout_banners(dados["blocos"])
+        d, p0 = mb.calcular_banners(lay, dados["promo"], dados["sessoes"], dados["entrada"], dados["margens"], dados["ini"], dados["fim"])
+        prat = dados["blocos"][dados["blocos"]["nr_posicao"].isna()][["ds_bloco", "nr_ordem_bloco"]].drop_duplicates()
+        return {"d": d, "p0": p0, "dados": dados, "ordem_prateleiras": dict(zip(prat["ds_bloco"], prat["nr_ordem_bloco"].astype(int)))}
+    except Exception as e:          # noqa: BLE001
+        st.warning(f"Banners indisponíveis nesta carga: {e}")
+        return None
+
+
 def _legenda():
     chips = "".join(f'<span style="background:{bg};color:{fg};border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;margin-right:6px">{n} {("≥ " + str(int(m)) ) if m >= 1 else ""}</span>'
                     for n, m, bg, fg in FAIXAS)
@@ -228,6 +260,7 @@ def render():
     d, p0 = calcular_interesse(dados["prod"], eventos, dados["vendas"])
     ini, fim = dados["ini"], dados["fim"]
     dias = (fim - ini).days + 1
+    bn = _carregar_banners_calculados(JANELAS[janela])
     home = dados["home"].merge(d, on="cd_produto_nuvemshop", how="left")
     home["nm_bloco"] = home["nm_bloco"].map(_limpa)
     home["faixa"] = home["faixa"].fillna("Sem sinal")
@@ -255,10 +288,11 @@ def render():
     # ── 1. A home montada ────────────────────────────────────────────────────────────────
     section_title("1 · A home montada — cor = interesse do produto")
     _legenda()
-    for _, nome, g in _prateleiras(home):
-        cartoes = "".join(_cartao(r) for r in g.to_dict("records"))
+    for _, nome, conteudo in _blocos_na_ordem_do_site(home, bn):
         st.html(f'<div style="font-size:12px;font-weight:700;color:{COLORS["text_secondary"]};margin:14px 0 6px">{html.escape(nome)}</div>'
-                f'<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px">{cartoes}</div>')
+                + conteudo)
+    if bn is None:
+        st.info("Os banners ainda não aparecem aqui: a captura do carrossel e dos quadrados (extrator `storefront_home_blocos`) não está implantada.")
     note("Prateleiras e posições são as capturadas da home no último horário (o site é lido de hora em hora). "
          "<b>Score</b> = posição percentil (0–100) dos pontos do produto entre os produtos publicados; pontos = 1 por visita à página + "
          f"{PESO_CARRINHO} por carrinho + {PESO_PEDIDO} por pedido no período. Escala relativa: Estrela é o topo <i>do nosso catálogo</i>, não um padrão de mercado.")
@@ -361,6 +395,11 @@ def render():
     st.plotly_chart(fig2, use_container_width=True)
     note("Cliques médios na home por posição, somando todas as prateleiras. Confunde posição com produto (o 1º costuma ser o mais forte) e o volume é pequeno: "
          "leia como indício. O teste limpo é trocar a ordem e comparar, o que exige o histórico da vitrine que começou a ser coletado em 28/09/2026.")
+
+    # ── 6. Banners e quadrados de categoria ─────────────────────────────────────────────
+    if bn is not None:
+        from reports import mapa_interesse_banners as mb
+        mb.secao_banners(bn["d"], bn["p0"], bn["dados"], JANELAS[janela])
 
     # ── de quando são os dados ───────────────────────────────────────────────────────────
     section_title("De quando são os dados")
