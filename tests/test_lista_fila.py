@@ -44,6 +44,18 @@ def test_quem_aparece_na_w0_e_a_ordem():
     assert list(w0["chave"]) == ["6|66", "1|11", "5|55"]
 
 
+def test_no_mesmo_dia_a_ordem_e_pelo_id_do_pedido_e_vale_para_toda_a_jornada():
+    mesmo_dia = pd.Timestamp("2026-10-14")
+    df = pd.DataFrame([
+        {**BASE, "ds_campanha": c, "chave": k, "nm_cliente": n, "dt_pedido": mesmo_dia}
+        # o cliente de id menor fez o pedido DEPOIS (id do pedido maior): a ordem segue o pedido, nao o cliente
+        for c in ("jornada_w0", "jornada_w1") for k, n in (("100|27133353435", "Tarde"), ("900|27129275202", "Cedo"), ("500|27133215117", "Meio"))
+    ])
+    for tipo in ("jornada_w0", "jornada_w1"):
+        el = sac.elegivel_fila(df, tipo, set())
+        assert list(el["chave"]) == ["900|27129275202", "500|27133215117", "100|27133353435"]
+
+
 def test_w0_cupom_link_e_aviso_de_atraso():
     w0 = sac._lista_fila(_df(), "jornada_w0", _cupons(), feitos={"5|55"}, agora=AGORA).set_index("chave")
     assert w0.loc["1|11", "cupom"].startswith("CASHBACKPOSCOMPRAAB12 — vence 04/12")
