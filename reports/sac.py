@@ -943,7 +943,7 @@ def carregar_lote_fila(previa: bool = False):
         )
         SELECT b.ds_campanha, b.cd_contato AS chave, b.dt_lote, b.dt_criacao, c.nm_contato AS nm_cliente, LOWER(c.ds_email) AS email,
                c.nr_telefone, c.dt_ult_pedido AS dt_ultima_compra, c.vl_total_pedido AS vl_total_gasto, c.qt_pedido AS qt_pedidos,
-               pr.nm_produto, pr.itens_pedido, pr.vl_pedido_base, ci.ds_faixa_valor, pe.nr_pedido, pe.dt_pedido,
+               pr.nm_produto, pr.itens_pedido, COALESCE(f.vl_pedido_base, pr.vl_pedido_base) AS vl_pedido_base, ci.ds_faixa_valor, pe.nr_pedido, pe.dt_pedido,
                lo.dt_entrega, f.dt_limite, COALESCE(f.fg_atrasada, FALSE) AS fg_atrasada, f.qt_validade_cashback_dias, f.qt_meta_diaria,
                EXISTS (SELECT 1 FROM nao_retomar n WHERE n.email = LOWER(c.ds_email)
                           AND NOT (n.tipo_tarefa = b.ds_campanha AND n.chave = b.cd_contato)) AS fg_nao_retomar,
@@ -982,13 +982,15 @@ def carregar_lote_fila_seguro(previa: bool = False):
 def elegivel_fila(df, tipo, feitos):
     """Quem fica na tela da campanha `tipo`: sem "Não retomar contato" em outra lista, que não comprou depois (jornada: tem pedido mais novo; esgotamento: comprou
     desde a liberação ou com o cupom: missão cumprida, sai sozinho) e, na jornada, que ainda está na fila do dbt (a W1 envelhecida e não tratada sai; a já
-    tratada fica no histórico). A W0 aparece do pedido mais antigo para o mais novo (as atrasadas primeiro)."""
+    tratada fica no histórico). A jornada (W0, W1, W2 e lembrete final) aparece do pedido mais antigo para o mais novo (as atrasadas primeiro); no mesmo dia, pelo id do pedido."""
     if df is None or df.empty:
         return pd.DataFrame()
     el = df[(df["ds_campanha"] == tipo) & ~df["fg_nao_retomar"] & ~df["fg_comprou_depois"] & ~df["fg_comprou_com_cupom"]]
     if tipo.startswith("jornada"):
         el = el[el["fg_na_fila"] | el["chave"].isin(feitos)]
-        return el.sort_values(["dt_pedido", "chave"])
+        # mais antigo primeiro (prioridade de envio); no mesmo dia, pelo id do pedido (cresce com o tempo), nao pelo id do cliente
+        id_pedido = pd.to_numeric(el["chave"].str.split("|").str[1], errors="coerce")
+        return el.assign(_id_pedido=id_pedido).sort_values(["dt_pedido", "_id_pedido", "chave"]).drop(columns="_id_pedido")
     return el.sort_values(["dt_lote", "ds_faixa_valor", "chave"])
 
 
