@@ -14,6 +14,7 @@ from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 
 from common import bigquery as bq
+from common import utm
 
 URL_FUNCTION = "https://nuvemshop-criar-cupom-jpt6bmdtaa-uk.a.run.app"
 CAMPANHA_RECUPERACAO_WHATSAPP = "cupom_recuperacao_venda_whatsapp"
@@ -46,10 +47,12 @@ LINK_LOJA = "https://shibaribrasil.com.br"
 TABELA = f"{bq.PROJECT}.raw_control.cupons_gerados"
 
 
-def link_cupom(codigo: str) -> str:
-    """Link da loja que aplica o cupom sozinho ao entrar (formato `/discount/<código>` da Nuvemshop). Ainda não testado nesta loja:
-    a 1ª mensagem do piloto é o teste (carrinho vazio e com item, valor mínimo, uso único)."""
-    return f"{LINK_LOJA}/discount/{codigo}"
+def link_cupom(codigo: str, campanha: str) -> str:
+    """Link da loja que aplica o cupom sozinho ao entrar (formato `/discount/<código>` da Nuvemshop), com os UTM da mensagem
+    (`utm_source=whatsapp&utm_medium=messaging&utm_campaign=<posvenda_w0|posvenda_w1|posvenda_w2|posvenda_esgotamento|posvenda_perdido>`;
+    `campanha` é a chave de `common.utm.CAMPANHA_UTM`, ex.: "jornada_w0"). Testado em 19/10/2026: o redirecionamento da Nuvemshop
+    mantém os parâmetros. Sem UTM o pedido cai em "(sem parametro)" e o clique vira "Direct" no GA4."""
+    return utm.com_utm(f"{LINK_LOJA}/discount/{codigo}", campanha)
 
 
 def _token() -> str:
