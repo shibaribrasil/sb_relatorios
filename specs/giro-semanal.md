@@ -35,7 +35,7 @@ Compara a semana com o normal (ou com a anterior, se não há normal): 🟢 melh
 
 ## Definições
 - **Sessões de Google pago**: GA4 fonte google / meio cpc. **Sessões do site**: todas as origens. Funil = sessões únicas do GA4 que chegaram em cada etapa (produto visto, carrinho, checkout) do site inteiro; o último degrau usa **pedidos reais** da base. *Pedido ÷ checkout* é aproximação (o checkout pode virar pedido em outro dia).
-- **Pedidos de Google pago**: origem google / mídia cpc pela URL de entrada. **ROAS real** = faturamento desses pedidos ÷ custo. **MER** = faturamento total ÷ custo. **Margem após mídia** = margem de contribuição de todos os pedidos − custo do Google Ads (Meta/Instagram pago não tem custo na base).
+- **Pedidos de Google pago**: origem google / mídia cpc pela URL de entrada. **ROAS real** = faturamento desses pedidos ÷ custo. **Base + recuperado GA4** (19/10/2026): soma a esses os pedidos "(sem parametro)" cujo comprador tem clique do Google Ads no histórico do GA4 (último clique, janela de 30 dias; regra no dbt, `tb_atribuicao_pedido_ga4`, ver `google-ads.md`). Aparece no card Pedidos ("N de Google pago (M recuperado(s) pelo GA4)"), na linha "ROAS real do Google pago (base + recuperado GA4)" do elo a elo e nas colunas *Recuperados GA4* e *ROAS real (base + GA4)* da semana a semana. Os **norteadores** continuam usando só a base (pela URL de entrada), por prudência: a ponte é regra de crédito e a amostra é pequena. **MER** = faturamento total ÷ custo. **Margem após mídia** = margem de contribuição de todos os pedidos − custo do Google Ads (Meta/Instagram pago não tem custo na base).
 - **Conversão** = pedidos ÷ sessões do site. **Ticket** = faturamento ÷ pedidos.
 
 ## Limitações
