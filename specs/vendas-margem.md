@@ -124,7 +124,7 @@ Jan–Abr/26 ficam entre 57,9% e 62,6% (frete subsidiado em pedidos ≥ R$ 400 e
 - **Código do pedido:** `cd_pedido_nuvemshop` (orders.number, o mesmo do painel da loja). `cd_pedido` é o número interno do Bling e **não** deve ser exibido.
 - **Dado faltante:** `ds_incompletude` diz o tipo (`sem custo`, `sem taxa de pagamento`, `sem dados da Nuvemshop`, ou combinação). Na visão por pedido, une os tipos das linhas.
 - **Embalagem:** estimativa fixa (R$ 2,50 por pedido); o card e a cascata sempre dizem "estimada".
-- **Origem das vendas:** `ds_origem_venda` / `ds_midia_venda` de `dbt_dw_az.tb_atribuicao_pedido` (classificação da URL de entrada: UTM + detecção de clique de anúncio), unidas a `tb_pedido` por `cd_pedido`. Os parâmetros UTM crus (`ds_utm_source/medium/campaign` na `tb_pedido`) cobrem só ~7% dos pedidos de 2026 (25 de 364); a classificação atribui ~45% dos pedidos ao Google Ads (cpc) e ~12% ao Google orgânico (Shopping). Pendência de dados: unificar variações de nome (`ig`/`instagram`, `Instagram`).
+- **Origem das vendas:** `ds_origem_venda` / `ds_midia_venda` de `dbt_dw_az.tb_atribuicao_pedido` (classificação da URL de entrada: UTM + detecção de clique de anúncio; desde 19/10/2026 o pedido sem parâmetro cujo comprador tem clique do Google Ads no GA4 vira google/cpc, ver `google-ads.md`), unidas a `tb_pedido` por `cd_pedido`. Os parâmetros UTM crus (`ds_utm_source/medium/campaign` na `tb_pedido`) cobrem só ~7% dos pedidos de 2026 (25 de 364); a classificação atribui ~45% dos pedidos ao Google Ads (cpc) e ~12% ao Google orgânico (Shopping). Pendência de dados: unificar variações de nome (`ig`/`instagram`, `Instagram`).
 
 ## v3 — 20/set/2026 (ajustes de leitura + mídia)
 

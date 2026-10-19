@@ -135,14 +135,19 @@ def _ids_recuperados(ponte):
 
 
 def google_pago_recuperado(vendas, ponte, ini, fim):
-    """Google pago na janela = base (origem google / cpc pela URL de entrada) + RECUPERADOS pelo GA4 (pedido '(sem parametro)' cujo comprador
-    tem clique do Ads no histórico do GA4; regra de crédito no dbt: `tb_atribuicao_pedido_ga4`). Devolve os totais base, os recuperados (`rec_*`) e a soma (`*_final`)."""
-    b = google_pago(vendas, ini, fim)
+    """Google pago REAL na janela = origem google / cpc pela URL de entrada + pedidos RECUPERADOS pelo GA4 (a URL deu '(sem parametro)' e o comprador
+    tem clique do Ads no histórico do GA4; regra no dbt, `tb_atribuicao_pedido.fg_origem_recuperada_ga4`). Desde o deploy do dbt a origem final já vem
+    recuperada; a UNIÃO dos dois critérios não conta o pedido duas vezes e funciona antes e depois do deploy. Devolve o total (`pedidos`, `fat`, `mc`,
+    `novos`), a parte recuperada (`rec_*`) e a parte só-URL (`url_*`)."""
     x = sm.entre(vendas, "dt_pedido", ini, fim)
-    g = x[x["cd_codigo_interno"].isin(_ids_recuperados(ponte)) & (x["origem"] == "(sem parametro)")]
-    ped = g.groupby("cd_codigo_interno").agg(rec=("fg_cliente_recorrente", "first"))
-    rec = {"rec_pedidos": int(len(ped)), "rec_fat": float(g["vl_liquido_item"].sum()), "rec_mc": float(g["vl_margem_contribuicao"].sum()), "rec_novos": int((~ped["rec"].astype(bool)).sum())}
-    return {**b, **rec, "pedidos_final": b["pedidos"] + rec["rec_pedidos"], "fat_final": b["fat"] + rec["rec_fat"], "mc_final": b["mc"] + rec["rec_mc"], "novos_final": b["novos"] + rec["rec_novos"]}
+    em_rec = x["cd_codigo_interno"].isin(_ids_recuperados(ponte))
+
+    def resumo(g):
+        ped = g.groupby("cd_codigo_interno").agg(rec=("fg_cliente_recorrente", "first"))
+        return {"pedidos": int(len(ped)), "fat": float(g["vl_liquido_item"].sum()), "mc": float(g["vl_margem_contribuicao"].sum()), "novos": int((~ped["rec"].astype(bool)).sum())}
+
+    tot, rec = resumo(x[((x["origem"] == "google") & (x["midia"] == "cpc")) | em_rec]), resumo(x[em_rec])
+    return {**tot, **{f"rec_{k}": v for k, v in rec.items()}, **{f"url_{k}": tot[k] - rec[k] for k in tot}}
 
 
 def ga4_cpc(ga4, ini, fim):
@@ -181,8 +186,7 @@ def tabela_semanas(perf, lei, vendas, ga4, fechado, seg_ini, n_sem, ponte=None):
         linhas.append({"seg": seg, "n": j["n"], "parcial": j["parcial"], "fim": j["fim"], **{f"a_{k}": v for k, v in a.items()},
                        "pedidos": r["pedidos"], "fat": r["fat"], "mc": r["mc"], "novos": r["novos"],
                        "roas": _div(r["fat"], a["custo"]), "mc_custo": _div(r["mc"], a["custo"]), "sess": g["sessoes"], "pct_eng": g["pct_eng"],
-                       "ped_rec": r["rec_pedidos"], "pedidos_final": r["pedidos_final"], "fat_final": r["fat_final"],
-                       "roas_final": _div(r["fat_final"], a["custo"]), "mc_custo_final": _div(r["mc_final"], a["custo"])})
+                       "ped_rec": r["rec_pedidos"]})
     return pd.DataFrame(linhas)
 
 
@@ -196,9 +200,6 @@ def _grafico_custo_roas(t):
     fig.add_bar(x=x, y=t["a_custo"] / t["n"], name="Investimento por dia", marker_color=METRIC_COLORS["receita"], hovertemplate="semana de %{x}<br>R$ %{y:,.0f} por dia<extra></extra>", secondary_y=False)
     fig.add_trace(go.Scatter(x=x, y=t["roas"], name="ROAS real (faturamento de Google pago ÷ custo)", mode="lines+markers", line=dict(color=METRIC_COLORS["margem_pct"], width=2),
                              hovertemplate="semana de %{x}<br>%{y:.1f}×<extra></extra>"), secondary_y=True)
-    if "roas_final" in t and t["ped_rec"].sum() > 0:
-        fig.add_trace(go.Scatter(x=x, y=t["roas_final"], name="ROAS real (base + recuperado GA4)", mode="lines+markers", line=dict(color=METRIC_COLORS["margem_pct"], width=2, dash="dot"),
-                                 hovertemplate="semana de %{x}<br>%{y:.1f}×<extra></extra>"), secondary_y=True)
     plotly_layout(fig, height=300, hovermode="x unified", xaxis=dict(type="category", dtick=1, gridcolor=COLORS["grid"]))
     fig.update_yaxes(tickprefix="R$ ", gridcolor=COLORS["grid"], secondary_y=False)
     fig.update_yaxes(ticksuffix="×", showgrid=False, rangemode="tozero", secondary_y=True)
@@ -228,12 +229,12 @@ def _campanhas_janela(perf, lei, vendas, ponte, ga4, ini, fim, ant_ini, ant_fim,
     v = sm.entre(vendas, "dt_pedido", ini, fim)
     ped = v.groupby("cd_codigo_interno", as_index=False).agg(origem=("origem", "first"), midia=("midia", "first"), ds_gclid=("ds_gclid", "first"), ds_utm_campaign=("ds_utm_campaign", "first"),
                                                             valor=("vl_liquido_item", "sum"), marg=("vl_margem_contribuicao", "sum"))
-    ped = ped[(ped["origem"] == "google") & (ped["midia"] == "cpc")]
+    ids = _ids_recuperados(ponte_ga4)
+    ped = ped[(ped["origem"] == "google") & (ped["midia"] == "cpc") & ~ped["cd_codigo_interno"].isin(ids)]     # só-URL: os recuperados entram pela ponte, abaixo
     pc = pedidos_com_campanha(ped, ponte).groupby("cd_campanha", dropna=False).agg(pedidos=("campanha", "size"), fat=("valor", "sum"), marg=("marg", "sum")).reset_index()
     nao_ident = pc[pc["cd_campanha"].isna()]
     g = g.merge(pc[pc["cd_campanha"].notna()], on="cd_campanha", how="left")
     # recuperados pelo GA4: o clique do Ads vem da ponte (tb_atribuicao_pedido_ga4), não do gclid da URL de entrada
-    ids = _ids_recuperados(ponte_ga4)
     pr = pd.DataFrame(columns=["cd_campanha", "ped_rec", "fat_rec"])
     if ids:
         pg = ponte_ga4[ponte_ga4["cd_codigo_interno"].isin(ids)][["cd_codigo_interno", "cd_campanha_ads"]].rename(columns={"cd_campanha_ads": "cd_campanha"})
@@ -246,11 +247,11 @@ def _campanhas_janela(perf, lei, vendas, ponte, ga4, ini, fim, ant_ini, ant_fim,
     g = g.merge(gs, on="campanha", how="left")
     for col in ["pedidos", "fat", "marg", "sess", "eng", "custo_ant", "cliques_ant", "ped_rec", "fat_rec"]:
         g[col] = pd.to_numeric(g[col]).fillna(0.0)
+    g["pedidos"], g["fat"] = g["pedidos"] + g["ped_rec"], g["fat"] + g["fat_rec"]          # Google pago real = só-URL (por gclid) + recuperados GA4
     g["ctr"] = g["cliques"] / g["impr"].where(g["impr"] > 0)
     g["cpc"] = g["custo"] / g["cliques"].where(g["cliques"] > 0)
     g["cpa"] = g["custo"] / g["compras"].where(g["compras"] > 0)
     g["roas"] = g["fat"] / g["custo"].where(g["custo"] > 0)
-    g["roas_final"] = (g["fat"] + g["fat_rec"]) / g["custo"].where(g["custo"] > 0)
     return g[(g["custo"] > 0) | (g["impr"] > 0)].sort_values("custo", ascending=False), (int(nao_ident["pedidos"].sum()) if not nao_ident.empty else 0)
 
 
@@ -390,7 +391,7 @@ def render():
     t10, c10 = variacao(mc_custo, mc_custo_a, rot_ant, fmt=lambda v: f"{v:.1f}×".replace(".", ","))
     infl = _div(a["valor"], r["fat"])
     render_cards([
-        card("Pedidos de Google pago (real)", f"{r['pedidos']}", f"{r['novos']} de clientes novos · origem google / cpc pela URL de entrada", delta=t7, delta_color=c7,
+        card("Pedidos de Google pago (real)", f"{r['pedidos']}", f"{r['novos']} de clientes novos · {r['url_pedidos']} pela URL de entrada + {r['rec_pedidos']} recuperado(s) pelo GA4", delta=t7, delta_color=c7,
              variant="warn" if r["pedidos"] < AMOSTRA_MIN else "neutral", ref=f"amostra pequena (< {AMOSTRA_MIN} pedidos)" if r["pedidos"] < AMOSTRA_MIN else ""),
         card("Faturamento de Google pago", brl(r["fat"]), "produtos líquidos + frete pago", delta=t8, delta_color=c8),
         card("ROAS real", f"{roas:.1f}×".replace(".", ",") if roas is not None else "—", "faturamento de Google pago ÷ investimento", delta=t9, delta_color=c9,
@@ -401,29 +402,14 @@ def render():
         card("Valor que o Ads reporta ÷ real", f"{infl:.1f}×".replace(".", ",") if infl else "—", f"Ads: {brl(a['valor'])} · real: {brl(r['fat'])}",
              ref="acima de 1× = o Ads credita mais venda do que a nossa base confirma"),
     ])
-    # Google pago = base (URL de entrada) + recuperado pela ponte do GA4 (pedido sem parâmetro cujo comprador tem clique do Ads no GA4)
+    # Google pago = URL de entrada + recuperado pela ponte do GA4 (a origem final já vem recuperada do dbt)
     if ponte_ga4 is None:
-        note("<strong>Ponte GA4 indisponível:</strong> a tabela <code>tb_atribuicao_pedido_ga4</code> não carregou; os números de Google pago acima usam só a URL de entrada.", variant="warn")
+        note("<strong>Ponte GA4 indisponível:</strong> a tabela <code>tb_atribuicao_pedido_ga4</code> não carregou; o Google pago acima usa só a origem da URL de entrada.", variant="warn")
     else:
-        roas_f, roas_fa = _div(r["fat_final"], a["custo"]), _div(ra["fat_final"], aa["custo"])
-        mcc_f, mcc_fa = _div(r["mc_final"], a["custo"]), _div(ra["mc_final"], aa["custo"])
-        tf1, cf1 = variacao(r["pedidos_final"], ra["pedidos_final"], rot_ant, fmt=lambda v: f"{int(v)}")
-        tf2, cf2 = variacao(r["fat_final"], ra["fat_final"], rot_ant, fmt=fr)
-        tf3, cf3 = variacao(roas_f, roas_fa, rot_ant, fmt=lambda v: f"{v:.1f}×".replace(".", ","))
-        tf4, cf4 = variacao(mcc_f, mcc_fa, rot_ant, fmt=lambda v: f"{v:.1f}×".replace(".", ","))
-        render_cards([
-            card("Google pago (base + recuperado GA4)", f"{r['pedidos_final']}", f"{r['pedidos']} pela URL de entrada + {r['rec_pedidos']} recuperado(s) pelo GA4 · {r['novos_final']} de clientes novos", delta=tf1, delta_color=cf1,
-                 variant="warn" if r["pedidos_final"] < AMOSTRA_MIN else "neutral", ref=f"amostra pequena (< {AMOSTRA_MIN} pedidos)" if r["pedidos_final"] < AMOSTRA_MIN else ""),
-            card("Faturamento (base + recuperado)", brl(r["fat_final"]), f"{brl(r['rec_fat'])} vêm da ponte do GA4", delta=tf2, delta_color=cf2),
-            card("ROAS real (base + recuperado)", f"{roas_f:.1f}×".replace(".", ",") if roas_f is not None else "—", "faturamento de Google pago com a ponte ÷ investimento", delta=tf3, delta_color=cf3,
-                 variant=("neutral" if r["pedidos_final"] < AMOSTRA_MIN else "ok" if roas_f and roas_f >= 3 else "warn" if roas_f and roas_f >= 1.4 else "bad" if roas_f is not None else "neutral"),
-                 ref="equilíbrio ~1,4× · confortável ≥ 3×" + (" · amostra pequena: sem semáforo" if r["pedidos_final"] < AMOSTRA_MIN else "")),
-            card("Margem ÷ custo (base + recuperado)", f"{mcc_f:.1f}×".replace(".", ",") if mcc_f is not None else "—", "≥ 1× = a mídia se pagou só com a margem", delta=tf4, delta_color=cf4,
-                 variant=("neutral" if r["pedidos_final"] < AMOSTRA_MIN else "ok" if mcc_f and mcc_f >= 1 else "bad" if mcc_f is not None else "neutral")),
-        ])
-        note("<strong>Base + recuperado GA4:</strong> <em>recuperado</em> = pedido que chegou sem parâmetro na URL de entrada, mas cujo comprador (mesmo cookie no GA4) tinha um clique do Google Ads nos 30 dias anteriores à compra; "
-             "vale o último clique do Ads. É regra de crédito, não prova de causalidade; cookie limpo ou outro aparelho não são recuperados, e o gclid de uma visita antiga reaberta pode ser contado. "
-             "Pedido que já tem origem na URL (ex.: Instagram) não é reatribuído.")
+        note("<strong>Google pago (real)</strong> = origem google / cpc pela URL de entrada <strong>+ pedidos recuperados pelo GA4</strong>: o pedido chegou sem parâmetro na URL, mas o comprador (mesmo cookie no GA4) tinha um clique do Google Ads "
+             "nos 30 dias anteriores à compra; vale o último clique do Ads (regra no dbt, <code>tb_atribuicao_pedido</code>). É regra de crédito, não prova de causalidade; cookie limpo ou outro aparelho não são recuperados, "
+             "e o gclid de uma visita antiga reaberta pode ser contado. Pedido que já tem origem na URL (ex.: Instagram) não é reatribuído. "
+             f"Nesta semana: {r['url_pedidos']} pela URL + {r['rec_pedidos']} recuperado(s).")
     t11, c11 = variacao(g4["sessoes"], g4a["sessoes"], rot_ant, fmt=lambda v: f"{v:.0f}")
     t12, c12 = variacao(g4["pct_eng"], g4a["pct_eng"], rot_ant, tipo="pp")
     ratio = _div(g4["sessoes"], a["cliques"])
@@ -447,7 +433,7 @@ def render():
             "Semana": [sm.rotulo(s, f) for s, f in zip(tab["seg"], tab["fim"])], "Dias": tab["n"], "Investimento": tab["a_custo"], "Por dia": tab["a_custo"] / tab["n"],
             "Impressões": tab["a_impr"], "Cliques": tab["a_cliques"], "CTR": tab["a_ctr"], "CPC": tab["a_cpc"], "Compras (Ads)": tab["a_compras"], "CPA (Ads)": tab["a_cpa"],
             "Sessões GA4 (cpc)": tab["sess"], "Pedidos reais": tab["pedidos"], "Faturamento real": tab["fat"], "ROAS real": tab["roas"], "Margem ÷ custo": tab["mc_custo"],
-            "Recuperados GA4": tab["ped_rec"], "ROAS real (base + GA4)": tab["roas_final"], "Margem ÷ custo (base + GA4)": tab["mc_custo_final"],
+            "Recuperados GA4": tab["ped_rec"],
         }).iloc[::-1]
         st.dataframe(out, hide_index=True, use_container_width=True,
                      column_config={"Semana": st.column_config.TextColumn(width=170), "Dias": st.column_config.NumberColumn(format="%d", width=55), "Investimento": st.column_config.NumberColumn(format="R$ %.0f", width=100),
@@ -456,8 +442,7 @@ def render():
                                     "CPA (Ads)": st.column_config.NumberColumn(format="R$ %.0f", width=90), "Sessões GA4 (cpc)": st.column_config.NumberColumn(format="%.0f", width=130),
                                     "Pedidos reais": st.column_config.NumberColumn(format="%d", width=100), "Faturamento real": st.column_config.NumberColumn(format="R$ %.0f", width=120),
                                     "ROAS real": st.column_config.NumberColumn(format="%.1f×", width=90), "Margem ÷ custo": st.column_config.NumberColumn(format="%.1f×", width=120),
-                                    "Recuperados GA4": st.column_config.NumberColumn(format="%d", width=125), "ROAS real (base + GA4)": st.column_config.NumberColumn(format="%.1f×", width=160),
-                                    "Margem ÷ custo (base + GA4)": st.column_config.NumberColumn(format="%.1f×", width=190)})
+                                    "Recuperados GA4": st.column_config.NumberColumn(format="%d", width=125)})
         col1, col2 = st.columns(2)
         with col1:
             st.html('<div class="c-label" style="margin:0 0 10px">Investimento por dia × ROAS real</div>')
@@ -482,12 +467,11 @@ def render():
                "ped_rec": camp["ped_rec"].sum()}
         tot["ctr"], tot["cpc"], tot["cpa"] = _div(tot["cliques"], tot["impr"]), _div(tot["custo"], tot["cliques"]), _div(tot["custo"], tot["compras"])
         tot["roas"] = _div(tot["fat"], tot["custo"])
-        tot["roas_final"] = _div(tot["fat"] + camp["fat_rec"].sum(), tot["custo"])
         camp2 = pd.concat([camp, pd.DataFrame([tot])], ignore_index=True)
         st.dataframe(pd.DataFrame({
             "Campanha": camp2["campanha"], "Tipo": camp2["tipo"], "Situação": camp2["status"].map({"ENABLED": "ativa", "PAUSED": "pausada", "REMOVED": "removida"}).fillna(""),
             "Investimento": camp2["custo"], "Δ vs. anterior (R$)": camp2["custo"] - camp2["custo_ant"], "Impressões": camp2["impr"], "Cliques": camp2["cliques"], "CTR": camp2["ctr"], "CPC": camp2["cpc"],
-            "Compras (Ads)": camp2["compras"], "CPA (Ads)": camp2["cpa"], "Sessões GA4": camp2["sess"], "Pedidos reais": camp2["pedidos"], "ROAS real": camp2["roas"], "Recuperados GA4": camp2["ped_rec"], "ROAS real (base + GA4)": camp2["roas_final"],
+            "Compras (Ads)": camp2["compras"], "CPA (Ads)": camp2["cpa"], "Sessões GA4": camp2["sess"], "Pedidos reais": camp2["pedidos"], "ROAS real": camp2["roas"], "Recuperados GA4": camp2["ped_rec"],
             "Impr. ganhas": camp2["is_"], "Perda orçamento": camp2["perda_orc"], "Perda classificação": camp2["perda_rank"],
         }), hide_index=True, use_container_width=True,
             column_config={"Campanha": st.column_config.TextColumn(width="large"), "Tipo": st.column_config.TextColumn(width=80), "Situação": st.column_config.TextColumn(width=80),
@@ -495,10 +479,10 @@ def render():
                            "Impressões": st.column_config.NumberColumn(format="%.0f", width=90), "Cliques": st.column_config.NumberColumn(format="%.0f", width=75), "CTR": st.column_config.NumberColumn(format="percent", width=70),
                            "CPC": st.column_config.NumberColumn(format="R$ %.2f", width=75), "Compras (Ads)": st.column_config.NumberColumn(format="%.1f", width=110), "CPA (Ads)": st.column_config.NumberColumn(format="R$ %.0f", width=90),
                            "Sessões GA4": st.column_config.NumberColumn(format="%.0f", width=100), "Pedidos reais": st.column_config.NumberColumn(format="%.0f", width=100), "ROAS real": st.column_config.NumberColumn(format="%.1f×", width=90),
-                           "Recuperados GA4": st.column_config.NumberColumn(format="%.0f", width=125), "ROAS real (base + GA4)": st.column_config.NumberColumn(format="%.1f×", width=160),
+                           "Recuperados GA4": st.column_config.NumberColumn(format="%.0f", width=125),
                            "Impr. ganhas": st.column_config.NumberColumn(format="percent", width=100), "Perda orçamento": st.column_config.NumberColumn(format="percent", width=120), "Perda classificação": st.column_config.NumberColumn(format="percent", width=140)})
         note(f"<strong>Como ler:</strong> <em>Pedidos reais</em> ligam o pedido à campanha pelo <code>gclid</code> da URL de entrada; {nao_ident} pedido(s) de Google pago da semana ficam em “{NAO_IDENTIFICADA}” "
-             "(iPhone/sem gclid ou clique fora do histórico) e por isso a soma das campanhas pode ficar abaixo do total do topo. <em>Recuperados GA4</em> são pedidos sem parâmetro ligados à campanha pelo clique que o GA4 viu antes da compra (a campanha vem da ponte, não do gclid da URL). <em>Sessões GA4</em> casam pelo nome da campanha. "
+             "(iPhone/sem gclid ou clique fora do histórico) e por isso a soma das campanhas pode ficar abaixo do total do topo. <em>Pedidos reais</em> já incluem os <em>Recuperados GA4</em>: pedidos sem parâmetro ligados à campanha pelo clique que o GA4 viu antes da compra (a campanha vem da ponte, não do gclid da URL). <em>Sessões GA4</em> casam pelo nome da campanha. "
              "<em>Impr. ganhas / perdas</em> = participação de impressões, ponderada pelas impressões elegíveis; perda por <strong>classificação</strong> é lance/qualidade do anúncio, perda por <strong>orçamento</strong> é o teto diário. "
              "Abaixo de 10% o Google só informa “&lt; 10%” (aparece como 9,99%). Campanhas de Shopping/PMax têm atribuição de pedido mais incerta (ver Canais &amp; Unit Economics): ROAS real ali é piso. "
              "Poucos pedidos por campanha: leia como hipótese.")
@@ -538,7 +522,7 @@ def render():
     fig, a_dia, o_dia, dias = _grafico_dias(perf, orc, ga4, vendas, j)
     with st.container(border=True):
         st.plotly_chart(fig, use_container_width=True)
-    vd = vendas[(vendas["origem"] == "google") & (vendas["midia"] == "cpc")]
+    vd = vendas[((vendas["origem"] == "google") & (vendas["midia"] == "cpc")) | vendas["cd_codigo_interno"].isin(_ids_recuperados(ponte_ga4))]
     ped_dia = vd.groupby(vd["dt_pedido"].dt.normalize())["cd_codigo_interno"].nunique()
     sess_dia = ga4.groupby("dt_data")["sessoes"].sum()
     linhas = []

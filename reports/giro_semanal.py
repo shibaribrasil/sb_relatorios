@@ -63,14 +63,14 @@ def componentes(ctx, ini, fim):
     fx = sm.entre(ctx["funil"], "dt_data", ini, fim).groupby("ds_etapa_funil")["qt_ocorrencias"].sum()
     v = sm.entre(ctx["vendas"], "dt_pedido", ini, fim)
     s = _somas(v)
-    gp = ga.google_pago_recuperado(ctx["vendas"], ctx.get("ponte"), ini, fim)   # base + recuperado GA4 (ponte); sem ponte, rec_* = 0
+    gp = ga.google_pago_recuperado(ctx["vendas"], ctx.get("ponte"), ini, fim)   # URL de entrada + recuperado GA4 (ponte); sem ponte, rec_* = 0
     return {"custo": a["custo"], "cliques": a["cliques"], "impr": a["impr"], "compras_ads": a["compras"], "valor_ads": a["valor"],
             "sess": float(gx["qt_sessoes"].sum()), "sess_eng": float(gx["qt_sessoes_engajadas"].sum()),
             "sess_cpc": float(cpc["qt_sessoes"].sum()), "sess_cpc_eng": float(cpc["qt_sessoes_engajadas"].sum()),
             "view_item": float(fx.get("view_item", 0.0)), "add_cart": float(fx.get("add_to_cart", 0.0)), "checkout": float(fx.get("begin_checkout", 0.0)), "purchase_ga4": float(fx.get("purchase", 0.0)),
             "pedidos": float(s["pedidos"]), "fat": s["vl_liquido_item"], "mc": s["vl_margem_contribuicao"],
             "ped_gp": float(gp["pedidos"]), "fat_gp": gp["fat"], "mc_gp": gp["mc"], "novos_gp": float(gp["novos"]),
-            "ped_gpr": float(gp["pedidos_final"]), "fat_gpr": gp["fat_final"], "mc_gpr": gp["mc_final"], "rec_gp": float(gp["rec_pedidos"])}
+            "rec_gp": float(gp["rec_pedidos"])}
 
 
 def _media(comps):
@@ -92,7 +92,7 @@ def derivados(c):
         "pedidos": c["pedidos"], "conv": _d(c["pedidos"], c["sess"]), "ticket": _d(c["fat"], c["pedidos"]),
         "fat": c["fat"], "mc": c["mc"], "mc_pos": c["mc"] - c["custo"],
         "roas": _d(c["fat_gp"], c["custo"]), "mc_custo": _d(c["mc_gp"], c["custo"]), "mer": _d(c["fat"], c["custo"]),
-        "roas_gpr": _d(c["fat_gpr"], c["custo"]), "mc_custo_gpr": _d(c["mc_gpr"], c["custo"]), "ped_gpr": c["ped_gpr"], "rec_gp": c["rec_gp"],
+        "rec_gp": c["rec_gp"],
         "ped_gp": c["ped_gp"], "custo_ped": _d(c["custo"], c["ped_gp"]), "mc_ped_gp": _d(c["mc_gp"], c["ped_gp"]),
         "part_gp": _d(c["ped_gp"], c["pedidos"]), "paridade": _d(c["purchase_ga4"], c["pedidos"]),
     }
@@ -139,7 +139,6 @@ LINHAS = [
     ("5 · Retorno", "Margem de contribuição (antes de mídia)", "mc", f_brl, "up", lambda c: c["pedidos"] >= AMOSTRA_PEDIDOS),
     ("5 · Retorno", "Margem após mídia", "mc_pos", f_brl, "up", lambda c: c["pedidos"] >= AMOSTRA_PEDIDOS),
     ("5 · Retorno", "ROAS real do Google pago", "roas", f_x, "up", lambda c: c["ped_gp"] >= 3),
-    ("5 · Retorno", "ROAS real do Google pago (base + recuperado GA4)", "roas_gpr", f_x, "up", lambda c: c["ped_gpr"] >= 3),
     ("5 · Retorno", "MER (faturamento total ÷ investimento)", "mer", f_x, "up", lambda c: c["pedidos"] >= AMOSTRA_PEDIDOS),
 ]
 
@@ -500,7 +499,7 @@ def render():
     t6, c6 = ga.variacao(C["mc_pos"], derivados(ca)["mc_pos"], rot_ant, fmt=f_brl)
     render_cards([
         card("Faturamento", brl(c["fat"]), "todas as origens", delta=t1, delta_color=c1),
-        card("Pedidos", f_int(c["pedidos"]), f"{f_int(c['ped_gpr'])} de Google pago ({f_int(c['rec_gp'])} recuperado(s) pelo GA4)", delta=t2, delta_color=c2, variant="warn" if c["pedidos"] < AMOSTRA_PEDIDOS else "neutral",
+        card("Pedidos", f_int(c["pedidos"]), f"{f_int(c['ped_gp'])} de Google pago ({f_int(c['rec_gp'])} recuperado(s) pelo GA4)", delta=t2, delta_color=c2, variant="warn" if c["pedidos"] < AMOSTRA_PEDIDOS else "neutral",
              ref=f"amostra pequena (< {AMOSTRA_PEDIDOS})" if c["pedidos"] < AMOSTRA_PEDIDOS else ""),
         card("Sessões no site", f_int(c["sess"]), f"{f_int(c['sess_cpc'])} vindas de Google pago", delta=t3, delta_color=c3),
         card("Conversão", f_pct(C["conv"]), "pedidos ÷ sessões", delta=t4, delta_color=c4),
@@ -560,15 +559,14 @@ def render():
         d, cc = derivados(s["c"]), s["c"]
         linhas.append({"Semana": sm.rotulo(s["seg"], s["fim"]), "Dias": s["n"], "Investimento": cc["custo"], "Cliques": cc["cliques"], "Sessões": cc["sess"], "Sess. Google pago": cc["sess_cpc"],
                        "Conversão": d["conv"], "Pedidos": cc["pedidos"], "Ticket": d["ticket"], "Faturamento": cc["fat"], "Margem contrib.": cc["mc"], "Margem após mídia": d["mc_pos"],
-                       "ROAS real (Google pago)": d["roas"], "Recuperados GA4": cc["rec_gp"], "ROAS real (base + GA4)": d["roas_gpr"], "MER": d["mer"]})
+                       "ROAS real (Google pago)": d["roas"], "Recuperados GA4": cc["rec_gp"], "MER": d["mer"]})
     if linhas:
         st.dataframe(pd.DataFrame(linhas).iloc[::-1], hide_index=True, use_container_width=True,
                      column_config={"Semana": st.column_config.TextColumn(width=170), "Dias": st.column_config.NumberColumn(format="%d", width=55), "Investimento": st.column_config.NumberColumn(format="R$ %.0f", width=100),
                                     "Cliques": st.column_config.NumberColumn(format="%.0f", width=75), "Sessões": st.column_config.NumberColumn(format="%.0f", width=80), "Sess. Google pago": st.column_config.NumberColumn(format="%.0f", width=125),
                                     "Conversão": st.column_config.NumberColumn(format="percent", width=90), "Pedidos": st.column_config.NumberColumn(format="%.0f", width=80), "Ticket": st.column_config.NumberColumn(format="R$ %.0f", width=80),
                                     "Faturamento": st.column_config.NumberColumn(format="R$ %.0f", width=110), "Margem contrib.": st.column_config.NumberColumn(format="R$ %.0f", width=120),
-                                    "Margem após mídia": st.column_config.NumberColumn(format="R$ %.0f", width=135), "ROAS real (Google pago)": st.column_config.NumberColumn(format="%.1f×", width=160), "Recuperados GA4": st.column_config.NumberColumn(format="%.0f", width=125),
-                                    "ROAS real (base + GA4)": st.column_config.NumberColumn(format="%.1f×", width=160), "MER": st.column_config.NumberColumn(format="%.1f×", width=70)})
+                                    "Margem após mídia": st.column_config.NumberColumn(format="R$ %.0f", width=135), "ROAS real (Google pago)": st.column_config.NumberColumn(format="%.1f×", width=160), "Recuperados GA4": st.column_config.NumberColumn(format="%.0f", width=125), "MER": st.column_config.NumberColumn(format="%.1f×", width=70)})
     note("Totais da semana (na semana em andamento, o acumulado dos dias fechados). Fontes: Google Ads (<code>tb_gads_*</code>), GA4 (<code>tb_ga4_canal_diario</code>, <code>tb_ga4_funil</code>) e <code>tb_pedido</code>. "
-         "<strong>Recuperados GA4</strong> = pedidos sem parâmetro na URL cujo comprador tinha clique do Google Ads no GA4 (último clique, 30 dias); <em>ROAS real (base + GA4)</em> soma esses pedidos ao Google pago pela URL de entrada. "
+         "<strong>Recuperados GA4</strong> = pedidos sem parâmetro na URL cujo comprador tinha clique do Google Ads no GA4 (último clique, 30 dias); o Google pago e o ROAS real já incluem esses pedidos. "
          "Margem de contribuição é <strong>antes de mídia</strong>; “após mídia” subtrai só o Google Ads (Meta/Instagram pago não tem custo na base). O histórico de GA4 começa em 01/07/2026, por isso o normal das semanas iniciais tem menos de 4 janelas.")

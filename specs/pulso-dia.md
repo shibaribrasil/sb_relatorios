@@ -13,7 +13,7 @@ Página operacional: responde "como está hoje, o que está parado e se o mês v
 - **Projeção do mês** = média de vendas por dia (faturamento dos dias fechados ÷ dias corridos fechados) × dias do mês. Referência de ritmo, não previsão; sem projeção no 1º dia do mês. Comparada à meta do mês (a meta ainda precisa ser revista).
 - **Meta acumulada / atingimento:** `vl_meta_dia_acumulado` da data de hoje; atingimento = faturamento do mês ÷ meta acumulada.
 - **Semana** = segunda a domingo. Comparação justa: semana atual até hoje × mesmos dias da semana anterior; mais a semana anterior inteira.
-- **Origem** = `ds_origem_venda`/`ds_midia_venda` (URL de entrada); "(sem parametro)" agrega sem UTM/clique e sem landing_url. Últimos 7 dias.
+- **Origem** = `ds_origem_venda`/`ds_midia_venda` (URL de entrada; pedido sem parâmetro com clique do Google Ads recuperado pelo GA4 vira google/cpc, desde 19/10/2026); "(sem parametro)" agrega sem UTM/clique e sem landing_url. Últimos 7 dias.
 - **Google Ads** chega com 1–2 dias de atraso: o investimento por pedido usa só os pedidos até o último dia com custo.
 - Aggregations no Streamlit são só somas/filtros; o único cálculo de regra (dias úteis desde o pagamento, limite de 2) está aqui por ser de apresentação/alerta; se virar métrica oficial, mover para o dbt.
 

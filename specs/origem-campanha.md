@@ -5,7 +5,7 @@ Abaixo de cada tabela "Origem das vendas" (Pulso do Dia — últimos 7 dias, Ven
 ## De onde vem a campanha
 | Origem/mídia | Campanha | Fonte |
 |---|---|---|
-| google · cpc | nome da campanha do Google Ads | `ds_gclid` (URL de entrada, `tb_atribuicao_pedido`) → `tb_gads_clique_campanha` (dataset US; junta no pandas) |
+| google · cpc | nome da campanha do Google Ads | `ds_gclid` (URL de entrada ou, no pedido recuperado pelo GA4, o gclid do GA4; `tb_atribuicao_pedido`) → `tb_gads_clique_campanha` (dataset US; junta no pandas) |
 | demais | `utm_campaign` da URL de entrada | `tb_atribuicao_pedido.ds_utm_campaign` (só ~10% dos pedidos trazem UTM) |
 
 Google pago traz ainda, por campanha e no período: **custo, cliques e compras reportadas pelo Ads** (`tb_gads_campanha_performance`) e **margem ÷ custo** (onde há margem). Campanhas com custo e sem pedido atribuído aparecem (custo sem venda identificada).
