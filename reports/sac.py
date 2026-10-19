@@ -18,6 +18,7 @@ from common import mensagens_sac as msg
 from common.design import inject_css, section_title, note, card, render_cards, brl
 from common.logistica import carregar_logistica
 from common import cupom as cup
+from common.utm import com_utm
 from common.tarefas import carregar_tarefas, salvar_tarefas, TABELA as TAB_TAREFAS, HISTORICO as TAB_HISTORICO
 from common.frescor import carregar_frescor, badge_atualizacao, detalhe_atualizacao, alerta_atraso
 
@@ -359,7 +360,7 @@ def _lista_recompra_piloto(df, cupons, agora=None):
             continue
         cupom_txt.append(f"{c['codigo']} — vence {c['expira_em'].strftime('%d/%m')}")
         whatsapp.append(msg.link_whatsapp(r["nr_telefone"], msg.msg_recompra_ultimo_contato(
-            r["nm_cliente"], cup.link_cupom(c["codigo"]), c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])))
+            r["nm_cliente"], cup.link_cupom(c["codigo"], "recompra_perdido"), c["valor"], cup.MIN_COMPRA_RETORNO, c["expira_em"])))
         obs.append(sem_fone)
     el["cupom"], el["whatsapp"], el["obs"] = cupom_txt, whatsapp, obs
     el["pedidos_txt"] = el["qt_pedidos"].map(lambda n: f"{int(n)}" if pd.notna(n) else "antes de 11/2023")
@@ -420,7 +421,7 @@ def _lista_carrinhos(car):
     fone = car["nr_telefone"].map(msg.telefone_whatsapp)
     repetido = fone.notna() & fone.duplicated(keep="first")
     car["whatsapp"] = [
-        None if rep else msg.link_whatsapp(r["nr_telefone"], msg.msg_carrinho(r["nm_cliente"], r["fg_cliente_recorrente"], r["ds_url_recuperacao"]))
+        None if rep else msg.link_whatsapp(r["nr_telefone"], msg.msg_carrinho(r["nm_cliente"], r["fg_cliente_recorrente"], com_utm(r["ds_url_recuperacao"], "recuperacao")))
         for rep, (_, r) in zip(repetido, car.iterrows())
     ]
     car["obs"] = [
@@ -496,7 +497,7 @@ def _lista_recontato(df, cupons, agora=None):
             continue
         cupom_txt.append(f"{c['codigo']} — vence {c['expira_em'].strftime('%d/%m %H:%M')}")
         whatsapp.append(msg.link_whatsapp(r["nr_telefone"], msg.msg_recontato_cupom(
-            r["nm_cliente"], r["origem"], r["cd_pedido_loja"], c["codigo"], c["valor"], c["expira_em"], r["ds_url_recuperacao"])))
+            r["nm_cliente"], r["origem"], r["cd_pedido_loja"], c["codigo"], c["valor"], c["expira_em"], com_utm(r["ds_url_recuperacao"], "recuperacao"))))
         obs.append(sem_fone)
     el["cupom"], el["whatsapp"], el["obs"] = cupom_txt, whatsapp, obs
     return el
@@ -1045,7 +1046,7 @@ def _lista_fila(df, tipo, cupons, feitos, agora=None, previa=False):
                 continue
             c = {"codigo": "PREVIA", "valor": float(valor_f), "expira_em": agora + pd.Timedelta(days=_validade_dias(r) if tipo.startswith("jornada") else 21)}
             cupom_txt.append("— (a gerar · prévia)")
-            link = cup.link_cupom(c["codigo"])
+            link = cup.link_cupom(c["codigo"], tipo)
             if tipo.startswith("jornada"):
                 texto = _texto_jornada(tipo, r, c, link, agora)
             elif tipo == "esgotamento_maturacao":
@@ -1069,7 +1070,7 @@ def _lista_fila(df, tipo, cupons, feitos, agora=None, previa=False):
             obs.append(" · ".join(t for t in ("cupom expirado em " + c["expira_em"].strftime("%d/%m %H:%M"), sem_fone) if t))
             continue
         cupom_txt.append(f"{c['codigo']} — vence {c['expira_em'].strftime('%d/%m')}")
-        link = cup.link_cupom(c["codigo"])
+        link = cup.link_cupom(c["codigo"], tipo)
         if tipo.startswith("jornada"):
             texto = _texto_jornada(tipo, r, c, link, agora)
         elif tipo == "esgotamento_maturacao":

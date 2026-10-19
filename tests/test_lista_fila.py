@@ -209,3 +209,18 @@ def test_geracao_em_lote_segue_apos_um_erro_e_conta_os_dois(monkeypatch):
 def test_so_w0_e_esgotamento_geram_cupom():
     assert sac._gerar_da_fila("jornada_w0") and sac._gerar_da_fila("esgotamento_dormente") and sac._gerar_da_fila("esgotamento_maturacao")
     assert sac._gerar_da_fila("jornada_w1") is None and sac._gerar_da_fila("jornada_w2") is None and sac._gerar_da_fila("jornada_w2_final") is None
+
+
+def test_link_do_cupom_em_cada_lista_leva_o_utm_da_mensagem():
+    """W0, W1, W2 (e o lembrete final) e esgotamento: o link que o Robson envia já vai marcado (plano de rastreamento de 19/10/2026)."""
+    esperado = {"jornada_w0": "posvenda_w0", "jornada_w1": "posvenda_w1", "jornada_w2": "posvenda_w2", "jornada_w2_final": "posvenda_w2"}
+    for tipo, camp in esperado.items():
+        t = _texto(sac._lista_fila(_df().assign(ds_campanha=tipo), tipo, _cupons(), feitos=set(), agora=AGORA), "1|11")
+        link = next(l for l in t.split(chr(10)) if l.startswith("https://shibaribrasil.com.br/discount/"))
+        assert link == f"https://shibaribrasil.com.br/discount/CASHBACKPOSCOMPRAAB12?utm_source=whatsapp&utm_medium=messaging&utm_campaign={camp}"
+    # esgotamento (cupom criado pela lista; aqui o da prévia) e W0 combinada (pedido já entregue)
+    esg = sac._lista_fila(_df(), "esgotamento_dormente", VAZIO, feitos=set(), agora=AGORA, previa=True)
+    assert "utm_campaign=posvenda_esgotamento" in unquote(esg.iloc[0]["whatsapp"])
+    df = _df(); df.loc[df["chave"] == "1|11", "dt_entrega"] = pd.Timestamp("2026-10-19")
+    comb = _texto(sac._lista_fila(df, "jornada_w0", _cupons(), feitos=set(), agora=AGORA), "1|11")
+    assert "Vi que o seu pedido chegou" in comb and "utm_campaign=posvenda_w0" in comb
