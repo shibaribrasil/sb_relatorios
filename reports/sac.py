@@ -377,6 +377,8 @@ def _lista_entregas_problema(logi):
     em_transito = logi[logi["ds_situacao_logistica"] == "em_transito"]
     parado = em_transito["qt_dias_sem_movimento"] >= DIAS_PARADO
     risco = logi[logi["fg_atrasado_em_aberto"] | logi["fg_problema_entrega_ativo"] | (logi["ds_situacao_logistica"] == "em_transito") & parado].copy()
+    if risco.empty:  # apply(axis=1) em DataFrame vazio devolve DataFrame e quebra a atribuição de coluna
+        return risco.assign(codigo=pd.Series(dtype=str), motivo=pd.Series(dtype=str), chave=pd.Series(dtype=str), whatsapp=pd.Series(dtype=object))
 
     def eh_parado(r):
         return r["ds_situacao_logistica"] == "em_transito" and r["qt_dias_sem_movimento"] >= DIAS_PARADO
