@@ -266,3 +266,6 @@ Origem: `sb_admin_team/planejamento/Plano de Rastreamento — 5 Frentes (19-10-2
 - **Como ler depois:** pedidos de quem clicou no link do cashback passam a ter `ds_utm_campaign = posvenda_w0` etc. em `tb_atribuicao_pedido`. É origem de **recompra** (reativação), não de aquisição: não usar para dizer de onde vêm os clientes novos (a pergunta "como você conheceu" foi adiada pelo Hugo em 19/10/2026). Novos clientes que caíam em "(sem parametro)" só mudam se o contato inicial vier de um link marcado.
 - **Limite:** o link só carrega a UTM se o cliente abrir o link da mensagem; quem digita o endereço ou volta por favorito continua sem origem.
 - **Testes:** `tests/test_utm.py` (convenção, idempotência, carrinho e recontato) e `test_link_do_cupom_em_cada_lista_leva_o_utm_da_mensagem` em `tests/test_lista_fila.py`.
+
+### W1 do 4º pedido em diante (26/10/2026)
+- A W1 de 4º pedido em diante **não tem cupom** (só o check-in, sem lembrete de cashback). A lista deve mostrar a mensagem mesmo sem cupom na `cupons_gerados`; 1º a 3º pedido sem cupom continua sem mensagem. Janela da W1: entrega + 2 a + 9 dias.
