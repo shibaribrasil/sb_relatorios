@@ -224,3 +224,15 @@ def test_link_do_cupom_em_cada_lista_leva_o_utm_da_mensagem():
     df = _df(); df.loc[df["chave"] == "1|11", "dt_entrega"] = pd.Timestamp("2026-10-19")
     comb = _texto(sac._lista_fila(df, "jornada_w0", _cupons(), feitos=set(), agora=AGORA), "1|11")
     assert "Vi que o seu pedido chegou" in comb and "utm_campaign=posvenda_w0" in comb
+
+
+def test_w1_do_4o_pedido_sai_sem_cashback_mesmo_sem_cupom():
+    """Bug de 26/10/2026: a W1 do 4º pedido em diante não tem cupom (só o check-in), mas a página mostrava "cashback da W0 não encontrado" e nenhuma mensagem."""
+    df = pd.DataFrame([{**BASE, "ds_campanha": "jornada_w1", "chave": "9|99", "nm_cliente": "Gabi", "nr_pedido": 4, "dt_entrega": pd.Timestamp("2026-10-23")},
+                       {**BASE, "ds_campanha": "jornada_w1", "chave": "8|88", "nm_cliente": "Hugo", "nr_pedido": 2, "dt_entrega": pd.Timestamp("2026-10-23")}])
+    w1 = sac._lista_fila(df, "jornada_w1", VAZIO, feitos=set(), agora=AGORA).set_index("chave")
+    texto = _texto(w1.reset_index(), "9|99")
+    assert "cashback" not in texto.lower() and "Gabi" in texto and "deu tudo certo" in texto and "SAIR" in texto
+    assert "4º pedido" in w1.loc["9|99", "cupom"]
+    # 1º a 3º pedido sem cupom continua sem mensagem (o cashback da W0 precisa existir)
+    assert pd.isna(w1.loc["8|88", "whatsapp"]) or w1.loc["8|88", "whatsapp"] is None

@@ -59,6 +59,7 @@ JANELA_CARRINHO = 15    # dias: carrinho mais velho que isso não vale mais cont
 JANELA_CANCELADO = 30   # dias desde o cancelamento
 FUSO = "America/Sao_Paulo"
 
+MAX_PEDIDO_CASHBACK = 3  # 1º a 3º pedido geram cashback (parâmetro `max_pedido_cashback` da planilha/dbt); do 4º em diante a W1 é só check-in
 GERAR = "Gerar cupom"  # coluna de marcação para a geração em lote (só nas listas que geram cupom)
 JA_TRATEI, RESOLUCAO, OBS_SAC = "Já tratei", "Resolução", "Observação SAC"  # colunas editáveis; entram em `colunas` na posição desejada
 EDITAVEIS = (JA_TRATEI, RESOLUCAO, OBS_SAC)
@@ -1058,6 +1059,13 @@ def _lista_fila(df, tipo, cupons, feitos, agora=None, previa=False):
             whatsapp.append(msg.link_whatsapp(r["nr_telefone"], texto)); obs.append(" · ".join(t for t in (atraso, sem_fone) if t))
             continue
         if r["chave"] not in mapa.index:
+            if tipo == "jornada_w1" and pd.notna(r.get("nr_pedido")) and int(r["nr_pedido"]) > MAX_PEDIDO_CASHBACK:
+                # 4º pedido em diante: a W1 é só o check-in, SEM cashback (não há cupom na W0). Antes não saía mensagem nenhuma (bug de 26/10/2026).
+                itens = [x for x in str(r.get("itens_pedido") or r.get("nm_produto") or "").split("||") if x]
+                texto = msg.msg_jornada_w1(r["nm_cliente"], itens, "", 0.0, cup.MIN_COMPRA_RETORNO, None, com_lembrete=False)
+                cupom_txt.append("— (4º pedido em diante: check-in sem cashback)")
+                whatsapp.append(msg.link_whatsapp(r["nr_telefone"], texto)); obs.append(sem_fone)
+                continue
             if tipo == "jornada_w0":
                 cupom_txt.append("— (a gerar)")
             elif tipo.startswith("jornada"):
@@ -1103,7 +1111,7 @@ def _gerar_da_fila(tipo):
 
 SECOES_FILA = {  # campanha -> (título da seção, nome do cupom no botão, nota de uma frase; o procedimento está em "Como operar o SAC")
     "jornada_w0": ("W0 — cashback logo depois do pagamento", "cashback", "Cashback de 10% do pedido em até 1 dia útil, antes de o pedido chegar."),
-    "jornada_w1": ("W1 — check-in depois da entrega", "cashback", "Pedido entregue há 2 dias: check-in e lembrete do cashback."),
+    "jornada_w1": ("W1 — check-in depois da entrega", "cashback", "Pedido entregue há 2 a 9 dias: check-in e lembrete do cashback (4º pedido em diante: só o check-in)."),
     "jornada_w2": ("W2 — lembrete do cashback", "cashback", "Lembrete do cashback, 15 dias depois da W1."),
     "jornada_w2_final": ("W2 — lembrete final (3º pedido)", "cashback", "Lembrete perto do vencimento do cashback."),
     "esgotamento_maturacao": ("Esgotamento — em maturação (31 a 90 dias)", "crédito de retorno", "Quem comprou entre 31 e 90 dias atrás. 10 por vez."),
