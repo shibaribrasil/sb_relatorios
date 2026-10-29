@@ -21,7 +21,7 @@ Substitui, para leitura gerencial, a `tb_resultado_final` (visão híbrida de ca
 
 ## Linhas da DRE (na ordem da tela)
 1. **Faturamento** (produtos líquidos + frete pago), por mês do pedido.
-2. **Margem de contribuição antes de mídia** = receita líquida de produtos + resultado de frete − CMV − taxa de pagamento − embalagem (estimada R$ 2,50/pedido) − imposto − reembolsos. **Reembolso no mês em que aconteceu** (sem data, cai no mês do pedido). Mesma regra de Vendas & Margem.
+2. **Margem de contribuição antes de mídia** = receita líquida de produtos + resultado de frete − CMV − taxa de pagamento − embalagem (estimada R$ 4,00/pedido) − imposto − reembolsos. **Reembolso no mês em que aconteceu** (sem data, cai no mês do pedido). Mesma regra de Vendas & Margem.
 3. **Mídia:** Google Ads (do Ads, por mês de consumo) e Meta/outras (contas a pagar, subcategoria "Propaganda e publicidade").
 4. **Despesas operacionais** (contas a pagar, por competência): pessoal (pró-labore), ferramentas e tecnologia, adicionais, financeiras, sem categoria.
 5. **Resultado operacional** = margem de contribuição − mídia − despesas operacionais. **Antes de imposto** (imposto 0% até haver CNPJ).

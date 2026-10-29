@@ -329,7 +329,7 @@ def render():
             _l("Google Ads", ads_mes, ads_ant, r["vl_saida_midia_google"],
                "pago no mês = consumo do mês anterior (M+1)"),
             _l("Embalagem", gm["vl_embalagem"].sum(), ga["vl_embalagem"].sum(), r["vl_saida_suprimentos"],
-               "estimativa (R$ 2,50/pedido) × suprimentos comprados"),
+               "estimativa (R$ 4,00/pedido) × suprimentos comprados"),
         ])
         cols_v = ("Gerencial no mês", "Gerencial no mês anterior", "Financeiro (pago no mês)")
         st.dataframe(ponte, hide_index=True, use_container_width=True,
