@@ -415,7 +415,7 @@ def _numeros(cat_sku, w, vendas, tot, hoje):
     note("<b>Participações</b>: do produto no total de unidades e de margem de contribuição da loja (ou da frente) no mesmo período; pedidos válidos, sem brinde. "
          "A frente é a do cadastro do produto (Shibari = produção própria; Curadoria = revenda). "
          "<b>Margem esperada</b> = preço “por” − custo − taxa de pagamento − embalagem − imposto, todos lidos da tabela de precificação (se mudarem lá, mudam aqui); "
-         "a <b>realizada</b> vem dos pedidos e já inclui cupom, frete e o mix de pagamento. Em margem esperada o imposto vem da tabela, e na realizada a loja ainda não paga imposto (sem CNPJ). Margens antes de mídia.")
+         "a <b>realizada</b> vem dos pedidos e já inclui cupom, frete e o mix de pagamento. Em margem esperada o imposto vem da tabela, e na realizada o imposto é 4% desde 29/10/2026 (0% nos pedidos anteriores). Margens antes de mídia.")
 
 
 def _grafico_evolucao(vendas, hist, rot_var):

@@ -32,7 +32,7 @@ Filtrar **sempre** por `fg_pedido_valido = TRUE`. Nenhuma página filtra status 
 Reconhecido no mês do **pedido** (a API da Nuvemshop não tem data do reembolso). Rateado pela linha em `vl_reembolso_rateio`. A taxa do gateway **não** é devolvida no reembolso (mantida como custo).
 
 ### R4 — Embalagem e imposto
-Parâmetros com vigência em `stg_parametro_operacional` (não em seed): embalagem **R$ 4,00 por pedido**; imposto **0%** (sem CNPJ). Ao mudar, adicionar linha nova com a data de início — nunca editar a antiga.
+Parâmetros com vigência em `stg_parametro_operacional` (não em seed): embalagem **R$ 4,00 por pedido**; imposto **4%** desde 29/10/2026 (0% antes, sem CNPJ). Ao mudar, adicionar linha nova com a data de início — nunca editar a antiga.
 
 ### R5 — Brindes (`fg_brinde`)
 Brinde = produto da lista `stg_produto_brinde` (hoje: Sticker Shibari Brasil) num pedido com ao menos uma linha de venda. Na Nuvemshop o brinde entra com preço cheio e desconto promocional de 100% do próprio valor: o cliente **não paga nada**. Regras: (a) a linha do brinde tem receita líquida ≈ 0 (desconto = valor da linha); (b) ele fica **fora do rateio** de frete, taxa, reembolso e embalagem, que se dividem só entre as linhas de venda; (c) o **custo do brinde é real** e entra no CMV do período; (d) **relatórios de produto e categoria excluem** linhas de brinde; (e) brinde não conta como item vendido. O total do pedido e a margem do pedido não mudam.
