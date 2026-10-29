@@ -54,7 +54,7 @@ def _linhas_dre(d):
         ("(−) CMV (custo dos produtos vendidos)", "saida", "vl_cmv", -1),
         ("(−) Taxa de pagamento", "saida", "vl_taxa_pagamento", -1),
         ("(−) Embalagem (estimada)", "saida", "vl_embalagem", -1),
-        ("(−) Imposto (0% sem CNPJ)", "saida", "vl_imposto", -1),
+        ("(−) Imposto (4% desde 29/10/2026)", "saida", "vl_imposto", -1),
         ("(−) Reembolsos (no mês em que aconteceram)", "saida", "vl_reembolso", -1),
         ("= Margem de contribuição (antes de mídia)", "subtotal", "vl_margem_contribuicao", 1),
         ("(−) Google Ads", "saida", "vl_google_ads", -1),
@@ -174,16 +174,16 @@ def render():
     note("Fecha com o contas a pagar: <em>total lançado</em> = tudo o que aparece nas outras colunas (teste no dbt). "
          "<strong>Duplicados:</strong> o Bling tem o mesmo gasto lançado duas vezes (um com o nome antigo, outro com o novo; mesmo mês, fornecedor e valor): conta uma vez só. "
          "<strong>Investimentos</strong> (estante, caixas) são capex e ficam abaixo da linha. <strong>Suprimentos</strong> (caixas, material de envio): a embalagem já entra <em>estimada</em> "
-         f"na margem (R$ 2,50 por pedido); neste mês foram lançados {brl(float(r['vl_memo_suprimentos']), 0)} contra {brl(float(r['vl_embalagem']), 0)} estimados — útil para calibrar a estimativa.")
+         f"na margem (R$ 4,00 por pedido); neste mês foram lançados {brl(float(r['vl_memo_suprimentos']), 0)} contra {brl(float(r['vl_embalagem']), 0)} estimados — útil para calibrar a estimativa.")
 
     note("<strong>Limites:</strong> só há despesa lançada por competência a partir de 08/2026. O cartão Nubank <em>não</em> entra (decisão: o Bling é a fonte única): gasto que não foi lançado no Bling não aparece, "
-         "então o resultado é um <strong>teto</strong>. A mídia de Meta só existe quando é lançada no Bling. Imposto 0% até haver CNPJ; embalagem é estimada.")
+         "então o resultado é um <strong>teto</strong>. A mídia de Meta só existe quando é lançada no Bling. Imposto de 4% desde 29/10/2026 (0% antes); embalagem é estimada.")
     if fr:
         detalhe_atualizacao(fr)
     regras_aplicadas([
         ("Visão", "gerencial, regime de <strong>competência</strong>: receita no mês do pedido, despesa no mês de competência do Bling. Para o dinheiro que entrou e saiu, ver Fechamento Financeiro."),
         ("Vendas", "pedidos válidos (pagos, não cancelados); faturamento = produtos líquidos de desconto + frete pago pelo cliente."),
-        ("Margem de contribuição", "receita líquida + resultado de frete (pago − real) − CMV − taxa real de pagamento − embalagem estimada (R$ 2,50/pedido) − imposto (0% hoje) − reembolsos no mês em que aconteceram."),
+        ("Margem de contribuição", "receita líquida + resultado de frete (pago − real) − CMV − taxa real de pagamento − embalagem estimada (R$ 4,00/pedido) − imposto (4% desde 29/10/2026) − reembolsos no mês em que aconteceram."),
         ("Mídia", "Google Ads pelo consumo do mês (dados do próprio Ads); Meta e outras pelo lançamento no Bling."),
         ("Despesas", "contas a pagar do Bling por competência (paga, atrasada ou em aberto), sem meses futuros; conta apagada no Bling não entra."),
         ("Fora do resultado", "compra de mercadoria (o CMV já está na margem), frete lançado (o frete real já está na margem), Google Ads lançado (usa-se o do Ads) e duplicados; investimentos e suprimentos aparecem só como memo."),

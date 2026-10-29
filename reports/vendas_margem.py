@@ -726,7 +726,7 @@ def render():
         card("(−) Taxas de pagamento", brl(s["vl_taxa_pedido_rateio"]), sobre_rec(s["vl_taxa_pedido_rateio"])),
         card("Resultado de frete", brl(s["vl_resultado_frete"]), f"pago {brl(s['vl_frete_pago_rateio'])} − real {brl(s['vl_frete_real_rateio'])}"),
         card("(−) Reembolsos", brl(s["vl_reembolso_rateio"]), sobre_rec(s["vl_reembolso_rateio"])),
-        card("(−) Embalagem (estimada)", brl(s["vl_embalagem_rateio"]), "R$ 2,50 por pedido — estimativa, não medida"),
+        card("(−) Embalagem (estimada)", brl(s["vl_embalagem_rateio"]), "R$ 4,00 por pedido — estimativa, não medida"),
         card("Margem de contribuição (R$)", brl(s["vl_margem_contribuicao"]), "antes de mídia", delta=t_mc, delta_color=c_mc),
         card("Margem de contribuição (%)", pct(r["margem_pct"]), "margem de contribuição ÷ receita líq. de produtos",
              variant=_variant_margem(r["margem_pct"]), delta=t_mcp, delta_color=c_mcp,
@@ -817,7 +817,7 @@ def render():
          "CMV — custo do produto vigente na data do pedido (histórico de compras do Bling) · "
          "frete real — custo da etiqueta (Nuvem Envio, via Nuvemshop) · taxas de pagamento — tarifa cobrada por transação (Nuvem Pago/Mercado Pago, via Nuvemshop) · "
          "reembolsos — valor estornado na transação (Nuvemshop), lançado no <strong>mês em que aconteceu</strong> (data aproximada: última atualização do pedido; pedidos totalmente reembolsados saem das vendas e aparecem em Cancelamentos como \"estornados\") · "
-         "<strong>embalagem — estimativa fixa de R$ 2,50 por pedido (parâmetro, não é medido)</strong> · imposto — 0% enquanto a loja não tem CNPJ. "
+         "<strong>embalagem — estimativa fixa de R$ 4,00 por pedido (parâmetro, não é medido)</strong> · imposto — 4% desde 29/10/2026 (0% nos pedidos anteriores). "
          "mídia paga — investimento no Google Ads no período (única mídia paga na base). "
          "Passos zerados não aparecem. A <strong>margem de contribuição</strong> é <strong>antes de mídia</strong>; a última barra, <strong>margem após mídia</strong>, já desconta o Google Ads. Ver specs/vendas-margem.md.")
 

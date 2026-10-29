@@ -21,10 +21,10 @@ Substitui, para leitura gerencial, a `tb_resultado_final` (visão híbrida de ca
 
 ## Linhas da DRE (na ordem da tela)
 1. **Faturamento** (produtos líquidos + frete pago), por mês do pedido.
-2. **Margem de contribuição antes de mídia** = receita líquida de produtos + resultado de frete − CMV − taxa de pagamento − embalagem (estimada R$ 2,50/pedido) − imposto − reembolsos. **Reembolso no mês em que aconteceu** (sem data, cai no mês do pedido). Mesma regra de Vendas & Margem.
+2. **Margem de contribuição antes de mídia** = receita líquida de produtos + resultado de frete − CMV − taxa de pagamento − embalagem (estimada R$ 4,00/pedido) − imposto − reembolsos. **Reembolso no mês em que aconteceu** (sem data, cai no mês do pedido). Mesma regra de Vendas & Margem.
 3. **Mídia:** Google Ads (do Ads, por mês de consumo) e Meta/outras (contas a pagar, subcategoria "Propaganda e publicidade").
 4. **Despesas operacionais** (contas a pagar, por competência): pessoal (pró-labore), ferramentas e tecnologia, adicionais, financeiras, sem categoria.
-5. **Resultado operacional** = margem de contribuição − mídia − despesas operacionais. **Antes de imposto** (imposto 0% até haver CNPJ).
+5. **Resultado operacional** = margem de contribuição − mídia − despesas operacionais. **Antes de imposto** (imposto de 4% desde 29/10/2026; 0% antes).
 6. **Abaixo da linha (memo):** investimentos/melhorias (estante, caixas: capex, não entram no resultado), suprimentos lançados (embalagem real × estimada).
 
 ## Regras de classificação (no dbt, `tb_despesa_dre`)
@@ -51,7 +51,7 @@ Substitui, para leitura gerencial, a `tb_resultado_final` (visão híbrida de ca
 - Só existe despesa lançada por competência de **agosto/2026** em diante; antes disso a tela não mostra resultado.
 - Despesa **não lançada no Bling não existe aqui** (cartão Nubank, gasto ainda sem lançamento): o resultado é um **teto**. Ferramentas pagas no cartão que não foram lançadas no Bling ficam de fora.
 - Competência do Bling para mídia é o mês do pagamento (ex.: Google Ads "ref julho" pago em agosto); por isso Google vem do Ads.
-- Embalagem é estimada; imposto 0%; margem de meses anteriores a ago/2025 é aproximada (fora da janela).
+- Embalagem é estimada; imposto 4% desde 29/10/2026 (0% antes); margem de meses anteriores a ago/2025 é aproximada (fora da janela).
 - Com ~40 pedidos/mês, o resultado de um mês oscila com o mix e com o calendário de pagamentos: ler tendência de vários meses.
 
 ## Ponto de equilíbrio

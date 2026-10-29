@@ -194,7 +194,7 @@ def render():
                  variant=_variant_margem(pos / rec if rec else None), ref=f"verde ≥ {MARGEM_OK:.0%} · âmbar ≥ {MARGEM_MIN:.0%}"),
         ])
     note("Com ~10 pedidos por semana, a margem em % oscila com o mix de produtos e frete: compare tendências de várias semanas (gráfico abaixo), "
-         "não uma semana isolada. Embalagem é estimada (R$ 2,50 por pedido). Reembolsos entram no pedido de origem. "
+         "não uma semana isolada. Embalagem é estimada (R$ 4,00 por pedido). Reembolsos entram no pedido de origem. "
          + ("Semana em andamento: resultado consolidado até hoje (o dia de hoje ainda está aberto), comparado com os mesmos dias da semana anterior (dias inteiros)." if parcial else "Comparação com a semana anterior inteira."))
 
     # ═══ PERFIL DOS PEDIDOS ═══
