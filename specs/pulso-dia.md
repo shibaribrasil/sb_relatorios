@@ -1,6 +1,6 @@
 # Spec — Pulso do Dia (`reports/pulso_dia.py`, camada Diária)
 
-Página operacional: responde "como está hoje, o que está parado e se o mês vai bater a meta". Sem margem por dia (≈1 pedido/dia: percentuais diários não significam nada); margem fica em Vendas & Margem.
+Relatório de tela, para acompanhar o dia: responde "como está hoje, o que está parado, como está a semana e se o mês vai bater a meta". Sem margem por dia (≈1 pedido/dia: percentuais diários não significam nada); a margem aparece só no Perfil dos pedidos (mês corrente) e em Vendas & Margem.
 
 ## Fontes
 `dbt_dw_az.tb_pedido` (pedidos válidos, `fg_pedido_valido`), `tb_tempo` (calendário), `tb_objetivo_faturamento` (meta), `tb_atribuicao_pedido` (origem), `dbt_dw_us_az.tb_gads_conta_diario` (custo Google Ads, região US — consulta separada). Cache de 5 min; o dbt roda de hora em hora (7h–23h BRT).
@@ -31,3 +31,9 @@ Página operacional: responde "como está hoje, o que está parado e se o mês v
 ## v5 — 24/set/2026: Entregas em risco sai do Pulso
 - Seção **Entregas em risco** removida do Pulso do Dia (decisão do Hugo): o acompanhamento de entregas vive só na página **SAC** (`reports/sac.py`). O Pulso deixou de carregar `tb_logistica_pedido`.
 - Perfil dos pedidos (7 dias): tabela por tipo de pedido ganhou margem de contribuição R$ e %; card de frete grátis mostra "N de M pedidos" (ver `specs/perfil-pedidos.md`).
+
+## v6 — 03/nov/2026: Pulso vira o relatório de tela
+- Conceito (pedido do Hugo): é a página que fica aberta durante o dia. Seções, nesta ordem: **Hoje e ontem**, **Pedidos a postar**, **Semana**, **Vendas e meta do período** e **Perfil dos pedidos**. Saíram **Ritmo do mês** (média/projeção/gráfico de meta acumulada passam a vir só de "Vendas e meta do período") e **Origem e mídia** (Google Ads, origem, drill por campanha — seguem em Vendas & Margem e Origem & Campanha). Por enquanto a página tem só isso.
+- **Vendas e meta do período** é a mesma seção de Vendas & Margem (`vendas_margem.secao_vendas_meta`, regras em `specs/vendas-margem.md`), fixa no **mês corrente**, com comparação contra o mesmo trecho do mês anterior. Lê `vendas_margem.carregar_dados` (cache de 15 min), não mais a base própria do Pulso; as regras de Dias do mês, Projeção, Meta acumulada e Atingimento acima valem como descritas lá.
+- **Perfil dos pedidos** é a seção completa de `specs/perfil-pedidos.md` (cards, os dois gráficos de barras — itens e faixa de ticket — e tabela por tipo, com margem de contribuição R$ e %), agora do **mês corrente** em vez dos últimos 7 dias fechados. Com poucos pedidos nos primeiros dias do mês os percentuais oscilam.
+- As regras de Origem e Google Ads acima não se aplicam mais a esta página.

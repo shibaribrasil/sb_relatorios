@@ -1,9 +1,10 @@
-"""Relatório Pulso do Dia — Shibari Brasil (camada diária).
+"""Relatório Pulso do Dia — Shibari Brasil (camada diária; a "tela" para acompanhar o dia).
 
 Regras e definição de cada indicador: ver specs/pulso-dia.md. Não altere cálculo sem ler o spec.
 
 Toda regra de negócio vive no dbt (`tb_pedido`, `tb_tempo`, `tb_objetivo_faturamento`). Aqui só se
-filtra, soma e apresenta. Sem percentuais de margem por dia: com ~1 pedido/dia eles não significam nada.
+filtra, soma e apresenta. As seções "Vendas e meta do período" e "Perfil dos pedidos" são as mesmas de
+Vendas & Margem (reports/vendas_margem.py, reports/perfil_pedidos.py), aplicadas ao mês corrente.
 """
 import os
 from datetime import datetime, timedelta, timezone
@@ -15,11 +16,10 @@ import streamlit as st
 from common import bigquery as bq
 from common.design import (
     COLORS, METRIC_COLORS, inject_css, card, render_cards, section_title, note, plotly_layout,
-    kpi_delta_color, brl, pct,
+    kpi_delta_color, brl,
 )
-from reports.origem_campanha import drill_campanhas
-from reports.perfil_pedidos import secao_perfil
-from reports.vendas_margem import _grafico_meta_acumulada
+from reports.perfil_pedidos import secao_perfil, pedidos_de_linhas
+from reports.vendas_margem import calcular_periodo, secao_vendas_meta, carregar_dados as carregar_vendas
 
 DATASET = os.environ.get("SB_DATASET_PEDIDO", "dbt_dw_az")
 TABELA = os.environ.get("SB_TABELA_PEDIDO", "tb_pedido")
@@ -45,21 +45,8 @@ def carregar_dados():
                ANY_VALUE(p.nm_contato) AS nm_contato, ANY_VALUE(p.dt_pedido) AS dt_pedido,
                ANY_VALUE(p.dt_pagamento_nuvemshop) AS dt_pagamento, ANY_VALUE(p.ds_status_pedido) AS ds_status_pedido,
                SUM(p.vl_liquido_item) AS vl_liquido, SUM(IF(p.fg_brinde, 0, p.qt_item)) AS qt_item,
-               ANY_VALUE(p.ts_load) AS ts_load,
-               SUM(IF(p.fg_brinde, 0, p.vl_receita_liquida_produto)) AS vl_produtos, SUM(IF(p.fg_brinde, 0, p.vl_receita_bruta_produto)) AS vl_bruto,
-               SUM(p.vl_margem_contribuicao + p.vl_reembolso_rateio) AS vl_margem,
-               SUM(IF(p.fg_brinde, 0, p.vl_desconto_venda_rateio)) AS vl_desconto, SUM(IF(p.fg_brinde, 0, p.vl_frete_pago_rateio)) AS vl_frete,
-               COUNT(DISTINCT IF(p.fg_brinde, NULL, p.nm_produto)) AS qt_skus,
-               LOGICAL_OR(NOT p.fg_brinde AND p.ds_frente = 'Shibari') AS fg_shibari,
-               LOGICAL_OR(NOT p.fg_brinde AND p.ds_frente != 'Shibari') AS fg_curadoria,
-               COALESCE(ANY_VALUE(p.fg_cliente_recorrente), FALSE) AS fg_recorrente,
-               COALESCE(ANY_VALUE(a.ds_origem_venda), '(sem parametro)') AS origem,
-               COALESCE(ANY_VALUE(a.ds_midia_venda), '(sem parametro)') AS midia,
-               ANY_VALUE(a.ds_gclid) AS ds_gclid, ANY_VALUE(a.ds_utm_campaign) AS ds_utm_campaign
+               ANY_VALUE(p.ts_load) AS ts_load
           FROM {base} AS p
-     LEFT JOIN (SELECT cd_pedido, ANY_VALUE(ds_origem_venda) AS ds_origem_venda, ANY_VALUE(ds_midia_venda) AS ds_midia_venda,
-                       ANY_VALUE(ds_gclid) AS ds_gclid, ANY_VALUE(ds_utm_campaign) AS ds_utm_campaign
-                  FROM `{bq.PROJECT}.dbt_dw_az.tb_atribuicao_pedido` GROUP BY cd_pedido) AS a USING (cd_pedido)
          WHERE p.fg_pedido_valido AND p.dt_pedido >= DATE '{inicio}'
       GROUP BY p.cd_codigo_interno
     """)
@@ -68,32 +55,15 @@ def carregar_dados():
           FROM `{bq.PROJECT}.dbt_dw_az.tb_tempo`
          WHERE dt_data >= DATE '{inicio}' AND dt_data <= DATE_ADD(CURRENT_DATE('America/Sao_Paulo'), INTERVAL 45 DAY)
     """)
-    metas = bq.query_df(client, f"""
-        SELECT dt_prim_dia_mes, dt_data, vl_meta_dia_acumulado, vl_objetivo_total
-          FROM `{bq.PROJECT}.dbt_dw_az.tb_objetivo_faturamento` WHERE dt_prim_dia_mes >= DATE '{inicio}'
-    """)
-    ads = bq.query_df(client, f"""
-        SELECT dt_data, SUM(vl_custo) AS vl_custo FROM `{bq.PROJECT}.dbt_dw_us_az.tb_gads_conta_diario`
-         WHERE dt_data >= DATE '{inicio}' GROUP BY dt_data
-    """)
     pedidos["dt_pedido"] = pd.to_datetime(pedidos["dt_pedido"])
     pedidos["dt_pagamento"] = pd.to_datetime(pedidos["dt_pagamento"])
     pedidos["vl_liquido"] = pd.to_numeric(pedidos["vl_liquido"]).fillna(0.0)
     pedidos["qt_item"] = pd.to_numeric(pedidos["qt_item"]).fillna(0.0)
-    for c in ["vl_produtos", "vl_bruto", "vl_desconto", "vl_frete", "vl_margem"]:
-        pedidos[c] = pd.to_numeric(pedidos[c]).fillna(0.0)
-    for c in ["fg_shibari", "fg_curadoria", "fg_recorrente"]:
-        pedidos[c] = pedidos[c].fillna(False).astype(bool)
-    pedidos["vl_liquido_item"] = pedidos["vl_liquido"]  # nome esperado por _grafico_meta_acumulada
-    pedidos["mes"] = pedidos["dt_pedido"].dt.to_period("M").dt.to_timestamp()
     tempo["dt_data"] = pd.to_datetime(tempo["dt_data"])
     tempo["dt_prim_dia_mes"] = pd.to_datetime(tempo["dt_prim_dia_mes"])
     tempo["fg_dia_util"] = tempo["fg_dia_util"].astype(bool)
-    metas["dt_data"] = pd.to_datetime(metas["dt_data"])
-    metas["mes"] = pd.to_datetime(metas["dt_prim_dia_mes"])
-    ads["dt_data"] = pd.to_datetime(ads["dt_data"])
-    ads["vl_custo"] = pd.to_numeric(ads["vl_custo"]).fillna(0.0)
-    return {"pedidos": pedidos, "tempo": tempo, "metas": metas, "ads": ads}
+    return {"pedidos": pedidos, "tempo": tempo}
+
 
 
 def _dia(ped, d):
@@ -145,7 +115,7 @@ def render():
         except Exception as e:
             st.error(f"Erro ao carregar dados do BigQuery: {e}")
             return
-    ped, tempo, metas, ads = dados["pedidos"], dados["tempo"], dados["metas"], dados["ads"]
+    ped, tempo = dados["pedidos"], dados["tempo"]
     hoje = _hoje_brt()
     if ped.empty:
         st.info("Sem pedidos válidos no período.")
@@ -157,7 +127,7 @@ def render():
       <div>
         <div class="report-brand">shibari brasil · camada diária</div>
         <div class="report-title">Pulso <span>do</span> Dia</div>
-        <div class="report-meta">Pedidos válidos (pagos, não cancelados) · faturamento = produtos líquidos + frete pago · sem margem por dia · fonte: {DATASET}.{TABELA}</div>
+        <div class="report-meta">Pedidos válidos (pagos, não cancelados) · faturamento = produtos líquidos + frete pago · fonte: {DATASET}.{TABELA}</div>
       </div>
       <div class="report-badge">
         Hoje: <strong>{hoje.strftime("%d/%m/%Y")}</strong><br>
@@ -208,38 +178,6 @@ def render():
     note("A postar = pedido válido com status EM ABERTO no Bling (pago, aguardando postagem). Dias úteis contados a partir da data de pagamento na "
          "Nuvemshop (ou do pedido, se não houver) pelo calendário <code>tb_tempo</code>; sábados, domingos e feriados não contam.")
 
-    # ═══ RITMO DO MÊS ═══
-    section_title("Ritmo do mês")
-    mes = pd.Timestamp(hoje).replace(day=1)
-    dm = ped[ped["mes"] == mes]
-    fat_mes = float(dm["vl_liquido"].sum())
-    mm = metas[metas["mes"] == mes]
-    total_dias = mes.days_in_month  # dias corridos (decisão do Hugo, 07/10/2026)
-    dias_fechados = hoje.day - 1
-    fat_fechado = float(dm.loc[dm["dt_pedido"] < pd.Timestamp(hoje), "vl_liquido"].sum())
-    media_dia = (fat_fechado / dias_fechados) if dias_fechados else None
-    proj = (media_dia * total_dias) if media_dia is not None else None
-    meta_total = float(mm["vl_objetivo_total"].iloc[0]) if not mm.empty else None
-    linha = mm[mm["dt_data"] == pd.Timestamp(hoje)]
-    meta_acum = float(linha["vl_meta_dia_acumulado"].iloc[0]) if not linha.empty else None
-    render_cards([
-        card("Faturamento no mês", brl(fat_mes), f"01 a {hoje.day:02d}/{hoje.month:02d} · {len(dm)} pedidos"),
-        card("Meta acumulada até hoje", brl(meta_acum) if meta_acum else "—",
-             f"atingimento {pct(fat_mes / meta_acum, 0)}" if meta_acum else "sem meta cadastrada",
-             variant=("ok" if meta_acum and fat_mes >= meta_acum else "bad" if meta_acum else "neutral")),
-        card("Dias do mês", f"{dias_fechados} de {total_dias}", "dias corridos fechados no mês (sem hoje)"),
-        card("Média de vendas por dia", brl(media_dia) if media_dia is not None else "—", "dias fechados ÷ dias corridos fechados"),
-        card("Projeção do mês", brl(proj) if proj else "—",
-             f"{pct(proj / meta_total, 0)} da meta do mês ({brl(meta_total)})" if proj and meta_total else "média por dia × dias do mês",
-             variant=("ok" if proj and meta_total and proj >= meta_total else "bad" if proj and meta_total else "neutral")),
-    ])
-    fig = _grafico_meta_acumulada(ped, metas, mes, hoje)
-    if fig is not None:
-        with st.container(border=True):
-            st.plotly_chart(fig, use_container_width=True)
-    note("<strong>Projeção</strong> = faturamento dos dias fechados ÷ dias úteis fechados × dias úteis do mês (vendas de fim de semana entram no "
-         "faturamento e são diluídas nos dias úteis). É uma referência de ritmo, não uma previsão. A meta ainda precisa ser revista.")
-
     # ═══ SEMANA ═══
     section_title("Semana (segunda a domingo)")
     seg = pd.Timestamp(hoje) - pd.Timedelta(days=pd.Timestamp(hoje).weekday())
@@ -261,37 +199,19 @@ def render():
     with st.container(border=True):
         st.plotly_chart(_grafico_semana(ped, hoje), use_container_width=True)
 
-    # ═══ PERFIL DOS PEDIDOS ═══
-    ini7 = pd.Timestamp(ontem) - pd.Timedelta(days=6)
-    p7 = ped[(ped["dt_pedido"] >= ini7) & (ped["dt_pedido"] <= pd.Timestamp(ontem))]
-    p7a = ped[(ped["dt_pedido"] >= ini7 - pd.Timedelta(days=7)) & (ped["dt_pedido"] < ini7)]
-    secao_perfil(p7, p7a, "7 dias anteriores", "Perfil dos pedidos — últimos 7 dias fechados",
-                 contexto="Janela de 7 dias fechados até ontem (um dia isolado tem pedidos de menos para um perfil confiável).")
-
-    # ═══ ORIGEM E MÍDIA ═══
-    section_title("Origem e mídia")
-    col1, col2 = st.columns([3, 2])
-    with col1:
-        o7 = ped[ped["dt_pedido"] >= pd.Timestamp(hoje) - pd.Timedelta(days=6)]
-        g = o7.groupby(["origem", "midia"], as_index=False).agg(pedidos=("cd_codigo_interno", "nunique"), fat=("vl_liquido", "sum")).sort_values("fat", ascending=False)
-        st.html('<div class="c-label" style="margin:0 0 10px">Últimos 7 dias, por origem</div>')
-        st.dataframe(pd.DataFrame({"Origem": g["origem"], "Mídia": g["midia"], "Pedidos": g["pedidos"], "Faturamento": g["fat"]}),
-                     hide_index=True, use_container_width=True,
-                     column_config={"Pedidos": st.column_config.NumberColumn(width=80),
-                                    "Faturamento": st.column_config.NumberColumn(format="R$ %.2f", width=120)})
-    with col2:
-        ult = ads["dt_data"].max()
-        ads_mes = float(ads.loc[ads["dt_data"] >= mes, "vl_custo"].sum())
-        ped_ate = int(((ped["mes"] == mes) & (ped["dt_pedido"] <= ult)).sum()) if pd.notna(ult) else 0
-        render_cards([
-            card("Google Ads no mês", brl(ads_mes), f"até {ult.strftime('%d/%m')} (último dia disponível)" if pd.notna(ult) else "sem dados"),
-            card("Investimento por pedido", brl(ads_mes / ped_ate) if ped_ate else "—", "investimento ÷ pedidos de todas as origens no mesmo período (não só os do Google)"),
-        ])
-    ini7o = pd.Timestamp(hoje) - pd.Timedelta(days=6)
-    o7d = ped[ped["dt_pedido"] >= ini7o].assign(valor=lambda d: d["vl_liquido"])
-    drill_campanhas(o7d, ini7o, pd.Timestamp(hoje), valor_label="Faturamento", com_margem=False)
-    note("Origem detectada pela URL de entrada (classificação <code>tb_atribuicao_pedido</code>). \"Investimento por pedido\" é o custo do Google Ads dividido pelos "
-         "pedidos de <strong>todas as origens</strong> (direto, orgânico, Instagram etc.) até o último dia com custo disponível — é uma referência do negócio, não o "
-         "CAC do canal. O custo do Google Ads vem da transferência nativa do Google pro BigQuery, que atualiza 1× por dia (chega com 1–2 dias de atraso) — por isso "
-         "pode ficar um pouco diferente do painel do Google Ads em tempo real, principalmente nos últimos dias (o Google credita de volta o custo de cliques "
-         "inválidos depois que o dia fecha, e essa correção pode não chegar até aqui).")
+    # ═══ VENDAS E META DO PERÍODO e PERFIL DOS PEDIDOS (mesmas seções de Vendas & Margem, mês corrente) ═══
+    with st.spinner("Carregando vendas e meta do mês..."):
+        try:
+            vendas = carregar_vendas()
+        except Exception as e:
+            st.error(f"Erro ao carregar vendas e meta do mês: {e}")
+            return
+    df = vendas["vendas"]
+    mes = pd.Timestamp(hoje.replace(day=1))
+    if mes not in set(df["mes"]):  # 1º dia do mês sem pedido ainda: usa o último mês com vendas (igual a Vendas & Margem)
+        mes = df["mes"].max()
+    meses_sel = [mes]
+    per = calcular_periodo(df, vendas["cancel"], vendas["metas"], vendas["refs"], meses_sel, hoje)
+    secao_vendas_meta(per, meses_sel, hoje)
+    secao_perfil(pedidos_de_linhas(per["sel"]), pedidos_de_linhas(per["ant"]) if per["ant"] is not None else None, per["rot"] or "",
+                 contexto="Mês corrente (hoje incluído), comparado com o mesmo trecho do mês anterior." if per["rot"] else "")
