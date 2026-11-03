@@ -587,6 +587,71 @@ _CFG_MOEDA = st.column_config.NumberColumn(format="R$ %.2f")
 _CFG_PCT = st.column_config.NumberColumn(format="percent")
 
 
+def calcular_periodo(df, cancel, metas, refs, meses_sel, hoje):
+    """Somas, comparação com o período anterior, cancelamentos e meta dos meses selecionados.
+    Compartilhado com o Pulso do Dia (reports/pulso_dia.py)."""
+    sel = df[df["mes"].isin(meses_sel)]
+    refs_sel = refs[refs["mes"].isin(meses_sel)]
+    s = _somas(sel, refs_sel)
+    r = _razoes(s)
+    ant, refs_ant, rot = _periodo_anterior(df, refs, meses_sel, hoje)
+    sa = _somas(ant, refs_ant) if ant is not None else None
+    ra = _razoes(sa) if sa else None
+    canc = _cancelamentos(cancel, meses_sel, s["pedidos"])
+    meta = _meta(metas, meses_sel, hoje, s["vl_liquido_item"])
+
+    def d(chave, tipo="rel", fonte="s", fmt=brl):
+        if sa is None:
+            return "", ""
+        cur, prev = (s[chave], sa[chave]) if fonte == "s" else (r[chave], ra[chave])
+        return _delta(cur, prev, rot, tipo, fmt if tipo == "rel" else None)
+
+    return {"sel": sel, "s": s, "r": r, "ant": ant, "sa": sa, "ra": ra, "rot": rot, "canc": canc, "meta": meta, "d": d}
+
+
+def secao_vendas_meta(p, meses_sel, hoje):
+    """Seção 'Vendas e meta do período' (cards + notas). `p` vem de calcular_periodo; compartilhada com o Pulso do Dia."""
+    sel, s, r, rot, canc, meta, d = p["sel"], p["s"], p["r"], p["rot"], p["canc"], p["meta"], p["d"]
+    section_title("Vendas e meta do período")
+    acima = bool(meta["acumulada"]) and meta["falta_acum"] <= 0
+    ritmo = _ritmo(sel, meses_sel, hoje, meta["total"])
+    proj = ritmo if ritmo and ritmo["valor"] is not None else None
+    t_fat, c_fat = d("vl_liquido_item")
+    t_ped, c_ped = d("pedidos", fmt=lambda v: f"{int(v)}")
+    t_tk, c_tk = d("ticket", "rel", "r")
+    render_cards([
+        card("Faturamento", brl(s["vl_liquido_item"]), "produtos já com desconto + frete pago pelo cliente", delta=t_fat, delta_color=c_fat),
+        card("Pedidos", f"{s['pedidos']}", f"{int(s['itens'])} itens vendidos (sem brindes)", delta=t_ped, delta_color=c_ped),
+        card("Ticket médio", brl(r["ticket"]), "faturamento ÷ pedidos", delta=t_tk, delta_color=c_tk),
+        card("Cancelamentos", f"{canc['qtd']} · {pct(canc['pct'])}", canc["detalhe"] or "nenhum no período",
+             ref="cancelados ÷ (válidos + cancelados)"),
+        card("Meta de faturamento", brl(meta["total"]) if meta["total"] else "—", "meta do(s) mês(es) selecionado(s)"),
+        card("Atingimento da meta", pct(meta["atingimento"], 0) if meta["atingimento"] is not None else "—",
+             "faturamento ÷ meta acumulada até hoje",
+             variant=("ok" if meta["atingimento"] and meta["atingimento"] >= 1 else "bad" if meta["atingimento"] is not None else "neutral"),
+             ref=f"meta acumulada: {brl(meta['acumulada'])}"),
+        card("Falta para a meta acumulada" if not acima else "Acima da meta acumulada",
+             ("—" if not meta["acumulada"] else brl(abs(meta["falta_acum"]))),
+             "meta acumulada até hoje − faturamento" if not acima else "faturamento − meta acumulada até hoje",
+             variant=("neutral" if not meta["acumulada"] else "ok" if acima else "bad"),
+             ref=f"faltam {brl(meta['falta'])} para a meta total do mês" if meta["total"] else ""),
+        card("Média de vendas por dia", brl(ritmo["media"]) if ritmo else "—",
+             "faturamento dos dias fechados ÷ dias corridos fechados" if ritmo else "sem dia fechado no período",
+             ref=f"{ritmo['fechados']} {'dia fechado' if ritmo['fechados'] == 1 else 'dias fechados'} (hoje fica de fora)" if ritmo else ""),
+        card("Projeção de faturamento", brl(proj["valor"]) if proj else "—",
+             (f"{pct(proj['pct_meta'], 0)} da meta do mês" if proj["pct_meta"] is not None else "média por dia × dias do mês")
+             if proj else "só para o mês em andamento",
+             variant=("neutral" if not proj or proj["pct_meta"] is None else "ok" if proj["pct_meta"] >= 1 else "bad"),
+             ref=f"{proj['fechados']} {'dia' if proj['fechados'] == 1 else 'dias'} de {proj['total']}" if proj else ""),
+    ])
+    note("<strong>Projeção</strong> = faturamento dos dias fechados ÷ dias úteis fechados × dias úteis do mês (mesma regra do Pulso do Dia; "
+         "vendas de fim de semana entram no faturamento). Referência de ritmo, não previsão; aparece só no mês em andamento e a partir do 2º dia.")
+    if rot:
+        note(f"Variações comparam com {rot}, com o valor daquele período entre parênteses. Só aparecem com um único mês selecionado.")
+    if meta["sem_meta"]:
+        note(f"Sem meta cadastrada para: {', '.join(meta['sem_meta'])}. A meta de faturamento ainda precisa ser revista — trate o atingimento como referência.", variant="warn")
+
+
 def render():
     inject_css()
 
@@ -626,21 +691,8 @@ def render():
         st.info("Selecione ao menos um mês para ver os indicadores.")
         return
 
-    sel = df[df["mes"].isin(meses_sel)]
-    refs_sel = refs[refs["mes"].isin(meses_sel)]
-    s = _somas(sel, refs_sel)
-    r = _razoes(s)
-    ant, refs_ant, rot = _periodo_anterior(df, refs, meses_sel, hoje)
-    sa = _somas(ant, refs_ant) if ant is not None else None
-    ra = _razoes(sa) if sa else None
-    canc = _cancelamentos(cancel, meses_sel, s["pedidos"])
-    meta = _meta(metas, meses_sel, hoje, s["vl_liquido_item"])
-
-    def d(chave, tipo="rel", fonte="s", fmt=brl):
-        if sa is None:
-            return "", ""
-        cur, prev = (s[chave], sa[chave]) if fonte == "s" else (r[chave], ra[chave])
-        return _delta(cur, prev, rot, tipo, fmt if tipo == "rel" else None)
+    p = calcular_periodo(df, cancel, metas, refs, meses_sel, hoje)
+    sel, s, r, ant, rot, d = p["sel"], p["s"], p["r"], p["ant"], p["rot"], p["d"]
 
     rec = s["vl_receita_liquida_produto"]
 
@@ -648,44 +700,7 @@ def render():
         return f"{pct(v / rec)} da receita líq." if rec else ""
 
     # ═══ VENDAS E META ═══
-    section_title("Vendas e meta do período")
-    acima = bool(meta["acumulada"]) and meta["falta_acum"] <= 0
-    ritmo = _ritmo(sel, meses_sel, hoje, meta["total"])
-    proj = ritmo if ritmo and ritmo["valor"] is not None else None
-    t_fat, c_fat = d("vl_liquido_item")
-    t_ped, c_ped = d("pedidos", fmt=lambda v: f"{int(v)}")
-    t_tk, c_tk = d("ticket", "rel", "r")
-    render_cards([
-        card("Faturamento", brl(s["vl_liquido_item"]), "produtos já com desconto + frete pago pelo cliente", delta=t_fat, delta_color=c_fat),
-        card("Pedidos", f"{s['pedidos']}", f"{int(s['itens'])} itens vendidos (sem brindes)", delta=t_ped, delta_color=c_ped),
-        card("Ticket médio", brl(r["ticket"]), "faturamento ÷ pedidos", delta=t_tk, delta_color=c_tk),
-        card("Cancelamentos", f"{canc['qtd']} · {pct(canc['pct'])}", canc["detalhe"] or "nenhum no período",
-             ref="cancelados ÷ (válidos + cancelados)"),
-        card("Meta de faturamento", brl(meta["total"]) if meta["total"] else "—", "meta do(s) mês(es) selecionado(s)"),
-        card("Atingimento da meta", pct(meta["atingimento"], 0) if meta["atingimento"] is not None else "—",
-             "faturamento ÷ meta acumulada até hoje",
-             variant=("ok" if meta["atingimento"] and meta["atingimento"] >= 1 else "bad" if meta["atingimento"] is not None else "neutral"),
-             ref=f"meta acumulada: {brl(meta['acumulada'])}"),
-        card("Falta para a meta acumulada" if not acima else "Acima da meta acumulada",
-             ("—" if not meta["acumulada"] else brl(abs(meta["falta_acum"]))),
-             "meta acumulada até hoje − faturamento" if not acima else "faturamento − meta acumulada até hoje",
-             variant=("neutral" if not meta["acumulada"] else "ok" if acima else "bad"),
-             ref=f"faltam {brl(meta['falta'])} para a meta total do mês" if meta["total"] else ""),
-        card("Média de vendas por dia", brl(ritmo["media"]) if ritmo else "—",
-             "faturamento dos dias fechados ÷ dias corridos fechados" if ritmo else "sem dia fechado no período",
-             ref=f"{ritmo['fechados']} {'dia fechado' if ritmo['fechados'] == 1 else 'dias fechados'} (hoje fica de fora)" if ritmo else ""),
-        card("Projeção de faturamento", brl(proj["valor"]) if proj else "—",
-             (f"{pct(proj['pct_meta'], 0)} da meta do mês" if proj["pct_meta"] is not None else "média por dia × dias do mês")
-             if proj else "só para o mês em andamento",
-             variant=("neutral" if not proj or proj["pct_meta"] is None else "ok" if proj["pct_meta"] >= 1 else "bad"),
-             ref=f"{proj['fechados']} {'dia' if proj['fechados'] == 1 else 'dias'} de {proj['total']}" if proj else ""),
-    ])
-    note("<strong>Projeção</strong> = faturamento dos dias fechados ÷ dias úteis fechados × dias úteis do mês (mesma regra do Pulso do Dia; "
-         "vendas de fim de semana entram no faturamento). Referência de ritmo, não previsão; aparece só no mês em andamento e a partir do 2º dia.")
-    if rot:
-        note(f"Variações comparam com {rot}, com o valor daquele período entre parênteses. Só aparecem com um único mês selecionado.")
-    if meta["sem_meta"]:
-        note(f"Sem meta cadastrada para: {', '.join(meta['sem_meta'])}. A meta de faturamento ainda precisa ser revista — trate o atingimento como referência.", variant="warn")
+    secao_vendas_meta(p, meses_sel, hoje)
 
     # ═══ PERFIL DOS PEDIDOS ═══
     secao_perfil(pedidos_de_linhas(sel), pedidos_de_linhas(ant) if ant is not None else None, rot or "")
