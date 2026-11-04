@@ -79,3 +79,28 @@ def test_desconto_que_sobra_vira_ajuste_manual_e_cupom_apagado_nao_quebra():
     assert [t for t, _, _ in d] == ["Cupom VELHO", "Outro desconto"]
     assert d[1][1] == pytest.approx(7.0)
     assert "indisponível" in d[0][2]
+
+
+def test_telefone_vira_texto_e_link_do_whatsapp():
+    assert cp.formatar_telefone("11992417785") == ("(11) 99241-7785", "https://wa.me/5511992417785")
+    assert cp.formatar_telefone("5561993791414")[1] == "https://wa.me/5561993791414"
+    assert cp.formatar_telefone("123") == ("", "") and cp.formatar_telefone(None) == ("", "")
+
+
+def test_status_envio_nao_confia_em_situacao_logistica():
+    # pedido pago e sem expedição: "aguardando", mesmo que ds_situacao_logistica diga 'entregue'
+    assert cp.status_envio({"ds_situacao_logistica": "entregue", "dt_estimada_entrega_max": pd.Timestamp("2026-11-10")}, "EM ABERTO")["expedicao"][0] == "Aguardando postagem"
+    r = cp.status_envio({"dt_expedicao": pd.Timestamp("2026-10-21"), "dt_entrega": pd.Timestamp("2026-10-27")}, "ENVIADO")
+    assert r["expedicao"][0] == "Expedido em 21/10" and r["entrega"][0] == "Entregue em 27/10"
+    assert cp.status_envio({"dt_estimada_entrega_max": pd.Timestamp("2026-11-10")}, "EM ABERTO")["entrega"][0] == "Previsão até 10/11"
+
+
+def test_status_cashback():
+    cupom = {"codigo": "CASHBACKPOSCOMPRAWV26", "valor": 14.99, "expira_em": pd.Timestamp("2026-12-19 16:16", tz="UTC"), "cancelado_em": None}
+    w0 = {"tipo_tarefa": "jornada_w0", "dt_contato": pd.Timestamp("2026-11-04 16:38", tz="UTC"), "fg_alcancou": True, "ds_resultado": None}
+    texto, det, tipo = cp.status_cashback([w0], cupom, 1)
+    assert texto == "Recebeu em 04/11" and tipo == "ok" and "CASHBACKPOSCOMPRAWV26" in det and "vence 19/12" in det
+    assert cp.status_cashback([dict(w0, fg_alcancou=False, ds_resultado="WhatsApp inválido")], cupom, 1)[2] == "warn"
+    assert cp.status_cashback([], cupom, 1)[0].startswith("Cupom gerado")
+    assert cp.status_cashback([], {}, 4)[0] == "Sem cashback (4º pedido)"
+    assert cp.status_cashback([], {}, 1)[0] == "Não enviada"
