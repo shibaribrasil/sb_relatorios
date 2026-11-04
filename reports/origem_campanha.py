@@ -56,7 +56,7 @@ def pedidos_com_campanha(pedidos, ponte):
     return p
 
 
-def drill_campanhas(pedidos, ini, fim, meses=None, valor_label="Receita líq.", com_margem=True):
+def drill_campanhas(pedidos, ini, fim, meses=None, valor_label="Receita líq.", com_margem=True, com_nota=True):
     """pedidos: 1 linha por pedido (origem, midia, ds_gclid, ds_utm_campaign, valor e, se com_margem, marg).
     ini/fim: período (custo do Ads por campanha); meses: lista de inícios de mês se a seleção não for contígua."""
     try:
@@ -108,11 +108,12 @@ def drill_campanhas(pedidos, ini, fim, meses=None, valor_label="Receita líq.", 
                     cols["Margem ÷ custo"] = g["marg"] / g["custo"].where(g["custo"] > 0)
                     cfg["Margem ÷ custo"] = st.column_config.NumberColumn(format="%.1f×", width=110)
             st.dataframe(pd.DataFrame(cols), hide_index=True, use_container_width=True, column_config=cfg)
-    note("<strong>Google pago:</strong> a campanha vem do <code>gclid</code> da URL de entrada do pedido, cruzado com os cliques do Google Ads (histórico de cliques só desde 15/06/2026 e guardado ~90 dias). "
-         "\"(campanha não identificada)\" = pedido de clique Google sem <code>gclid</code> (iOS traz só <code>gbraid</code>/<code>wbraid</code>) ou com clique fora do histórico. "
-         "<strong>Custo, cliques e compras (Ads)</strong> são o que o Google reporta por campanha no período e podem incluir compras sem gclid na nossa base — por isso \"Compras (Ads)\" "
-         "não bate com \"Pedidos\". <strong>Demais origens:</strong> campanha = <code>utm_campaign</code> da URL (só ~10% dos pedidos trazem UTM); no Instagram pago é o ID da campanha do Meta, "
-         "ainda sem nome (não há dados do Meta Ads na base). \"(sem campanha)\" = origem sem <code>utm_campaign</code>.")
+    if com_nota:
+        note("<strong>Google pago:</strong> a campanha vem do <code>gclid</code> da URL de entrada do pedido, cruzado com os cliques do Google Ads (histórico de cliques só desde 15/06/2026 e guardado ~90 dias). "
+             "\"(campanha não identificada)\" = pedido de clique Google sem <code>gclid</code> (iOS traz só <code>gbraid</code>/<code>wbraid</code>) ou com clique fora do histórico. "
+             "<strong>Custo, cliques e compras (Ads)</strong> são o que o Google reporta por campanha no período e podem incluir compras sem gclid na nossa base — por isso \"Compras (Ads)\" "
+             "não bate com \"Pedidos\". <strong>Demais origens:</strong> campanha = <code>utm_campaign</code> da URL (só ~10% dos pedidos trazem UTM); no Instagram pago é o ID da campanha do Meta, "
+             "ainda sem nome (não há dados do Meta Ads na base). \"(sem campanha)\" = origem sem <code>utm_campaign</code>.")
 
 
 def drill_clientes_campanhas(clientes):
