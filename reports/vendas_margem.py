@@ -45,7 +45,7 @@ MARGEM_MIN = 0.40    # >= 40% (mínimo institucional): âmbar; abaixo: vermelho
 COLUNAS = """
     cd_codigo_interno, cd_pedido, cd_pedido_nuvemshop, cd_contato, nm_contato, dt_pedido, dt_reembolso, ds_frente,
     fg_cliente_recorrente, dt_proxima_compra_cliente, ds_status_pedido, nm_produto,
-    ds_categoria, ds_meio_pagamento_nuvemshop, qt_item, fg_brinde, ds_incompletude,
+    ds_categoria, ds_meio_pagamento_nuvemshop, qt_item, fg_brinde, ds_incompletude, ds_tipo_loja,
     vl_receita_bruta_produto, vl_desconto_venda_rateio, vl_receita_liquida_produto, vl_liquido_item,
     vl_frete_pago_rateio, vl_frete_real_rateio, vl_resultado_frete, vl_custo_linha,
     vl_taxa_pedido_rateio, vl_reembolso_rateio, vl_embalagem_rateio, vl_imposto_rateio,
@@ -118,6 +118,7 @@ def carregar_dados():
     vendas["dt_pedido"] = pd.to_datetime(vendas["dt_pedido"])
     vendas["mes"] = vendas["dt_pedido"].dt.to_period("M").dt.to_timestamp()
     vendas["ds_categoria"] = vendas["ds_categoria"].fillna("Sem categoria")
+    vendas["ds_tipo_loja"] = vendas["ds_tipo_loja"].fillna("(sem canal)")
     for c in SOMAVEIS:
         vendas[c] = pd.to_numeric(vendas[c]).fillna(0.0)
     # reembolso no mês em que aconteceu (data aproximada: última atualização do pedido na Nuvemshop).
@@ -652,6 +653,23 @@ def secao_vendas_meta(p, meses_sel, hoje):
         note(f"Sem meta cadastrada para: {', '.join(meta['sem_meta'])}. A meta de faturamento ainda precisa ser revista — trate o atingimento como referência.", variant="warn")
 
 
+def secao_origem(sel, meses_sel, com_nota=True):
+    """Seção 'Origem das vendas' (tabela por origem/mídia + drill por campanha). Compartilhada com o Pulso do Dia, que passa com_nota=False."""
+    section_title("Origem das vendas")
+    st.dataframe(_tabela_origem(sel), hide_index=True, use_container_width=True,
+                 column_config={"Pedidos": st.column_config.NumberColumn(width=80),
+                                "% dos pedidos": st.column_config.NumberColumn(format="percent", width=110),
+                                "Receita líq.": st.column_config.NumberColumn(format="R$ %.2f", width=110),
+                                "Margem de contrib. (R$)": st.column_config.NumberColumn(format="R$ %.2f", width=150),
+                                "Margem de contrib. (%)": st.column_config.NumberColumn(format="percent", width=150)})
+    drill_campanhas(pedidos_origem(sel), min(meses_sel), max(meses_sel) + pd.offsets.MonthEnd(0), meses=list(meses_sel), com_nota=com_nota)
+    if com_nota:
+        note("Origem detectada pela <strong>URL de entrada</strong> do pedido (UTM e clique de anúncio), classificada no dbt (tb_atribuicao_pedido). "
+             "\"(sem parametro)\" = sem UTM nem clique de anúncio identificável, ou sem sessão rastreável (direto, orgânico, link sem marcação). "
+             "Os parâmetros UTM crus (<code>ds_utm_*</code>) cobrem só ~7% dos pedidos, por isso o Google Ads "
+             "aparece pela detecção de clique. Nomes unificados no dbt: \"ig\", \"igshopping\" e \"instagram\" viram <strong>instagram</strong>.")
+
+
 def render():
     inject_css()
 
@@ -856,18 +874,7 @@ def render():
          "use o atingimento como referência de ritmo, não como veredito.")
 
     # ═══ ORIGEM ═══
-    section_title("Origem das vendas")
-    st.dataframe(_tabela_origem(sel), hide_index=True, use_container_width=True,
-                 column_config={"Pedidos": st.column_config.NumberColumn(width=80),
-                                "% dos pedidos": st.column_config.NumberColumn(format="percent", width=110),
-                                "Receita líq.": st.column_config.NumberColumn(format="R$ %.2f", width=110),
-                                "Margem de contrib. (R$)": st.column_config.NumberColumn(format="R$ %.2f", width=150),
-                                "Margem de contrib. (%)": st.column_config.NumberColumn(format="percent", width=150)})
-    drill_campanhas(pedidos_origem(sel), min(meses_sel), max(meses_sel) + pd.offsets.MonthEnd(0), meses=list(meses_sel))
-    note("Origem detectada pela <strong>URL de entrada</strong> do pedido (UTM e clique de anúncio), classificada no dbt (tb_atribuicao_pedido). "
-         "\"(sem parametro)\" = sem UTM nem clique de anúncio identificável, ou sem sessão rastreável (direto, orgânico, link sem marcação). "
-         "Os parâmetros UTM crus (<code>ds_utm_*</code>) cobrem só ~7% dos pedidos, por isso o Google Ads "
-         "aparece pela detecção de clique. Nomes unificados no dbt: \"ig\", \"igshopping\" e \"instagram\" viram <strong>instagram</strong>.")
+    secao_origem(sel, meses_sel)
 
     # ═══ CLIENTES ═══
     _secao_clientes(df, hist, meses_sel, hoje)

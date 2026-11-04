@@ -19,7 +19,7 @@ from common.design import (
     kpi_delta_color, brl,
 )
 from reports.perfil_pedidos import secao_perfil, pedidos_de_linhas
-from reports.vendas_margem import calcular_periodo, secao_vendas_meta, carregar_dados as carregar_vendas
+from reports.vendas_margem import calcular_periodo, secao_origem, secao_vendas_meta, carregar_dados as carregar_vendas
 
 DATASET = os.environ.get("SB_DATASET_PEDIDO", "dbt_dw_az")
 TABELA = os.environ.get("SB_TABELA_PEDIDO", "tb_pedido")
@@ -105,6 +105,35 @@ def _grafico_semana(ped, hoje):
                     hovertemplate="%{x}<br>R$ %{y:,.0f}<extra>" + nome + "</extra>")
     plotly_layout(fig, height=300, barmode="group", xaxis=dict(tickmode="array", tickvals=DIAS_SEMANA), yaxis=dict(tickprefix="R$ ", gridcolor=COLORS["grid"]))
     return fig
+
+
+def _secao_canal(sel):
+    """Canal de venda (loja do Bling: Nuvemshop, Mercado Livre...) no mês: pedidos, faturamento e margem de contribuição."""
+    section_title("Canal de venda")
+    g = sel.groupby("ds_tipo_loja", as_index=False).agg(
+        pedidos=("cd_codigo_interno", "nunique"), fat=("vl_liquido_item", "sum"),
+        rec=("vl_receita_liquida_produto", "sum"), marg=("vl_margem_contribuicao", "sum"),
+    ).sort_values("fat", ascending=False)
+    g["pct"] = g["marg"] / g["rec"].where(g["rec"] != 0)
+    col1, col2 = st.columns([2, 3])
+    with col1:
+        fig = go.Figure(go.Bar(
+            y=g["ds_tipo_loja"], x=g["fat"], orientation="h", marker_color=METRIC_COLORS["receita"],
+            text=[brl(v, 0) for v in g["fat"]], textposition="outside", cliponaxis=False,
+            hovertemplate="%{y}<br>Faturamento R$ %{x:,.0f}<extra></extra>"))
+        plotly_layout(fig, height=max(140, 56 * len(g) + 50), showlegend=False,
+                      xaxis=dict(showticklabels=False, showgrid=False, range=[0, max(float(g["fat"].max()), 1.0) * 1.35]),
+                      yaxis=dict(autorange="reversed", automargin=True))
+        with st.container(border=True):
+            st.plotly_chart(fig, use_container_width=True)
+    with col2:
+        st.dataframe(pd.DataFrame({"Canal": g["ds_tipo_loja"], "Pedidos": g["pedidos"], "Faturamento": g["fat"],
+                                   "Margem de contrib. (R$)": g["marg"], "Margem de contrib. (%)": g["pct"]}),
+                     hide_index=True, use_container_width=True,
+                     column_config={"Pedidos": st.column_config.NumberColumn(width=80),
+                                    "Faturamento": st.column_config.NumberColumn(format="R$ %.2f", width=120),
+                                    "Margem de contrib. (R$)": st.column_config.NumberColumn(format="R$ %.2f", width=150),
+                                    "Margem de contrib. (%)": st.column_config.NumberColumn(format="percent", width=150)})
 
 
 def render():
@@ -215,3 +244,5 @@ def render():
     secao_vendas_meta(per, meses_sel, hoje)
     secao_perfil(pedidos_de_linhas(per["sel"]), pedidos_de_linhas(per["ant"]) if per["ant"] is not None else None, per["rot"] or "",
                  contexto="Mês corrente (hoje incluído), comparado com o mesmo trecho do mês anterior." if per["rot"] else "")
+    _secao_canal(per["sel"])
+    secao_origem(per["sel"], meses_sel, com_nota=False)
