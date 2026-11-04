@@ -11,12 +11,11 @@ import html
 import re
 
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
 from common import bigquery as bq
 from common.design import (
-    COLORS, METRIC_COLORS, CATEGORICAL, inject_css, card, render_cards, section_title, note, plotly_layout, brl, pct,
+    COLORS, inject_css, card, render_cards, section_title, note, brl, pct,
 )
 from reports.origem_campanha import GOOGLE_PAGO, carregar_campanhas
 from reports.produto_desempenho import _chips, _foto, _in
@@ -125,6 +124,19 @@ def carregar_pedidos_google_mes(mes: str):
     """)
 
 
+@st.cache_data(ttl=900)
+def carregar_cupom(codigo: str):
+    """Regra do cupom usado no pedido (tb_cupom): tipo, valor, pedido mínimo. Vazio se o cupom não existir mais."""
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", codigo):
+        raise ValueError(f"cupom inválido: {codigo!r}")
+    client = bq.get_client()
+    df = bq.query_df(client, f"""
+        SELECT ds_tipo, vl_desconto, vl_pedido_minimo, fl_primeira_compra, dt_fim
+          FROM `{AZ}.tb_cupom` WHERE UPPER(ds_codigo) = UPPER('{codigo}') LIMIT 1
+    """)
+    return df.iloc[0].to_dict() if not df.empty else {}
+
+
 # ── contas ───────────────────────────────────────────────────────────────────
 
 def resumo_pedido(it):
@@ -148,6 +160,37 @@ def resumo_pedido(it):
     r["margem_pct"] = (r["margem"] / rec) if rec else None
     r["folga"] = pago - r["taxa"] - r["frete_real"] - r["embalagem"] - r["imposto"] - r["reembolso"] - r["custo"] - r["margem"]
     return r
+
+
+def detalhe_descontos(r, codigo_cupom, cupom, meio_pagamento):
+    """Descontos que o cliente recebeu, um item por origem: (título, valor, detalhe). Soma = r['desconto'].
+
+    Cupom: código e regra vêm de tb_cupom. Pix/pagamento: é o desconto do gateway. Promoção: a Nuvemshop só entrega o
+    valor total (o nome da promoção não chega à base — ver specs/consulta-pedido.md). Resto = ajuste manual.
+    """
+    itens = []
+    codigo = (codigo_cupom or "").strip() if isinstance(codigo_cupom, str) else ""
+    if codigo or r["cupom"] > 0.005:
+        regra = ""
+        if cupom:
+            valor = float(cupom.get("vl_desconto") or 0)
+            regra = f"{valor:g}% de desconto" if cupom.get("ds_tipo") == "percentage" else f"{brl(valor)} fixo"
+            minimo = cupom.get("vl_pedido_minimo")
+            if minimo is not None and not pd.isna(minimo) and float(minimo) > 0:
+                regra += f" · pedido mín. {brl(float(minimo))}"
+            if cupom.get("fl_primeira_compra"):
+                regra += " · 1ª compra"
+        itens.append((f"Cupom {codigo}" if codigo else "Cupom", r["cupom"], regra or "regra do cupom indisponível"))
+    if r["pgto"] > 0.005:
+        pix = str(meio_pagamento).lower() == "pix"
+        itens.append(("Desconto Pix" if pix else "Desconto do pagamento", r["pgto"],
+                      "por pagar no Pix" if pix else f"desconto do meio de pagamento ({meio_pagamento})"))
+    if r["promo"] > 0.005:
+        itens.append(("Promoção da loja", r["promo"], "promoção automática · nome não vem da Nuvemshop"))
+    resto = r["desconto"] - r["cupom"] - r["pgto"] - r["promo"]
+    if resto > 0.005:
+        itens.append(("Outro desconto", resto, "ajuste manual no pedido"))
+    return itens
 
 
 def custo_aquisicao(origem, midia, gclid, mes, pedidos_google, ponte, perf):
@@ -217,30 +260,6 @@ def _itens_html(it, fotos):
     st.html(f'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;margin:6px 0 4px">{"".join(cards)}</div>')
 
 
-def _cascata(r, aq):
-    passos = [
-        ("Itens", r["bruto"], "absolute"), ("− Descontos", -r["desconto"], "relative"), ("+ Frete cobrado", r["frete"], "relative"),
-        ("= Valor pago", None, "total"), ("− Taxa de pagamento", -r["taxa"], "relative"), ("− Frete (etiqueta)", -r["frete_real"], "relative"),
-        ("− Embalagem", -r["embalagem"], "relative"), ("− Imposto", -r["imposto"], "relative"), ("− Reembolso", -r["reembolso"], "relative"),
-        ("− Custo dos produtos", -r["custo"], "relative"), ("= Margem de contribuição", None, "total"),
-        ("− Custo de aquisição", -(aq or 0.0), "relative"), ("= Margem após aquisição", None, "total"),
-    ]
-    passos = [p for p in passos if p[2] == "total" or abs(p[1]) >= 0.005]   # passo zerado só polui
-    if aq is None:  # custo de aquisição desconhecido: a cascata termina na margem de contribuição
-        passos = [p for p in passos if p[0] not in ("− Custo de aquisição", "= Margem após aquisição")]
-    sub = {"= Valor pago": r["pago"], "= Margem de contribuição": r["margem"], "= Margem após aquisição": r["margem"] - (aq or 0.0)}
-    valores = [sub[p[0]] if p[1] is None else p[1] for p in passos]
-    fig = go.Figure(go.Waterfall(
-        x=[p[0] for p in passos], y=valores, measure=[p[2] for p in passos],
-        text=[brl(v) for v in valores], textposition="outside", cliponaxis=False,
-        connector=dict(line=dict(color=COLORS["border"], width=1)),
-        increasing=dict(marker=dict(color=CATEGORICAL[7])), decreasing=dict(marker=dict(color=COLORS["text_muted"])),
-        totals=dict(marker=dict(color=METRIC_COLORS["receita"])), hovertemplate="%{x}<br>%{text}<extra></extra>"))
-    plotly_layout(fig, height=420, showlegend=False, yaxis=dict(tickprefix="R$ ", gridcolor=COLORS["grid"]),
-                  xaxis=dict(tickangle=-35, automargin=True, dtick=1, tickfont=dict(size=11)))
-    return fig
-
-
 def render():
     inject_css()
     st.html("""
@@ -299,13 +318,21 @@ def render():
 
     # ═══ DO PREÇO AO VALOR PAGO ═══
     section_title("Do preço ao valor pago")
-    partes = [f"{n} {brl(v)}" for n, v in [("cupom", r["cupom"]), ("Pix", r["pgto"]), ("promoção", r["promo"])] if v > 0.005]
+    cupom_cod = h["ds_codigo_cupom_nuvemshop"] if pd.notna(h["ds_codigo_cupom_nuvemshop"]) else ""
+    try:
+        cupom_info = carregar_cupom(str(cupom_cod).strip()) if str(cupom_cod).strip() else {}
+    except Exception:  # noqa: BLE001
+        cupom_info = {}
+    descontos = detalhe_descontos(r, cupom_cod, cupom_info, h["ds_meio_pagamento_nuvemshop"])
     render_cards([
         card("Itens", brl(r["bruto"]), f"{int(it.loc[~it['fg_brinde'], 'qt_item'].sum())} un · preço cheio"),
-        card("(−) Descontos", brl(r["desconto"]), " · ".join(partes) or "sem desconto"),
+        card("(−) Descontos", brl(r["desconto"]), f"{len(descontos)} tipo(s), detalhados abaixo" if descontos else "sem desconto"),
         card("(+) Frete cobrado", brl(r["frete"]), "pago pelo cliente" if r["frete"] > 0.005 else "frete grátis"),
         card("Valor pago", brl(r["pago"]), "o que o cliente pagou", variant="ok"),
     ])
+    if descontos:
+        st.html(f'<div style="font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:{COLORS["text_muted"]};margin:14px 0 2px">Descontos que o cliente recebeu</div>')
+        render_cards([card(t, brl(v), html.escape(d)) for t, v, d in descontos])
 
     # ═══ DO VALOR PAGO AO CAIXA ═══
     section_title("Do valor pago ao caixa")
@@ -352,8 +379,3 @@ def render():
              variant=_variant_margem(pos_pct) if pos is not None else "neutral"),
         card("Margem após aquisição (%)", pct(pos_pct), "sobre a receita líquida de produtos", variant=_variant_margem(pos_pct) if pos is not None else "neutral"),
     ])
-
-    # ═══ PANORAMA ═══
-    section_title("Panorama da venda")
-    with st.container(border=True):
-        st.plotly_chart(_cascata(r, aq), use_container_width=True)

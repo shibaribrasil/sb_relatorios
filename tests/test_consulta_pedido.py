@@ -53,3 +53,29 @@ def test_custo_desconhecido_ou_zero():
     assert cp.custo_aquisicao("instagram", "paid_social", None, MES, GOOGLE, PONTE, PERF)[0] is None              # sem Meta Ads na base
     assert cp.custo_aquisicao("(sem parametro)", "(sem parametro)", None, MES, GOOGLE, PONTE, PERF)[0] == 0.0     # sem mídia paga
     assert cp.custo_aquisicao("google", "organico_srsltid", None, MES, GOOGLE, PONTE, PERF)[0] == 0.0
+
+
+def _r(**kw):
+    base = dict(desconto=0.0, cupom=0.0, pgto=0.0, promo=0.0)
+    return {**base, **kw}
+
+
+def test_descontos_destrinchados_somam_o_desconto_do_pedido():
+    r = _r(desconto=26.5, cupom=14.0, pgto=2.0, promo=10.5)
+    d = cp.detalhe_descontos(r, "SEGUNDACHANCE3EYP", {"ds_tipo": "percentage", "vl_desconto": 20.0, "vl_pedido_minimo": None}, "pix")
+    assert [t for t, _, _ in d] == ["Cupom SEGUNDACHANCE3EYP", "Desconto Pix", "Promoção da loja"]
+    assert sum(v for _, v, _ in d) == pytest.approx(r["desconto"])
+    assert "20% de desconto" in d[0][2]
+
+
+def test_cupom_de_valor_fixo_mostra_minimo_e_pedido_sem_desconto_nao_lista_nada():
+    d = cp.detalhe_descontos(_r(desconto=5.0, cupom=5.0), "PRIMEIRODATE", {"ds_tipo": "absolute", "vl_desconto": 5.0, "vl_pedido_minimo": 49.99}, "credit_card")
+    assert d[0][0] == "Cupom PRIMEIRODATE" and "R$ 5,00 fixo" in d[0][2] and "mín." in d[0][2]
+    assert cp.detalhe_descontos(_r(), None, {}, "pix") == []
+
+
+def test_desconto_que_sobra_vira_ajuste_manual_e_cupom_apagado_nao_quebra():
+    d = cp.detalhe_descontos(_r(desconto=12.0, cupom=5.0), "VELHO", {}, "pix")
+    assert [t for t, _, _ in d] == ["Cupom VELHO", "Outro desconto"]
+    assert d[1][1] == pytest.approx(7.0)
+    assert "indisponível" in d[0][2]
