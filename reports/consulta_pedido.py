@@ -183,6 +183,12 @@ def custo_aquisicao(origem, midia, gclid, mes, pedidos_google, ponte, perf):
 
 # ── apresentação ─────────────────────────────────────────────────────────────
 
+def _cod(codigo):
+    """Código da Nuvemshop leva #; pedido só do Bling (ex.: Mercado Livre) aparece como 'Bling nnnn'."""
+    codigo = str(codigo)
+    return codigo if codigo.startswith("Bling") else f"#{codigo}"
+
+
 def _itens_html(it, fotos):
     cards = []
     for _, r in it.sort_values("fg_brinde", kind="stable").iterrows():
@@ -198,7 +204,7 @@ def _itens_html(it, fotos):
             linha = f"{qt} × {brl(unit)}"
             valor = brl(r["vl_receita_bruta_produto"])
             if r["vl_receita_liquida_produto"] < r["vl_receita_bruta_produto"] - 0.005:
-                linha += f" · paga {brl(r['vl_receita_liquida_produto'])}"
+                linha += f" · com desconto {brl(r['vl_receita_liquida_produto'])}"
         cards.append(f"""<div style="display:flex;gap:12px;align-items:center;border:1px solid {COLORS['border']};border-radius:10px;padding:10px;background:{COLORS['bg']}">
           {img}
           <div style="min-width:0;flex:1">
@@ -252,7 +258,7 @@ def render():
         st.info("Sem pedidos válidos no período.")
         return
 
-    rot = {r.cd: f"#{r.codigo} · {r.dt_pedido:%d/%m/%Y} · {r.nm_contato or '—'} · {brl(r.vl_liquido)}" for r in lista.itertuples()}
+    rot = {r.cd: f"{_cod(r.codigo)} · {r.dt_pedido:%d/%m/%Y} · {r.nm_contato or '—'} · {brl(r.vl_liquido)}" for r in lista.itertuples()}
     cd = st.selectbox("Pedido", list(rot), format_func=rot.get, help="O mais recente vem selecionado. Digite o código ou o nome do cliente para buscar.")
     try:
         it = carregar_itens(cd)
@@ -271,7 +277,7 @@ def render():
     recorrente = bool(h["fg_cliente_recorrente"]) if pd.notna(h["fg_cliente_recorrente"]) else False
     n_ped = f" · {int(h['nr_pedido_cliente'])}º pedido" if pd.notna(h["nr_pedido_cliente"]) else ""
     st.html(f"""<div style="display:flex;gap:18px;align-items:baseline;flex-wrap:wrap;margin:4px 0 6px">
-      <div style="font-size:24px;font-weight:800;color:{COLORS['primary_dark']}">Pedido #{html.escape(str(h['cd_nuvemshop'] if pd.notna(h['cd_nuvemshop']) else 'Bling ' + str(h['cd_pedido'])))}</div>
+      <div style="font-size:24px;font-weight:800;color:{COLORS['primary_dark']}">Pedido {html.escape(_cod(h['cd_nuvemshop'] if pd.notna(h['cd_nuvemshop']) else 'Bling ' + str(h['cd_pedido'])))}</div>
       <div style="font-size:13px;color:{COLORS['text_secondary']}">{h['dt_pedido']:%d/%m/%Y} · {html.escape(str(h['nm_contato'] or '—'))}</div></div>
       {_chips([
           (str(h['ds_tipo_loja']) if pd.notna(h['ds_tipo_loja']) else "", *azul),
@@ -336,9 +342,11 @@ def render():
         expl = f"custo do Google Ads indisponível ({e})"
     pos = None if aq is None else r["margem"] - aq
     pos_pct = (pos / r["rec"]) if pos is not None and r["rec"] else None
+    sem_origem = str(org["origem"]).startswith("(sem")
     campanha = org["ds_utm_campaign"] if isinstance(org.get("ds_utm_campaign"), str) and org["ds_utm_campaign"] else "—"
     render_cards([
-        card("Origem", html.escape(str(org["origem"])), f"mídia: {html.escape(str(org['midia']))}" + (f" · campanha: {html.escape(campanha)}" if campanha != "—" else "")),
+        card("Origem", "Direto / sem parâmetro" if sem_origem else html.escape(str(org["origem"])),
+             "sem UTM nem clique de anúncio" if sem_origem else f"mídia: {html.escape(str(org['midia']))}" + (f" · campanha: {html.escape(campanha)}" if campanha != "—" else "")),
         card("Custo de aquisição", brl(aq) if aq is not None else "—", expl),
         card("Margem após aquisição", brl(pos) if pos is not None else "—", "margem de contribuição − custo de aquisição",
              variant=_variant_margem(pos_pct) if pos is not None else "neutral"),
