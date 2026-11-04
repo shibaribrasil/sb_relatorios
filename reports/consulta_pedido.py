@@ -15,7 +15,7 @@ import streamlit as st
 
 from common import bigquery as bq
 from common.design import (
-    COLORS, inject_css, card, render_cards, section_title, note, brl, pct,
+    COLORS, inject_css, section_title, note, brl, pct,
 )
 from reports.origem_campanha import GOOGLE_PAGO, carregar_campanhas
 from reports.produto_desempenho import _chips, _foto, _in
@@ -25,6 +25,7 @@ AZ = f"{bq.PROJECT}.dbt_dw_az"
 INICIO = "2025-08-01"                      # taxa e frete reais da Nuvemshop só são confiáveis desde ago/2025
 INICIO_ADS = pd.Timestamp("2026-06-01")    # o histórico de custo por campanha do Google Ads começa aqui
 META_PAGO = ("instagram", "paid_social")   # mídia paga sem custo na base (não há dados do Meta Ads)
+MAX_PEDIDO_CASHBACK = 3                    # espelha o parâmetro max_pedido_cashback da fila de pós-venda (dbt): cashback só até o 3º pedido
 MEIOS = {"credit_card": "Cartão de crédito", "pix": "Pix", "boleto": "Boleto", "wallet": "Carteira digital", "other": "Outro meio"}
 
 
@@ -68,7 +69,9 @@ def carregar_itens(cd: str):
                vl_embalagem_rateio, vl_imposto_rateio, vl_reembolso_rateio, vl_custo_linha, vl_margem_contribuicao,
                ds_incompletude, CAST(cd_pedido AS STRING) AS cd_pedido, CAST(cd_pedido_nuvemshop AS STRING) AS cd_nuvemshop,
                dt_pedido, nm_contato, nr_pedido_cliente, fg_cliente_recorrente, ds_tipo_loja, ds_status_pedido,
-               ds_meio_pagamento_nuvemshop, qt_parcelas_nuvemshop, ds_codigo_cupom_nuvemshop, dt_recebimento_pedido
+               ds_meio_pagamento_nuvemshop, qt_parcelas_nuvemshop, ds_codigo_cupom_nuvemshop, dt_recebimento_pedido,
+               ds_bandeira_cartao_nuvemshop, ds_gateway_nuvemshop, ds_opcao_frete_nuvemshop, nm_transportadora_nuvemshop,
+               ds_origem_checkout_nuvemshop, dt_pagamento_nuvemshop, qt_dias_recebimento, CAST(cd_contato AS STRING) AS cd_contato
           FROM `{AZ}.tb_pedido` WHERE fg_pedido_valido AND CAST(cd_codigo_interno AS STRING) = '{_digitos(cd)}'
     """)
     for c in ["qt_item", "vl_receita_bruta_produto", "vl_desconto_cupom_rateio", "vl_desconto_pagamento_rateio",
@@ -79,6 +82,7 @@ def carregar_itens(cd: str):
     df["fg_brinde"] = df["fg_brinde"].fillna(False).astype(bool)
     df["dt_pedido"] = pd.to_datetime(df["dt_pedido"])
     df["dt_recebimento_pedido"] = pd.to_datetime(df["dt_recebimento_pedido"])
+    df["dt_pagamento_nuvemshop"] = pd.to_datetime(df["dt_pagamento_nuvemshop"])
     return df
 
 
@@ -137,7 +141,114 @@ def carregar_cupom(codigo: str):
     return df.iloc[0].to_dict() if not df.empty else {}
 
 
+@st.cache_data(ttl=300)
+def carregar_logistica(cd: str):
+    """Envio do pedido (tb_logistica_pedido): transportadora, rastreio, datas de expedição e entrega, previsão."""
+    client = bq.get_client()
+    df = bq.query_df(client, f"""
+        SELECT nm_transportadora, ds_opcao_frete, cd_rastreio, ds_url_rastreio, dt_expedicao, dt_entrega,
+               dt_estimada_entrega_max, ds_cidade_entrega, ds_estado_entrega
+          FROM `{AZ}.tb_logistica_pedido` WHERE CAST(cd_codigo_interno AS STRING) = '{_digitos(cd)}' LIMIT 1
+    """)
+    return df.iloc[0].to_dict() if not df.empty else {}
+
+
+@st.cache_data(ttl=300)
+def carregar_cliente(cd_contato: str):
+    """Cliente (tb_cliente): cadastro e acumulado de compras. Vazio se o pedido não tem contato."""
+    if not cd_contato or cd_contato in ("None", "nan"):
+        return {}
+    client = bq.get_client()
+    df = bq.query_df(client, f"""
+        SELECT nm_contato, ds_endereco_uf, ds_endereco_municipio, nr_telefone, qt_pedido, vl_total_pedido,
+               vl_receita_liquida_produto, dt_prim_pedido, dt_ult_pedido
+          FROM `{AZ}.tb_cliente` WHERE cd_contato = '{_digitos(cd_contato)}' LIMIT 1
+    """)
+    return df.iloc[0].to_dict() if not df.empty else {}
+
+
+@st.cache_data(ttl=300)
+def carregar_cashback(cd_contato: str, cd: str):
+    """Mensagens da jornada de pós-venda já registradas para o pedido (raw_control.vw_contato_cliente) e o cupom de cashback gerado."""
+    chave = f"{_digitos(cd_contato)}|{_digitos(cd)}"
+    client = bq.get_client()
+    contatos = bq.query_df(client, f"""
+        SELECT tipo_tarefa, dt_contato, fg_alcancou, ds_resultado
+          FROM `{bq.PROJECT}.raw_control.vw_contato_cliente` WHERE tipo_tarefa LIKE 'jornada%' AND chave = '{chave}'
+         ORDER BY dt_contato
+    """)
+    cupom = bq.query_df(client, f"""
+        SELECT codigo, valor, expira_em, cancelado_em
+          FROM `{bq.PROJECT}.raw_control.cupons_gerados`
+         WHERE campanha = 'cupom_cashback_posvenda' AND referencia = '{chave}' ORDER BY criado_em DESC LIMIT 1
+    """)
+    return contatos.to_dict("records"), (cupom.iloc[0].to_dict() if not cupom.empty else {})
+
+
 # ── contas ───────────────────────────────────────────────────────────────────
+
+def _brt(ts):
+    """Timestamp (UTC) -> data/hora de Brasília; vazio vira NaT."""
+    if ts is None or pd.isna(ts):
+        return pd.NaT
+    return pd.Timestamp(ts).tz_convert("America/Sao_Paulo") if pd.Timestamp(ts).tzinfo else pd.Timestamp(ts)
+
+
+def formatar_telefone(nr):
+    """(texto, link do WhatsApp) a partir do telefone do cadastro; vazio se não houver número válido."""
+    d = re.sub(r"\D", "", str(nr or ""))
+    if d.startswith("55") and len(d) > 11:
+        d = d[2:]
+    if len(d) not in (10, 11):
+        return "", ""
+    corpo = f"{d[2:7]}-{d[7:]}" if len(d) == 11 else f"{d[2:6]}-{d[6:]}"
+    return f"({d[:2]}) {corpo}", f"https://wa.me/55{d}"
+
+
+def status_envio(log, status_pedido):
+    """Expedição e entrega do pedido: {'expedicao': (texto, detalhe, tipo), 'entrega': (...)}.
+
+    Não usa `ds_situacao_logistica`/`fg_entregue`: ficam verdadeiros para pedido sem rastreio carregado (achado de 13/10/2026).
+    Expedido = tem `dt_expedicao`; entregue = tem `dt_entrega` (confirmada).
+    """
+    log = log or {}
+    exp, ent, prev = log.get("dt_expedicao"), log.get("dt_entrega"), log.get("dt_estimada_entrega_max")
+    if exp is not None and not pd.isna(exp):
+        expedicao = (f"Expedido em {pd.Timestamp(exp):%d/%m}", "", "ok")
+    elif str(status_pedido).upper() == "EM ABERTO":
+        expedicao = ("Aguardando postagem", "pago, ainda não expedido", "warn")
+    else:
+        expedicao = ("Sem registro de expedição", "o rastreio pode não ter sido carregado", "")
+    if ent is not None and not pd.isna(ent):
+        entrega = (f"Entregue em {pd.Timestamp(ent):%d/%m}", "", "ok")
+    elif prev is not None and not pd.isna(prev):
+        entrega = (f"Previsão até {pd.Timestamp(prev):%d/%m}", "", "")
+    else:
+        entrega = ("—", "", "")
+    return {"expedicao": expedicao, "entrega": entrega}
+
+
+def status_cashback(contatos, cupom, nr_pedido):
+    """Mensagem de cashback (W0, logo após o pagamento) deste pedido: (texto, detalhe, tipo). `fg_alcancou` = a mensagem chegou ao cliente."""
+    det = ""
+    if cupom:
+        det = f"cupom {cupom.get('codigo')} · {brl(float(cupom.get('valor') or 0))}"
+        if cupom.get("expira_em") is not None and not pd.isna(cupom.get("expira_em")):
+            det += f" · vence {_brt(cupom['expira_em']):%d/%m}"
+        if cupom.get("cancelado_em") is not None and not pd.isna(cupom.get("cancelado_em")):
+            det += " · cancelado"
+    w0 = next((c for c in contatos if c.get("tipo_tarefa") == "jornada_w0"), None)
+    if w0:
+        dia = _brt(w0["dt_contato"])
+        if bool(w0.get("fg_alcancou")):
+            return f"Recebeu em {dia:%d/%m}", det, "ok"
+        motivo = f" ({w0['ds_resultado']})" if isinstance(w0.get("ds_resultado"), str) and w0["ds_resultado"] else ""
+        return f"Enviada em {dia:%d/%m}, sem confirmação{motivo}", det, "warn"
+    if cupom:
+        return "Cupom gerado, mensagem ainda não enviada", det, "warn"
+    if nr_pedido is not None and not pd.isna(nr_pedido) and int(nr_pedido) > MAX_PEDIDO_CASHBACK:
+        return f"Sem cashback ({int(nr_pedido)}º pedido)", f"o cashback vai até o {MAX_PEDIDO_CASHBACK}º pedido", ""
+    return "Não enviada", "sem registro na jornada de pós-venda", ""
 
 def resumo_pedido(it):
     """Parcelas do pedido, da cascata. Fecha com a margem de contribuição do dbt (campo `folga` = diferença, deve ser ~0)."""
@@ -191,6 +302,19 @@ def detalhe_descontos(r, codigo_cupom, cupom, meio_pagamento):
     if resto > 0.005:
         itens.append(("Outro desconto", resto, "ajuste manual no pedido"))
     return itens
+
+
+def margem_por_item(it):
+    """Receita, custo e margem de contribuição de cada linha (brinde por último). A soma das margens = a margem do pedido."""
+    out = []
+    for _, l in it.sort_values("fg_brinde", kind="stable").iterrows():
+        rec = float(l["vl_receita_liquida_produto"])
+        sem_var = pd.isna(l["ds_variacao"]) or str(l["ds_variacao"]).lower().startswith("sem var")
+        out.append({"nome": str(l["nm_produto"]), "variacao": "" if sem_var else str(l["ds_variacao"]),
+                    "qt": int(l["qt_item"]), "brinde": bool(l["fg_brinde"]), "receita": rec, "custo": float(l["vl_custo_linha"]),
+                    "margem": float(l["vl_margem_contribuicao"]),
+                    "margem_pct": (float(l["vl_margem_contribuicao"]) / rec) if rec > 0.005 else None})
+    return out
 
 
 def custo_aquisicao(origem, midia, gclid, mes, pedidos_google, ponte, perf):
@@ -260,6 +384,39 @@ def _itens_html(it, fotos):
     st.html(f'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;margin:6px 0 4px">{"".join(cards)}</div>')
 
 
+_TIPOS = {  # tipo da linha -> (fundo, cor do valor, negrito)
+    "": ("", COLORS["text"], False), "neg": ("", COLORS["danger"], False), "total": (COLORS["bg_secondary"], COLORS["text"], True),
+    "ok": (COLORS["success_bg"], COLORS["success"], True), "warn": (COLORS["warning_bg"], COLORS["warning"], True),
+    "bad": (COLORS["danger_bg"], COLORS["danger"], True),
+}
+
+
+def _linha(rotulo, valor, detalhe="", tipo="", recuo=False, valor_html=None):
+    """Uma linha do extrato: rótulo (e detalhe pequeno) à esquerda, valor à direita. Tipos: neg (vermelho), total, ok, warn, bad."""
+    fundo, cor, forte = _TIPOS[tipo]
+    peso = 700 if forte else 400
+    pad = "9px 16px 9px 34px" if recuo else "10px 16px"
+    det = f'<div style="font-size:11px;color:{COLORS["text_muted"]};margin-top:1px;font-weight:400">{html.escape(detalhe)}</div>' if detalhe else ""
+    bg = f"background:{fundo};" if fundo else ""
+    rot_cor = COLORS["text_secondary"] if recuo else COLORS["text"]
+    return (f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:{pad};border-top:1px solid {COLORS["border"]};{bg}">'
+            f'<div style="font-size:{12.5 if recuo else 13.5}px;color:{rot_cor};font-weight:{peso};min-width:0">{html.escape(rotulo)}{det}</div>'
+            f'<div style="font-size:13.5px;color:{cor};font-weight:{peso};white-space:nowrap;text-align:right">{valor_html if valor_html is not None else html.escape(valor)}</div></div>')
+
+
+def _painel(titulo, linhas, selo=None):
+    """Quadro do extrato (título + selo opcional no cabeçalho + linhas), no estilo do pedido da Nuvemshop."""
+    chip = (f'<span style="background:{selo[1]};color:{selo[2]};border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700;white-space:nowrap">{html.escape(selo[0])}</span>'
+            if selo else "")
+    return (f'<div style="border:1px solid {COLORS["border"]};border-radius:12px;overflow:hidden;background:{COLORS["bg"]}">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 16px">'
+            f'<div style="font-size:16px;font-weight:800;color:{COLORS["primary_dark"]}">{html.escape(titulo)}</div>{chip}</div>{"".join(linhas)}</div>')
+
+
+def _txt(v):
+    return str(v).strip() if isinstance(v, str) and v.strip() else ""
+
+
 def render():
     inject_css()
     st.html("""
@@ -316,49 +473,68 @@ def render():
     section_title("O pedido")
     _itens_html(it, fotos)
 
-    # ═══ DO PREÇO AO VALOR PAGO ═══
-    section_title("Do preço ao valor pago")
+    # ═══ VENDA E CLIENTE ═══
+    bandeira_txt = _txt(h["ds_bandeira_cartao_nuvemshop"]).title()
+    if bandeira_txt.lower() == meio.lower():  # Pix vem com "bandeira" pix
+        bandeira_txt = ""
+    section_title("Venda e cliente")
+    try:
+        log = carregar_logistica(cd)
+    except Exception:  # noqa: BLE001
+        log = {}
+    try:
+        cliente = carregar_cliente(str(h["cd_contato"]))
+    except Exception:  # noqa: BLE001
+        cliente = {}
+    try:
+        contatos, cupom_cb = carregar_cashback(str(h["cd_contato"]), cd) if pd.notna(h["cd_contato"]) else ([], {})
+        cb_ok = pd.notna(h["cd_contato"])
+    except Exception:  # noqa: BLE001
+        contatos, cupom_cb, cb_ok = [], {}, False
+    env = status_envio(log, h["ds_status_pedido"])
+    parcelas = f"{parc}x" if parc > 1 else ("à vista" if h["ds_meio_pagamento_nuvemshop"] == "credit_card" else "")
+    rastreio, url = _txt(log.get("cd_rastreio")), _txt(log.get("ds_url_rastreio"))
+    link_rastreio = (f'<a href="{html.escape(url)}" target="_blank" rel="noopener" style="color:{COLORS["primary"]};font-weight:600">{html.escape(rastreio)}</a>'
+                     if rastreio and url else None)
+    cb = status_cashback(contatos, cupom_cb, h["nr_pedido_cliente"]) if cb_ok else ("Indisponível", "não foi possível ler o registro de mensagens", "")
+    w1 = next((c for c in contatos if c.get("tipo_tarefa") == "jornada_w1"), None)
+    LV = [_linha("Pagamento", " · ".join(x for x in [meio, parcelas] if x) or "—", " · ".join(x for x in [bandeira_txt, _txt(h["ds_gateway_nuvemshop"])] if x)),
+          _linha("Envio", _txt(log.get("ds_opcao_frete")) or _txt(h["ds_opcao_frete_nuvemshop"]) or "—", _txt(log.get("nm_transportadora")) or _txt(h["nm_transportadora_nuvemshop"])),
+          _linha("Rastreio", rastreio or "ainda sem código", valor_html=link_rastreio),
+          _linha("Expedição", env["expedicao"][0], env["expedicao"][1], env["expedicao"][2]),
+          _linha("Entrega", env["entrega"][0], env["entrega"][1], env["entrega"][2]),
+          _linha("Mensagem de cashback", cb[0], cb[1], cb[2])]
+    if w1:
+        LV.append(_linha("Check-in pós-entrega", f"{'Recebeu' if bool(w1.get('fg_alcancou')) else 'Enviado'} em {_brt(w1['dt_contato']):%d/%m}", "", "ok" if bool(w1.get("fg_alcancou")) else "warn"))
+    tel, wa = formatar_telefone(cliente.get("nr_telefone"))
+    cidade, uf = _txt(cliente.get("ds_endereco_municipio")) or _txt(log.get("ds_cidade_entrega")), _txt(cliente.get("ds_endereco_uf"))
+    local = " / ".join(x for x in [cidade, uf] if x) or "—"
+    qt_ped = int(cliente["qt_pedido"]) if pd.notna(cliente.get("qt_pedido")) else None
+    datas = " · ".join(x for x in [f"1ª compra em {pd.Timestamp(cliente['dt_prim_pedido']):%d/%m/%Y}" if pd.notna(cliente.get("dt_prim_pedido")) else "",
+                                   f"última em {pd.Timestamp(cliente['dt_ult_pedido']):%d/%m/%Y}" if pd.notna(cliente.get("dt_ult_pedido")) else ""] if x)
+    link_wa = (f'<a href="{html.escape(wa)}" target="_blank" rel="noopener" style="color:{COLORS["primary"]};font-weight:600">{html.escape(tel)}</a>' if wa else None)
+    LC = [_linha("Nome", _txt(cliente.get("nm_contato")) or str(h["nm_contato"] or "—")),
+          _linha("Cidade / UF", local),
+          _linha("WhatsApp", tel or "—", valor_html=link_wa),
+          _linha("Pedidos feitos", "—" if qt_ped is None else f"{qt_ped} pedido{'s' if qt_ped != 1 else ''}", datas)]
+    if pd.notna(cliente.get("vl_total_pedido")):
+        LC.append(_linha("Total consumido", brl(float(cliente["vl_total_pedido"])), f"produtos {brl(float(cliente['vl_receita_liquida_produto']))}, sem frete", "total"))
+    if not cliente:
+        LC.append(_linha("Cadastro", "não encontrado", "pedido sem cliente vinculado na base"))
+    selo_c = ("Recompra", COLORS["info_bg"], COLORS["info"]) if recorrente else ("1ª compra", COLORS["success_bg"], COLORS["success"])
+    st.html('<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px;align-items:start;margin-top:6px">'
+            + _painel("Informações da venda", LV) + _painel("Cliente", LC, selo_c) + "</div>")
+
+    # ═══ DA VENDA À MARGEM (extrato) ═══
+    section_title("Da venda à margem")
     cupom_cod = h["ds_codigo_cupom_nuvemshop"] if pd.notna(h["ds_codigo_cupom_nuvemshop"]) else ""
     try:
         cupom_info = carregar_cupom(str(cupom_cod).strip()) if str(cupom_cod).strip() else {}
     except Exception:  # noqa: BLE001
         cupom_info = {}
     descontos = detalhe_descontos(r, cupom_cod, cupom_info, h["ds_meio_pagamento_nuvemshop"])
-    render_cards([
-        card("Itens", brl(r["bruto"]), f"{int(it.loc[~it['fg_brinde'], 'qt_item'].sum())} un · preço cheio"),
-        card("(−) Descontos", brl(r["desconto"]), f"{len(descontos)} tipo(s), detalhados abaixo" if descontos else "sem desconto"),
-        card("(+) Frete cobrado", brl(r["frete"]), "pago pelo cliente" if r["frete"] > 0.005 else "frete grátis"),
-        card("Valor pago", brl(r["pago"]), "o que o cliente pagou", variant="ok"),
-    ])
-    if descontos:
-        st.html(f'<div style="font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:{COLORS["text_muted"]};margin:14px 0 2px">Descontos que o cliente recebeu</div>')
-        render_cards([card(t, brl(v), html.escape(d)) for t, v, d in descontos])
 
-    # ═══ DO VALOR PAGO AO CAIXA ═══
-    section_title("Do valor pago ao caixa")
-    receb = h["dt_recebimento_pedido"]
-    quando = "" if pd.isna(receb) else (f"cai em {receb:%d/%m}" if receb > hoje else f"caiu em {receb:%d/%m}")
-    cards = [
-        card("(−) Taxa de pagamento", brl(r["taxa"]), f"{pct(r['taxa'] / r['pago']) if r['pago'] else '—'} do valor pago · taxa real do gateway"),
-        card("Entrou na conta", brl(r["entrou"]), f"valor pago − taxa · {quando}" if quando else "valor pago − taxa", variant="ok"),
-        card("(−) Frete (etiqueta)", brl(r["frete_real"]), f"o cliente pagou {brl(r['frete'])}"),
-        card("(−) Embalagem", brl(r["embalagem"]), "estimada, por pedido"),
-        card("(−) Imposto", brl(r["imposto"]), "sobre o valor já com desconto"),
-    ]
-    if r["reembolso"] > 0.005:
-        cards.append(card("(−) Reembolso", brl(r["reembolso"]), "estornado ao cliente", variant="bad"))
-    render_cards(cards)
-
-    # ═══ CUSTO E MARGEM ═══
-    section_title("Custo e margem")
-    render_cards([
-        card("(−) Custo dos produtos", brl(r["custo"]), f"inclui {brl(r['custo_brinde'])} de brinde" if r["custo_brinde"] > 0.005 else "CMV do pedido"),
-        card("Margem de contribuição", brl(r["margem"]), "antes de mídia", variant=_variant_margem(r["margem_pct"])),
-        card("Margem de contribuição (%)", pct(r["margem_pct"]), "sobre a receita líquida de produtos", variant=_variant_margem(r["margem_pct"])),
-    ])
-
-    # ═══ ORIGEM E CUSTO DE AQUISIÇÃO ═══
-    section_title("Origem e custo de aquisição")
+    # origem e custo de aquisição
     mes = pd.Timestamp(h["dt_pedido"]).to_period("M").to_timestamp()
     aq, expl = None, ""
     try:
@@ -370,12 +546,74 @@ def render():
     pos = None if aq is None else r["margem"] - aq
     pos_pct = (pos / r["rec"]) if pos is not None and r["rec"] else None
     sem_origem = str(org["origem"]).startswith("(sem")
-    campanha = org["ds_utm_campaign"] if isinstance(org.get("ds_utm_campaign"), str) and org["ds_utm_campaign"] else "—"
-    render_cards([
-        card("Origem", "Direto / sem parâmetro" if sem_origem else html.escape(str(org["origem"])),
-             "sem UTM nem clique de anúncio" if sem_origem else f"mídia: {html.escape(str(org['midia']))}" + (f" · campanha: {html.escape(campanha)}" if campanha != "—" else "")),
-        card("Custo de aquisição", brl(aq) if aq is not None else "—", expl),
-        card("Margem após aquisição", brl(pos) if pos is not None else "—", "margem de contribuição − custo de aquisição",
-             variant=_variant_margem(pos_pct) if pos is not None else "neutral"),
-        card("Margem após aquisição (%)", pct(pos_pct), "sobre a receita líquida de produtos", variant=_variant_margem(pos_pct) if pos is not None else "neutral"),
-    ])
+    campanha = _txt(org.get("ds_utm_campaign"))
+
+    # 1) Pagamento: do preço dos itens ao que entrou na conta
+    receb, pagto = h["dt_recebimento_pedido"], h["dt_pagamento_nuvemshop"]
+    quando = "" if pd.isna(receb) else (f"cai em {receb:%d/%m}" if receb > hoje else f"caiu em {receb:%d/%m}")
+    prazo = f" · pago em {pagto:%d/%m}" if pd.notna(pagto) else ""
+    if pd.notna(h["qt_dias_recebimento"]) and pd.notna(pagto) and int(h["qt_dias_recebimento"]) > 0:
+        n_dias = int(h["qt_dias_recebimento"])
+        prazo += f" (+{n_dias} dia{'s' if n_dias > 1 else ''})"
+    bandeira = bandeira_txt
+    pagamento_txt = " · ".join(x for x in [meio, bandeira, f"{parc}x" if parc > 1 else "", _txt(h["ds_gateway_nuvemshop"])] if x)
+    frete_det = _txt(log.get("ds_opcao_frete")) or _txt(h["ds_opcao_frete_nuvemshop"])
+    un = int(it.loc[~it["fg_brinde"], "qt_item"].sum())
+    L1 = [_linha(f"Subtotal ({un} un. a preço cheio)", brl(r["bruto"]))]
+    L1 += [_linha(t, f"− {brl(v)}", d, "neg", recuo=True) for t, v, d in descontos]
+    if descontos:
+        L1.append(_linha("Receita líquida de produtos", brl(r["rec"]), "subtotal − descontos", "total"))
+    L1.append(_linha("Frete cobrado", brl(r["frete"]) if r["frete"] > 0.005 else "Grátis", frete_det))
+    L1.append(_linha("Total pago pelo cliente", brl(r["pago"]), pagamento_txt, "total"))
+    L1.append(_linha("Taxa de pagamento", f"− {brl(r['taxa'])}", f"{pct(r['taxa'] / r['pago']) if r['pago'] else '—'} do valor pago · taxa real do gateway", "neg"))
+    L1.append(_linha("Total líquido (entrou na conta)", brl(r["entrou"]), (quando + prazo).strip(" ·") if quando else "valor pago − taxa", "ok"))
+    selo1 = None if pd.isna(receb) else (("Recebido", COLORS["success_bg"], COLORS["success"]) if receb <= hoje else ("A receber", COLORS["warning_bg"], COLORS["warning"]))
+
+    # 2) Custos e margem: do caixa à margem de contribuição
+    res_frete = r["frete"] - r["frete_real"]
+    var_m = _variant_margem(r["margem_pct"])
+    tipo_m = "total" if var_m == "neutral" else var_m
+    cores_m = {"ok": (COLORS["success_bg"], COLORS["success"]), "warn": (COLORS["warning_bg"], COLORS["warning"]), "bad": (COLORS["danger_bg"], COLORS["danger"])}
+    if abs(res_frete) < 0.005:
+        frete_res = "frete empatado"
+    else:
+        frete_res = f"sobrou {brl(res_frete)}" if res_frete > 0 else f"a loja bancou {brl(-res_frete)}"
+    L2 = [_linha("Entrou na conta", brl(r["entrou"]), "do extrato de pagamento", "total"),
+          _linha("Frete (etiqueta)", f"− {brl(r['frete_real'])}", f"cliente pagou {brl(r['frete'])} · {frete_res}", "neg"),
+          _linha("Embalagem", f"− {brl(r['embalagem'])}", "estimativa por pedido", "neg"),
+          _linha("Imposto", f"− {brl(r['imposto'])}", "sobre o valor já com desconto", "neg")]
+    if r["reembolso"] > 0.005:
+        L2.append(_linha("Reembolso", f"− {brl(r['reembolso'])}", "estornado ao cliente", "neg"))
+    L2.append(_linha("Custo dos produtos", f"− {brl(r['custo'])}", f"inclui {brl(r['custo_brinde'])} de brinde" if r["custo_brinde"] > 0.005 else "CMV do pedido", "neg"))
+    L2.append(_linha("Margem de contribuição", brl(r["margem"]), f"{pct(r['margem_pct'])} da receita líquida · antes de mídia", tipo_m))
+    selo2 = (pct(r["margem_pct"]), *cores_m[var_m]) if var_m in cores_m else None
+
+    # 3) Margem por item
+    L3 = []
+    for m in margem_por_item(it):
+        nome = m["nome"] + (f" · {m['variacao']}" if m["variacao"] else "")
+        if m["brinde"]:
+            det = f"brinde · custo {brl(m['custo'])}"
+        else:
+            det = f"{m['qt']} un. · receita {brl(m['receita'])} · custo {brl(m['custo'])}" + (f" · margem {pct(m['margem_pct'])}" if m["margem_pct"] is not None else "")
+        L3.append(_linha(nome, brl(m["margem"]), det, "neg" if m["margem"] < 0 else ""))
+    L3.append(_linha("Margem de contribuição", brl(r["margem"]), "soma dos itens", tipo_m))
+
+    # 4) Origem e custo de aquisição
+    checkout = {"store": "Site", "mobile": "Mobile", "form": "Link direto"}.get(_txt(h["ds_origem_checkout_nuvemshop"]), _txt(h["ds_origem_checkout_nuvemshop"]))
+    L4 = [_linha("Origem", "Direto / sem parâmetro" if sem_origem else str(org["origem"]), "sem UTM nem clique de anúncio" if sem_origem else ""),
+          _linha("Mídia", "—" if sem_origem else str(org["midia"]))]
+    if campanha:
+        L4.append(_linha("Campanha (UTM)", campanha))
+    if checkout:
+        L4.append(_linha("Compra feita em", checkout))
+    L4.append(_linha("Margem de contribuição", brl(r["margem"]), "", "total"))
+    L4.append(_linha("Custo de aquisição", f"− {brl(aq)}" if aq is not None else "—", expl, "neg" if aq else ""))
+    var_p = _variant_margem(pos_pct) if pos is not None else "neutral"
+    L4.append(_linha("Margem após aquisição", brl(pos) if pos is not None else "—",
+                     f"{pct(pos_pct)} da receita líquida" if pos is not None else "sem custo de aquisição estimado", "total" if var_p == "neutral" else var_p))
+    selo4 = (pct(pos_pct), *cores_m[var_p]) if var_p in cores_m else None
+
+    st.html('<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px;align-items:start;margin-top:6px">'
+            + _painel("Pagamento", L1, selo1) + _painel("Custos e margem", L2, selo2)
+            + _painel("Margem por item", L3) + _painel("Origem e aquisição", L4, selo4) + "</div>")
