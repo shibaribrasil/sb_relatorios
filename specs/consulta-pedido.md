@@ -1,6 +1,6 @@
 # Spec — Consulta de Pedidos (`reports/consulta_pedido.py`, menu Diário)
 
-Status: v3 em 04/11/2026 (v1 e v2 no mesmo dia). Pedido do Hugo: página bem visual, pouco texto, "Desempenho do Produto, mas do pedido", com o seletor no pedido mais recente por padrão e um panorama o mais real possível de como a venda foi.
+Status: v4 em 04/11/2026 (v1 a v3 no mesmo dia). Pedido do Hugo: página bem visual, pouco texto, "Desempenho do Produto, mas do pedido", com o seletor no pedido mais recente por padrão e um panorama o mais real possível de como a venda foi.
 
 ## Pergunta da página
 Como foi esta venda, do que o cliente comprou até o que sobrou depois de taxa, envio, imposto, custo do produto e custo de aquisição?
@@ -21,13 +21,15 @@ Como foi esta venda, do que o cliente comprou até o que sobrou depois de taxa, 
 | Origem e mídia | `tb_atribuicao_pedido` (`ds_origem_venda`, `ds_midia_venda`, `ds_gclid`, `ds_utm_campaign`) |
 | Custo de aquisição | `dbt_dw_us_az.tb_gads_clique_campanha` (gclid → campanha) e `tb_gads_campanha_performance` (custo por campanha e dia), via `origem_campanha.carregar_campanhas` |
 
-## Layout (v3)
+## Layout (v4)
 Estilo do pedido da Nuvemshop (pedido do Hugo): **extrato**, não cards por indicador. Depois da lista de itens com foto, dois blocos de quadros (rótulo e detalhe à esquerda, valor à direita; negativos em vermelho; linhas de total em destaque):
-1. **Venda e cliente:** quadros **Informações da venda** e **Cliente** (abaixo).
-2. **Da venda à margem:** quadros **Pagamento**, **Custos e margem**, **Margem por item** e **Origem e aquisição**.
+1. **Da venda à margem:** quadros **Pagamento**, **Custos e margem**, **Margem por item** e **Origem e aquisição**.
+2. **Venda e cliente** (**no fim da página**, depois da margem): quadros **Informações da venda** e **Cliente** (abaixo). São consulta de apoio; o que o pedido rendeu vem primeiro.
 Sem gráfico (o "Panorama da venda" saiu na v2).
 
-## Informações da venda e Cliente (v3)
+**Celular (v4):** a página não pode ter rolagem horizontal (testado a 375 e 320 px). As grades de quadros e de itens usam colunas de no mínimo 420/340 px **limitadas a 100% da largura** (`minmax(min(420px,100%),1fr)`), então no celular viram 1 coluna. Nas linhas do extrato, valores curtos (até 18 caracteres) ficam numa linha só; texto longo (meio de pagamento, origem) quebra em vez de alargar o quadro.
+
+## Informações da venda e Cliente (v3; mostrados no fim da página desde a v4)
 **Informações da venda:** pagamento (meio e parcelas: "à vista" no cartão de 1x; bandeira e gateway no detalhe), envio (opção e transportadora), rastreio (link para o código), expedição, entrega e mensagem de cashback.
 - **Expedição / entrega:** "Expedido em" só com `dt_expedicao`; "Entregue em" só com `dt_entrega` (confirmada). Pedido `EM ABERTO` sem expedição = "Aguardando postagem"; sem expedição e já fora de aberto = "Sem registro de expedição" (rastreio pode não ter sido carregado). **Não** usar `ds_situacao_logistica`/`fg_entregue`: ficam verdadeiros para pedido sem rastreio carregado (achado de 13/10/2026). Sem entrega, mostra a previsão (`dt_estimada_entrega_max`).
 - **Mensagem de cashback** = a mensagem W0 da jornada de pós-venda (cashback logo após o pagamento). "Recebeu em dd/mm" quando há registro `jornada_w0` com `fg_alcancou`; "Enviada ..., sem confirmação" quando o registro existe e não alcançou o cliente (ex.: WhatsApp inválido). Sem registro: "Cupom gerado, mensagem ainda não enviada" se já existe cupom; "Sem cashback (4º pedido)" a partir do 4º pedido do cliente (**atalho:** `MAX_PEDIDO_CASHBACK = 3` espelha o parâmetro `max_pedido_cashback` do dbt); senão "Não enviada". O detalhe traz o cupom (código, valor, validade). Se o check-in W1 existir, aparece uma linha a mais. Horários em UTC são convertidos para Brasília.
@@ -53,11 +55,16 @@ Uma linha (recuada, em vermelho) por origem, só das linhas que não são brinde
 
 ## Custo de aquisição (única conta própria da página)
 Só o Google Ads tem custo na base. Regra, por origem/mídia do pedido:
-- **google / cpc**, mês ≥ jun/2026: custo da **campanha do clique** (gclid → campanha) no mês do pedido ÷ pedidos válidos do mês atribuídos a essa campanha. Sem campanha identificada: custo de **todo o Ads** no mês ÷ pedidos Google pago do mês. É um **custo médio por pedido da campanha no mês**, não o custo do clique daquele cliente.
+- **google / cpc**, mês ≥ jun/2026, nesta ordem:
+  1. **Campanha do clique identificada** (gclid → campanha em `tb_gads_clique_campanha`): custo da campanha no mês do pedido ÷ pedidos Google pago do mês atribuídos a ela. É um **custo médio por pedido da campanha no mês**, não o custo do clique daquele cliente.
+  2. **Senão, custo médio por venda do Google Ads nos últimos 30 dias** (v4): custo total do Ads ÷ pedidos Google pago (com ou sem clique identificável) na janela de 30 dias que termina no dia do pedido, ou no **último dia com custo lançado** se o pedido for mais novo que o custo (pedidos depois desse dia não entram no divisor, para custo e pedidos cobrirem o mesmo período). Vale para: clique que o Google Ads ainda não ligou à campanha, pedido Google pago sem gclid e mês sem custo lançado (ex.: dia 1). O detalhe da linha diz "estimativa" e o motivo.
 - **instagram / paid_social:** "—" (o custo do Meta Ads não está na base).
 - **Qualquer outra origem** (direto, orgânico, e-mail, Instagram orgânico): R$ 0,00, "sem mídia paga rastreada".
-- Google pago antes de jun/2026 ou mês sem custo lançado: "—" (a margem após aquisição também fica "—" e a cascata termina na margem de contribuição).
-- Limites: o divisor conta só pedidos com clique identificável (piso), então o custo por pedido é um teto; o custo do Ads chega com 1–2 dias de atraso, então o mês corrente muda ao longo dos dias; o Instagram pago e qualquer outro canal pago futuro ficam sem custo até entrar na base.
+- Google pago antes de jun/2026: "—" (a margem após aquisição também fica "—" e a cascata termina na margem de contribuição).
+
+**Defasagem dos dados (verificada em 04/11/2026):** origem e mídia do pedido (`tb_atribuicao_pedido`) existem no mesmo dia, porque vêm da URL de entrada gravada no pedido. O que atrasa é o vínculo **clique → campanha** (a base de cliques do Google Ads chegou até 03/11 e o pedido de 04/11 ainda não estava lá) e o **custo** (última linha em 03/11). Por isso o pedido do dia cai na média dos 30 dias, e passa a usar a campanha do clique quando o Ads atualiza (cache de 15 min na página).
+
+- Limites: a média de 30 dias é uma estimativa (cada campanha custa diferente) e o pedido sem gclid pode nem ter vindo do anúncio; o custo por campanha do mês corrente muda ao longo dos dias; o divisor da média conta todos os pedidos Google pago, não só os com clique identificável; o Instagram pago e qualquer outro canal pago futuro ficam sem custo até entrar na base.
 
 ## Limites (resumo)
 - ~1 pedido/dia: a margem de um pedido isolado não é tendência.

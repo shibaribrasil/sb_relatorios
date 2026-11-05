@@ -4,7 +4,7 @@ import pytest
 
 from reports import consulta_pedido as cp
 
-MES = pd.Timestamp("2026-11-01")
+DIA = pd.Timestamp("2026-11-02")
 
 
 def _linhas():
@@ -32,27 +32,38 @@ def test_cascata_fecha_com_a_margem_do_dbt():
 
 
 PONTE = pd.DataFrame({"cd_gclid": ["g1", "g2", "g3"], "cd_campanha": ["A", "A", "B"], "nm_campanha": ["Camp A", "Camp A", "Camp B"]})
-PERF = pd.DataFrame({"cd_campanha": ["A", "B", "A"], "dt_data": pd.to_datetime(["2026-11-01", "2026-11-02", "2026-10-30"]), "vl_custo": [60.0, 40.0, 999.0]})
-GOOGLE = pd.DataFrame({"cd_pedido": ["1", "2", "3", "4"], "ds_gclid": ["g1", "g2", "g3", None]})
+PERF = pd.DataFrame({"cd_campanha": ["A", "B", "A"], "dt_data": pd.to_datetime(["2026-11-01", "2026-11-02", "2026-10-30"]), "vl_custo": [60.0, 40.0, 100.0]})
+GOOGLE = pd.DataFrame({"cd_pedido": ["1", "2", "3", "4"], "ds_gclid": ["g1", "g2", "g3", None],
+                       "dt_pedido": pd.to_datetime(["2026-11-01", "2026-11-02", "2026-11-02", "2026-11-02"])})
 
 
 def test_custo_google_da_campanha_do_clique():
-    valor, expl = cp.custo_aquisicao("google", "cpc", "g1", MES, GOOGLE, PONTE, PERF)
+    valor, expl = cp.custo_aquisicao("google", "cpc", "g1", DIA, GOOGLE, PONTE, PERF)
     assert valor == pytest.approx(30.0)                  # R$ 60 da campanha A em nov ÷ 2 pedidos dela (o de outubro não entra)
     assert "Camp A" in expl
 
 
-def test_custo_google_sem_campanha_divide_o_ads_todo():
-    valor, _ = cp.custo_aquisicao("google", "cpc", None, MES, GOOGLE, PONTE, PERF)
-    assert valor == pytest.approx(100.0 / 4)             # R$ 60 + R$ 40 ÷ 4 pedidos Google pago
+def test_custo_google_sem_campanha_usa_a_media_por_venda_dos_ultimos_30_dias():
+    valor, expl = cp.custo_aquisicao("google", "cpc", None, DIA, GOOGLE, PONTE, PERF)
+    assert valor == pytest.approx(200.0 / 4)             # R$ 100 (out) + 60 + 40 ÷ 4 pedidos Google pago da janela
+    assert "estimativa" in expl and "sem clique" in expl
+    # clique que o Google Ads ainda não ligou à campanha (defasagem de ~1 dia): mesma média, motivo diferente
+    valor, expl = cp.custo_aquisicao("google", "cpc", "g9", DIA, GOOGLE, PONTE, PERF)
+    assert valor == pytest.approx(50.0) and "ainda não identificada" in expl
+
+
+def test_media_nao_conta_pedido_depois_do_ultimo_dia_com_custo():
+    extra = pd.concat([GOOGLE, pd.DataFrame({"cd_pedido": ["5"], "ds_gclid": [None], "dt_pedido": pd.to_datetime(["2026-11-04"])})])
+    valor, _ = cp.custo_aquisicao("google", "cpc", "g9", pd.Timestamp("2026-11-04"), extra, PONTE, PERF)
+    assert valor == pytest.approx(50.0)                  # custo vai até 02/11: o pedido de 04/11 não entra no divisor
 
 
 def test_custo_desconhecido_ou_zero():
     assert cp.custo_aquisicao("google", "cpc", "g1", pd.Timestamp("2026-05-01"), GOOGLE, PONTE, PERF)[0] is None   # antes do histórico
-    assert cp.custo_aquisicao("google", "cpc", "g1", pd.Timestamp("2026-12-01"), GOOGLE, PONTE, PERF)[0] is None   # mês sem custo lançado
-    assert cp.custo_aquisicao("instagram", "paid_social", None, MES, GOOGLE, PONTE, PERF)[0] is None              # sem Meta Ads na base
-    assert cp.custo_aquisicao("(sem parametro)", "(sem parametro)", None, MES, GOOGLE, PONTE, PERF)[0] == 0.0     # sem mídia paga
-    assert cp.custo_aquisicao("google", "organico_srsltid", None, MES, GOOGLE, PONTE, PERF)[0] == 0.0
+    assert cp.custo_aquisicao("google", "cpc", "g1", pd.Timestamp("2026-12-01"), GOOGLE, PONTE, PERF)[0] == pytest.approx(50.0)   # mês sem custo: média dos últimos 30 dias
+    assert cp.custo_aquisicao("instagram", "paid_social", None, DIA, GOOGLE, PONTE, PERF)[0] is None              # sem Meta Ads na base
+    assert cp.custo_aquisicao("(sem parametro)", "(sem parametro)", None, DIA, GOOGLE, PONTE, PERF)[0] == 0.0     # sem mídia paga
+    assert cp.custo_aquisicao("google", "organico_srsltid", None, DIA, GOOGLE, PONTE, PERF)[0] == 0.0
 
 
 def _r(**kw):

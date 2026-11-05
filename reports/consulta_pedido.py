@@ -25,6 +25,7 @@ AZ = f"{bq.PROJECT}.dbt_dw_az"
 INICIO = "2025-08-01"                      # taxa e frete reais da Nuvemshop só são confiáveis desde ago/2025
 INICIO_ADS = pd.Timestamp("2026-06-01")    # o histórico de custo por campanha do Google Ads começa aqui
 META_PAGO = ("instagram", "paid_social")   # mídia paga sem custo na base (não há dados do Meta Ads)
+JANELA_DIAS = 30                           # janela do custo médio por venda do Google Ads
 MAX_PEDIDO_CASHBACK = 3                    # espelha o parâmetro max_pedido_cashback da fila de pós-venda (dbt): cashback só até o 3º pedido
 MEIOS = {"credit_card": "Cartão de crédito", "pix": "Pix", "boleto": "Boleto", "wallet": "Carteira digital", "other": "Outro meio"}
 
@@ -114,18 +115,22 @@ def carregar_origem(cd_pedido: str):
 
 
 @st.cache_data(ttl=900)
-def carregar_pedidos_google_mes(mes: str):
-    """Pedidos válidos do mês com origem Google pago, para dividir o custo do Ads (mes = 'AAAA-MM-01')."""
-    if not re.fullmatch(r"\d{4}-\d{2}-01", mes):
-        raise ValueError(f"mês inválido: {mes!r}")
+def carregar_pedidos_google(ini: str, fim: str):
+    """Pedidos válidos com origem Google pago entre duas datas ('AAAA-MM-DD'), com a data do pedido: divisor do custo do Ads."""
+    for d in (ini, fim):
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+            raise ValueError(f"data inválida: {d!r}")
     client = bq.get_client()
-    return bq.query_df(client, f"""
-        SELECT CAST(a.cd_pedido AS STRING) AS cd_pedido, a.ds_gclid
+    df = bq.query_df(client, f"""
+        SELECT CAST(a.cd_pedido AS STRING) AS cd_pedido, a.ds_gclid, p.dt_pedido
           FROM `{AZ}.tb_atribuicao_pedido` AS a
+          JOIN (SELECT cd_pedido, ANY_VALUE(dt_pedido) AS dt_pedido FROM `{AZ}.tb_pedido`
+                 WHERE fg_pedido_valido AND dt_pedido BETWEEN DATE '{ini}' AND DATE '{fim}' GROUP BY cd_pedido) AS p
+            ON CAST(p.cd_pedido AS STRING) = CAST(a.cd_pedido AS STRING)
          WHERE a.ds_origem_venda = '{GOOGLE_PAGO[0]}' AND a.ds_midia_venda = '{GOOGLE_PAGO[1]}'
-           AND CAST(a.cd_pedido AS STRING) IN (SELECT CAST(cd_pedido AS STRING) FROM `{AZ}.tb_pedido`
-                                                WHERE fg_pedido_valido AND dt_prim_dia_mes = DATE '{mes}')
     """)
+    df["dt_pedido"] = pd.to_datetime(df["dt_pedido"])
+    return df
 
 
 @st.cache_data(ttl=900)
@@ -317,32 +322,47 @@ def margem_por_item(it):
     return out
 
 
-def custo_aquisicao(origem, midia, gclid, mes, pedidos_google, ponte, perf):
+def custo_aquisicao(origem, midia, gclid, dia, pedidos_google, ponte, perf):
     """Custo de mídia paga atribuído ao pedido: (valor | None, explicação curta). None = não dá para saber.
 
-    Só o Google Ads tem custo na base. Pedido Google pago: custo da campanha do clique (gclid → campanha) no mês do pedido
-    ÷ pedidos do mês atribuídos a ela; sem campanha identificada, custo de todo o Ads no mês ÷ pedidos Google pago do mês.
-    shortcut: o divisor conta só pedidos com clique identificável (piso), então o custo por pedido é um teto; se o Ads
-    passar a mandar conversão por pedido, trocar por ela.
+    Só o Google Ads tem custo na base. Pedido Google pago:
+    1. campanha do clique já identificada (gclid → campanha): custo da campanha no mês do pedido ÷ pedidos do mês dela;
+    2. senão (clique ainda não ligado à campanha, o Ads leva ~1 dia; sem gclid; mês sem custo): custo MÉDIO POR VENDA do
+       Google Ads nos últimos 30 dias com custo lançado (custo total ÷ pedidos Google pago do mesmo período).
+    shortcut: o divisor conta todos os pedidos Google pago (com ou sem clique identificável); se o Ads passar a mandar
+    conversão por pedido, trocar por ela.
     """
     if (origem, midia) == GOOGLE_PAGO:
+        dia = pd.Timestamp(dia).normalize()
+        mes = dia.to_period("M").to_timestamp()
         if mes < INICIO_ADS:
             return None, "sem histórico de custo do Google Ads antes de jun/2026"
-        no_mes = perf[perf["dt_data"].dt.to_period("M").dt.to_timestamp() == mes]
-        if no_mes.empty:
-            return None, "sem custo do Google Ads lançado neste mês"
+        if perf.empty:
+            return None, "sem custo do Google Ads lançado"
         ponte = ponte.drop_duplicates("cd_gclid").set_index("cd_gclid")
-        camp = ponte["cd_campanha"].get(gclid) if gclid else None
         ped = pedidos_google.assign(cd_campanha=pedidos_google["ds_gclid"].map(ponte["cd_campanha"]))
-        if camp is not None and pd.notna(camp) and (ped["cd_campanha"] == camp).any():
-            n = int((ped["cd_campanha"] == camp).sum())
-            custo = float(no_mes.loc[no_mes["cd_campanha"] == camp, "vl_custo"].sum())
-            return custo / n, f"campanha {ponte['nm_campanha'].get(gclid)}: {brl(custo)} no mês ÷ {n} {'pedido' if n == 1 else 'pedidos'}"
-        n = len(ped)
+        no_mes = perf[perf["dt_data"].dt.to_period("M").dt.to_timestamp() == mes]
+        camp = ponte["cd_campanha"].get(gclid) if gclid else None
+        if camp is not None and pd.notna(camp) and not no_mes.empty:
+            ped_mes = ped[ped["dt_pedido"].dt.to_period("M").dt.to_timestamp() == mes]
+            n = int((ped_mes["cd_campanha"] == camp).sum())
+            if n:
+                custo = float(no_mes.loc[no_mes["cd_campanha"] == camp, "vl_custo"].sum())
+                return custo / n, f"campanha {ponte['nm_campanha'].get(gclid)}: {brl(custo)} no mês ÷ {n} {'pedido' if n == 1 else 'pedidos'}"
+        # custo médio por venda do Google Ads: janela móvel, só até o último dia com custo lançado
+        fim = min(dia, perf["dt_data"].max())
+        ini = max(fim - pd.Timedelta(days=JANELA_DIAS - 1), INICIO_ADS)
+        custo = float(perf.loc[(perf["dt_data"] >= ini) & (perf["dt_data"] <= fim), "vl_custo"].sum())
+        n = int(((ped["dt_pedido"] >= ini) & (ped["dt_pedido"] <= fim)).sum())
         if not n:
-            return None, "sem pedidos Google pago no mês"
-        custo = float(no_mes["vl_custo"].sum())
-        return custo / n, f"campanha não identificada: todo o Google Ads do mês ({brl(custo)}) ÷ {n} pedidos Google pago"
+            return None, "sem pedidos Google pago na janela de custo"
+        if not gclid:
+            motivo = "pedido sem clique de anúncio identificado"
+        elif camp is None or pd.isna(camp):
+            motivo = "campanha do clique ainda não identificada (o Google Ads leva ~1 dia)"
+        else:
+            motivo = "sem custo da campanha no mês"
+        return custo / n, f"estimativa: custo médio por venda do Google Ads de {ini:%d/%m} a {fim:%d/%m} ({brl(custo)} ÷ {n} pedidos) · {motivo}"
     if (origem, midia) == META_PAGO:
         return None, "mídia paga do Instagram: o custo do Meta Ads não está na base"
     return 0.0, "sem mídia paga rastreada"
@@ -381,8 +401,11 @@ def _itens_html(it, fotos):
           </div>
           <div style="font-size:16px;font-weight:800;color:{COLORS['text']};white-space:nowrap">{valor}</div>
         </div>""")
-    st.html(f'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;margin:6px 0 4px">{"".join(cards)}</div>')
+    st.html(f'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr));gap:12px;margin:6px 0 4px">{"".join(cards)}</div>')
 
+
+# grade dos quadros: colunas de ≥ 420px, mas nunca mais largas que a tela (no celular vira 1 coluna sem rolagem lateral)
+GRADE = "display:grid;grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr));gap:16px;align-items:start;margin-top:6px"
 
 _TIPOS = {  # tipo da linha -> (fundo, cor do valor, negrito)
     "": ("", COLORS["text"], False), "neg": ("", COLORS["danger"], False), "total": (COLORS["bg_secondary"], COLORS["text"], True),
@@ -399,9 +422,11 @@ def _linha(rotulo, valor, detalhe="", tipo="", recuo=False, valor_html=None):
     det = f'<div style="font-size:11px;color:{COLORS["text_muted"]};margin-top:1px;font-weight:400">{html.escape(detalhe)}</div>' if detalhe else ""
     bg = f"background:{fundo};" if fundo else ""
     rot_cor = COLORS["text_secondary"] if recuo else COLORS["text"]
+    curto = valor_html is None and len(valor) <= 18   # número/valor curto fica numa linha só; texto longo quebra em vez de alargar a tela
+    nowrap = "white-space:nowrap;flex:none;" if curto else "min-width:0;max-width:58%;overflow-wrap:anywhere;"
     return (f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:{pad};border-top:1px solid {COLORS["border"]};{bg}">'
-            f'<div style="font-size:{12.5 if recuo else 13.5}px;color:{rot_cor};font-weight:{peso};min-width:0">{html.escape(rotulo)}{det}</div>'
-            f'<div style="font-size:13.5px;color:{cor};font-weight:{peso};white-space:nowrap;text-align:right">{valor_html if valor_html is not None else html.escape(valor)}</div></div>')
+            f'<div style="font-size:{12.5 if recuo else 13.5}px;color:{rot_cor};font-weight:{peso};min-width:0;flex:1 1 0;overflow-wrap:anywhere">{html.escape(rotulo)}{det}</div>'
+            f'<div style="font-size:13.5px;color:{cor};font-weight:{peso};{nowrap}text-align:right">{valor_html if valor_html is not None else html.escape(valor)}</div></div>')
 
 
 def _painel(titulo, linhas, selo=None):
@@ -473,11 +498,10 @@ def render():
     section_title("O pedido")
     _itens_html(it, fotos)
 
-    # ═══ VENDA E CLIENTE ═══
+    # ═══ DADOS DA VENDA E DO CLIENTE (montados aqui, mostrados no fim da página) ═══
     bandeira_txt = _txt(h["ds_bandeira_cartao_nuvemshop"]).title()
     if bandeira_txt.lower() == meio.lower():  # Pix vem com "bandeira" pix
         bandeira_txt = ""
-    section_title("Venda e cliente")
     try:
         log = carregar_logistica(cd)
     except Exception:  # noqa: BLE001
@@ -522,8 +546,6 @@ def render():
     if not cliente:
         LC.append(_linha("Cadastro", "não encontrado", "pedido sem cliente vinculado na base"))
     selo_c = ("Recompra", COLORS["info_bg"], COLORS["info"]) if recorrente else ("1ª compra", COLORS["success_bg"], COLORS["success"])
-    st.html('<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px;align-items:start;margin-top:6px">'
-            + _painel("Informações da venda", LV) + _painel("Cliente", LC, selo_c) + "</div>")
 
     # ═══ DA VENDA À MARGEM (extrato) ═══
     section_title("Da venda à margem")
@@ -535,12 +557,16 @@ def render():
     descontos = detalhe_descontos(r, cupom_cod, cupom_info, h["ds_meio_pagamento_nuvemshop"])
 
     # origem e custo de aquisição
-    mes = pd.Timestamp(h["dt_pedido"]).to_period("M").to_timestamp()
+    dia = pd.Timestamp(h["dt_pedido"]).normalize()
     aq, expl = None, ""
     try:
-        google = carregar_pedidos_google_mes(f"{mes:%Y-%m-%d}") if (org["origem"], org["midia"]) == GOOGLE_PAGO else pd.DataFrame(columns=["cd_pedido", "ds_gclid"])
+        if (org["origem"], org["midia"]) == GOOGLE_PAGO:  # divisor: pedidos Google pago do mês e dos últimos 30 dias
+            ini = max(INICIO_ADS, min(dia.to_period("M").to_timestamp(), dia - pd.Timedelta(days=JANELA_DIAS - 1)))
+            google = carregar_pedidos_google(f"{ini:%Y-%m-%d}", f"{dia:%Y-%m-%d}")
+        else:
+            google = pd.DataFrame(columns=["cd_pedido", "ds_gclid", "dt_pedido"])
         camp = carregar_campanhas()
-        aq, expl = custo_aquisicao(org["origem"], org["midia"], org["ds_gclid"], mes, google, camp["ponte"], camp["perf"])
+        aq, expl = custo_aquisicao(org["origem"], org["midia"], org["ds_gclid"], dia, google, camp["ponte"], camp["perf"])
     except Exception as e:  # noqa: BLE001
         expl = f"custo do Google Ads indisponível ({e})"
     pos = None if aq is None else r["margem"] - aq
@@ -614,6 +640,9 @@ def render():
                      f"{pct(pos_pct)} da receita líquida" if pos is not None else "sem custo de aquisição estimado", "total" if var_p == "neutral" else var_p))
     selo4 = (pct(pos_pct), *cores_m[var_p]) if var_p in cores_m else None
 
-    st.html('<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px;align-items:start;margin-top:6px">'
-            + _painel("Pagamento", L1, selo1) + _painel("Custos e margem", L2, selo2)
+    st.html(f'<div style="{GRADE}">' + _painel("Pagamento", L1, selo1) + _painel("Custos e margem", L2, selo2)
             + _painel("Margem por item", L3) + _painel("Origem e aquisição", L4, selo4) + "</div>")
+
+    # ═══ VENDA E CLIENTE (fim da página) ═══
+    section_title("Venda e cliente")
+    st.html(f'<div style="{GRADE}">' + _painel("Informações da venda", LV) + _painel("Cliente", LC, selo_c) + "</div>")
