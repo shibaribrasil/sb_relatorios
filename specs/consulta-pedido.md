@@ -1,6 +1,6 @@
 # Spec — Consulta de Pedidos (`reports/consulta_pedido.py`, menu Diário)
 
-Status: v4 em 04/11/2026 (v1 a v3 no mesmo dia). Pedido do Hugo: página bem visual, pouco texto, "Desempenho do Produto, mas do pedido", com o seletor no pedido mais recente por padrão e um panorama o mais real possível de como a venda foi.
+Status: v5 em 04/11/2026 (v1 a v4 no mesmo dia). Pedido do Hugo: página bem visual, pouco texto, "Desempenho do Produto, mas do pedido", com o seletor no pedido mais recente por padrão e um panorama o mais real possível de como a venda foi.
 
 ## Pergunta da página
 Como foi esta venda, do que o cliente comprou até o que sobrou depois de taxa, envio, imposto, custo do produto e custo de aquisição?
@@ -21,9 +21,9 @@ Como foi esta venda, do que o cliente comprou até o que sobrou depois de taxa, 
 | Origem e mídia | `tb_atribuicao_pedido` (`ds_origem_venda`, `ds_midia_venda`, `ds_gclid`, `ds_utm_campaign`) |
 | Custo de aquisição | `dbt_dw_us_az.tb_gads_clique_campanha` (gclid → campanha) e `tb_gads_campanha_performance` (custo por campanha e dia), via `origem_campanha.carregar_campanhas` |
 
-## Layout (v4)
+## Layout (v5)
 Estilo do pedido da Nuvemshop (pedido do Hugo): **extrato**, não cards por indicador. Depois da lista de itens com foto, dois blocos de quadros (rótulo e detalhe à esquerda, valor à direita; negativos em vermelho; linhas de total em destaque):
-1. **Da venda à margem:** quadros **Pagamento**, **Custos e margem**, **Margem por item** e **Origem e aquisição**.
+1. **Da venda à margem:** quadros **Pagamento e margem** (um quadro só, do subtotal à margem de contribuição) e **Origem e aquisição**. Não há quadro de margem por item (saiu na v5).
 2. **Venda e cliente** (**no fim da página**, depois da margem): quadros **Informações da venda** e **Cliente** (abaixo). São consulta de apoio; o que o pedido rendeu vem primeiro.
 Sem gráfico (o "Panorama da venda" saiu na v2).
 
@@ -37,12 +37,10 @@ Sem gráfico (o "Panorama da venda" saiu na v2).
 
 ## A cascata (ordem da página)
 1. **O pedido:** itens com foto, quantidade × preço cheio unitário (`vl_receita_bruta_produto ÷ qt_item`) e subtotal; "com desconto R$ X" quando a linha pagou menos. Brinde aparece por último, a R$ 0,00.
-2. **Pagamento (quadro):** Itens (preço cheio, sem brinde) − Descontos (= itens − receita líquida de produtos) + Frete cobrado (`vl_frete_pago_rateio`) = **Valor pago** (receita líquida de produtos + frete pago). Os descontos aparecem como linhas recuadas, uma por origem (ver "Descontos destrinchados"); o quadro termina em Taxa e Total líquido.
-3. **Do valor pago ao caixa** (a taxa e o "Total líquido" fecham o quadro Pagamento; etiqueta, embalagem, imposto e reembolso ficam no quadro Custos e margem): − Taxa de pagamento real (`vl_taxa_pedido_rateio`) = **Entrou na conta** (mesma definição de `tb_caixa_entrada_pedido.vl_recebido`, com a data de `dt_recebimento_pedido`: "cai em" se futura, "caiu em" se passada). Depois, ainda do valor pago: − Frete real da etiqueta (`vl_frete_real_rateio`) − Embalagem (`vl_embalagem_rateio`) − Imposto (`vl_imposto_rateio`) − Reembolso (`vl_reembolso_rateio`, só se houver).
-   - Decisão de ordem: "Entrou na conta" vem logo depois da taxa porque é isso que o gateway deposita; etiqueta, embalagem e imposto são custos do pedido que não saem desse depósito.
-4. **Custos e margem (quadro; começa em "Entrou na conta"):** − Custo dos produtos (`vl_custo_linha`, **inclui o custo do brinde**) = **Margem de contribuição** (`vl_margem_contribuicao`, antes de mídia); % = margem ÷ receita líquida de produtos; semáforo igual ao de Vendas & Margem (verde ≥ 50%, âmbar ≥ 40%).
-5. **Margem por item (quadro):** receita líquida, custo e margem de contribuição de cada linha (brinde por último, com margem negativa = o custo dele); a soma das margens = a margem do pedido.
-6. **Origem e aquisição (quadro):** origem, mídia e campanha (UTM); custo de aquisição estimado; **margem após aquisição** = margem de contribuição − custo de aquisição (R$ e %).
+2. **Pagamento e margem (um quadro só):** a parte de cima é o pagamento: Itens (preço cheio, sem brinde) − Descontos (= itens − receita líquida de produtos) + Frete cobrado (`vl_frete_pago_rateio`) = **Total pago pelo cliente** (receita líquida de produtos + frete pago). Os descontos aparecem como linhas recuadas, uma por origem (ver "Descontos destrinchados"). Depois, − Taxa de pagamento real (`vl_taxa_pedido_rateio`) = **Total líquido (entrou na conta)** (mesma definição de `tb_caixa_entrada_pedido.vl_recebido`, com a data de `dt_recebimento_pedido`: "cai em" se futura, "caiu em" se passada).
+3. **Do caixa à margem (continuação do mesmo quadro):** − Frete real da etiqueta (`vl_frete_real_rateio`) − Embalagem (`vl_embalagem_rateio`) − Imposto (`vl_imposto_rateio`) − Reembolso (`vl_reembolso_rateio`, só se houver) − Custo dos produtos (`vl_custo_linha`, **inclui o custo do brinde**) = **Margem de contribuição** (`vl_margem_contribuicao`, antes de mídia). O selo do quadro mostra a margem % = margem ÷ receita líquida de produtos; semáforo igual ao de Vendas & Margem (verde ≥ 50%, âmbar ≥ 40%).
+   - Decisão de ordem: o "Total líquido" vem logo depois da taxa porque é isso que o gateway deposita; etiqueta, embalagem e imposto são custos do pedido que não saem desse depósito.
+4. **Origem e aquisição (quadro):** origem, mídia e campanha (UTM); custo de aquisição estimado; **margem após aquisição** = margem de contribuição − custo de aquisição (R$ e %).
 
 **Fechamento:** valor pago − taxa − etiqueta − embalagem − imposto − reembolso − custo = margem de contribuição do dbt (teste `tests/test_consulta_pedido.py`). Se a diferença passar de R$ 0,02 a página avisa. Pedido com `ds_incompletude` (sem custo, sem taxa, sem dados da Nuvemshop) leva aviso: a margem está superestimada.
 
