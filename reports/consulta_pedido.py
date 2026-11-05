@@ -309,19 +309,6 @@ def detalhe_descontos(r, codigo_cupom, cupom, meio_pagamento):
     return itens
 
 
-def margem_por_item(it):
-    """Receita, custo e margem de contribuição de cada linha (brinde por último). A soma das margens = a margem do pedido."""
-    out = []
-    for _, l in it.sort_values("fg_brinde", kind="stable").iterrows():
-        rec = float(l["vl_receita_liquida_produto"])
-        sem_var = pd.isna(l["ds_variacao"]) or str(l["ds_variacao"]).lower().startswith("sem var")
-        out.append({"nome": str(l["nm_produto"]), "variacao": "" if sem_var else str(l["ds_variacao"]),
-                    "qt": int(l["qt_item"]), "brinde": bool(l["fg_brinde"]), "receita": rec, "custo": float(l["vl_custo_linha"]),
-                    "margem": float(l["vl_margem_contribuicao"]),
-                    "margem_pct": (float(l["vl_margem_contribuicao"]) / rec) if rec > 0.005 else None})
-    return out
-
-
 def custo_aquisicao(origem, midia, gclid, dia, pedidos_google, ponte, perf):
     """Custo de mídia paga atribuído ao pedido: (valor | None, explicação curta). None = não dá para saber.
 
@@ -593,9 +580,8 @@ def render():
     L1.append(_linha("Total pago pelo cliente", brl(r["pago"]), pagamento_txt, "total"))
     L1.append(_linha("Taxa de pagamento", f"− {brl(r['taxa'])}", f"{pct(r['taxa'] / r['pago']) if r['pago'] else '—'} do valor pago · taxa real do gateway", "neg"))
     L1.append(_linha("Total líquido (entrou na conta)", brl(r["entrou"]), (quando + prazo).strip(" ·") if quando else "valor pago − taxa", "ok"))
-    selo1 = None if pd.isna(receb) else (("Recebido", COLORS["success_bg"], COLORS["success"]) if receb <= hoje else ("A receber", COLORS["warning_bg"], COLORS["warning"]))
 
-    # 2) Custos e margem: do caixa à margem de contribuição
+    # 2) Do caixa à margem de contribuição (continua o mesmo quadro)
     res_frete = r["frete"] - r["frete_real"]
     var_m = _variant_margem(r["margem_pct"])
     tipo_m = "total" if var_m == "neutral" else var_m
@@ -604,8 +590,7 @@ def render():
         frete_res = "frete empatado"
     else:
         frete_res = f"sobrou {brl(res_frete)}" if res_frete > 0 else f"a loja bancou {brl(-res_frete)}"
-    L2 = [_linha("Entrou na conta", brl(r["entrou"]), "do extrato de pagamento", "total"),
-          _linha("Frete (etiqueta)", f"− {brl(r['frete_real'])}", f"cliente pagou {brl(r['frete'])} · {frete_res}", "neg"),
+    L2 = [_linha("Frete (etiqueta)", f"− {brl(r['frete_real'])}", f"cliente pagou {brl(r['frete'])} · {frete_res}", "neg"),
           _linha("Embalagem", f"− {brl(r['embalagem'])}", "estimativa por pedido", "neg"),
           _linha("Imposto", f"− {brl(r['imposto'])}", "sobre o valor já com desconto", "neg")]
     if r["reembolso"] > 0.005:
@@ -614,18 +599,7 @@ def render():
     L2.append(_linha("Margem de contribuição", brl(r["margem"]), f"{pct(r['margem_pct'])} da receita líquida · antes de mídia", tipo_m))
     selo2 = (pct(r["margem_pct"]), *cores_m[var_m]) if var_m in cores_m else None
 
-    # 3) Margem por item
-    L3 = []
-    for m in margem_por_item(it):
-        nome = m["nome"] + (f" · {m['variacao']}" if m["variacao"] else "")
-        if m["brinde"]:
-            det = f"brinde · custo {brl(m['custo'])}"
-        else:
-            det = f"{m['qt']} un. · receita {brl(m['receita'])} · custo {brl(m['custo'])}" + (f" · margem {pct(m['margem_pct'])}" if m["margem_pct"] is not None else "")
-        L3.append(_linha(nome, brl(m["margem"]), det, "neg" if m["margem"] < 0 else ""))
-    L3.append(_linha("Margem de contribuição", brl(r["margem"]), "soma dos itens", tipo_m))
-
-    # 4) Origem e custo de aquisição
+    # 3) Origem e custo de aquisição
     checkout = {"store": "Site", "mobile": "Mobile", "form": "Link direto"}.get(_txt(h["ds_origem_checkout_nuvemshop"]), _txt(h["ds_origem_checkout_nuvemshop"]))
     L4 = [_linha("Origem", "Direto / sem parâmetro" if sem_origem else str(org["origem"]), "sem UTM nem clique de anúncio" if sem_origem else ""),
           _linha("Mídia", "—" if sem_origem else str(org["midia"]))]
@@ -640,8 +614,7 @@ def render():
                      f"{pct(pos_pct)} da receita líquida" if pos is not None else "sem custo de aquisição estimado", "total" if var_p == "neutral" else var_p))
     selo4 = (pct(pos_pct), *cores_m[var_p]) if var_p in cores_m else None
 
-    st.html(f'<div style="{GRADE}">' + _painel("Pagamento", L1, selo1) + _painel("Custos e margem", L2, selo2)
-            + _painel("Margem por item", L3) + _painel("Origem e aquisição", L4, selo4) + "</div>")
+    st.html(f'<div style="{GRADE}">' + _painel("Pagamento e margem", L1 + L2, selo2) + _painel("Origem e aquisição", L4, selo4) + "</div>")
 
     # ═══ VENDA E CLIENTE (fim da página) ═══
     section_title("Venda e cliente")
