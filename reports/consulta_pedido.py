@@ -161,6 +161,20 @@ def carregar_pedidos_google(ini: str, fim: str):
 
 
 @st.cache_data(ttl=300)
+def carregar_custo_campanha_dia():
+    """Custo por campanha e dia com o dia corrente (tb_gads_campanha_custo_dia, US): transferência quando já carregou o dia,
+    senão a Google Ads API (ds_fonte = 'api', provisório). tb_gads_campanha_performance atrasa 1 dia."""
+    client = bq.get_client()
+    df = bq.query_df(client, f"""
+        SELECT cd_campanha, dt_data, vl_custo, ds_fonte FROM `{bq.PROJECT}.dbt_dw_us_az.tb_gads_campanha_custo_dia`
+         WHERE dt_data >= DATE '{INICIO_ADS:%Y-%m-%d}'
+    """)
+    df["dt_data"] = pd.to_datetime(df["dt_data"])
+    df["vl_custo"] = pd.to_numeric(df["vl_custo"]).fillna(0.0)
+    return df
+
+
+@st.cache_data(ttl=300)
 def carregar_custo_clique(gclid: str):
     """Prévia do custo do clique do pedido (tb_gads_clique_custo, az): CPC médio do dia da palavra ou do grupo. Vazio sem clique."""
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", gclid):
@@ -399,7 +413,7 @@ def custo_aquisicao(origem, midia, gclid, dia, pedidos_google, ponte, perf):
 
     Só o Google Ads tem custo na base. Pedido Google pago:
     1. campanha do clique já identificada (gclid → campanha): custo da campanha no mês do pedido ÷ pedidos do mês dela;
-    2. senão (clique ainda não ligado à campanha, o Ads leva ~1 dia; sem gclid; mês sem custo): custo MÉDIO POR VENDA do
+    2. senão (clique ainda não ligado à campanha; sem gclid; mês sem custo): custo MÉDIO POR VENDA do
        Google Ads nos últimos 30 dias com custo lançado (custo total ÷ pedidos Google pago do mesmo período).
     shortcut: o divisor conta todos os pedidos Google pago (com ou sem clique identificável); se o Ads passar a mandar
     conversão por pedido, trocar por ela.
@@ -431,7 +445,7 @@ def custo_aquisicao(origem, midia, gclid, dia, pedidos_google, ponte, perf):
         if not gclid:
             motivo = "pedido sem clique de anúncio identificado"
         elif camp is None or pd.isna(camp):
-            motivo = "campanha do clique ainda não identificada (o Google Ads leva ~1 dia)"
+            motivo = "campanha do clique ainda não identificada (o clique chega de hora em hora)"
         else:
             motivo = "sem custo da campanha no mês"
         return custo / n, f"estimativa: custo médio por venda do Google Ads de {ini:%d/%m} a {fim:%d/%m} ({brl(custo)} ÷ {n} pedidos) · {motivo}"
@@ -692,7 +706,11 @@ def render():
             google = pd.DataFrame(columns=["cd_pedido", "ds_gclid", "dt_pedido"])
         if camp is None:
             raise RuntimeError("campanhas não carregadas")
-        aq, expl = custo_aquisicao(org["origem"], org["midia"], org["ds_gclid"], dia, google, camp["ponte"], camp["perf"])
+        custo_dia = carregar_custo_campanha_dia()  # com o dia corrente (a performance da campanha atrasa 1 dia)
+        aq, expl = custo_aquisicao(org["origem"], org["midia"], org["ds_gclid"], dia, google, camp["ponte"], custo_dia)
+        prov = custo_dia[custo_dia["ds_fonte"] == "api"]
+        if aq and (org["origem"], org["midia"]) == GOOGLE_PAGO and (prov["dt_data"].dt.to_period("M") == dia.to_period("M")).any():
+            expl += " · inclui custo provisório de hoje (API; o Google pode ajustar)"
     except Exception as e:  # noqa: BLE001
         expl = f"custo do Google Ads indisponível ({e})"
     pos = None if aq is None else r["margem"] - aq
