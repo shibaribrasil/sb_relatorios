@@ -1,6 +1,6 @@
 # Spec — Consulta de Pedidos (`reports/consulta_pedido.py`, menu Diário)
 
-Status: v7 em 06/11/2026 (prévia do custo do clique; v6 no mesmo dia, v1 a v5 em 04/11/2026). Pedido do Hugo: página bem visual, pouco texto, "Desempenho do Produto, mas do pedido", com o seletor no pedido mais recente por padrão e um panorama o mais real possível de como a venda foi.
+Status: v8 em 06/11/2026 (custo de aquisição com o dia corrente, via API; v7 prévia do custo do clique, v6 no mesmo dia, v1 a v5 em 04/11/2026). Pedido do Hugo: página bem visual, pouco texto, "Desempenho do Produto, mas do pedido", com o seletor no pedido mais recente por padrão e um panorama o mais real possível de como a venda foi.
 
 ## Pergunta da página
 Como foi esta venda, do que o cliente comprou até o que sobrou depois de taxa, envio, imposto, custo do produto e custo de aquisição?
@@ -76,7 +76,7 @@ Só o Google Ads tem custo na base. Regra, por origem/mídia do pedido:
 - **Qualquer outra origem** (direto, orgânico, e-mail, Instagram orgânico): R$ 0,00, "sem mídia paga rastreada".
 - Google pago antes de jun/2026: "—" (a margem após aquisição também fica "—" e a cascata termina na margem de contribuição).
 
-**Defasagem dos dados (verificada em 04/11/2026):** origem e mídia do pedido (`tb_atribuicao_pedido`) existem no mesmo dia, porque vêm da URL de entrada gravada no pedido. O que atrasa é o vínculo **clique → campanha** (a base de cliques do Google Ads chegou até 03/11 e o pedido de 04/11 ainda não estava lá) e o **custo** (última linha em 03/11). Por isso o pedido do dia cai na média dos 30 dias, e passa a usar a campanha do clique quando o Ads atualiza (cache de 15 min na página).
+**Defasagem dos dados (v8, 06/11/2026):** origem e mídia do pedido (`tb_atribuicao_pedido`) existem no mesmo dia, porque vêm da URL de entrada gravada no pedido. Até 04/11 atrasavam o vínculo **clique → campanha** e o **custo** (a transferência do Google Ads traz só o dia anterior, ~11:35 BRT). Desde 06/11 os dois chegam de hora em hora pela Google Ads API (`google-ads-cliques-hourly`): o custo por campanha vem de `tb_gads_campanha_custo_dia` (US; a transferência quando já carregou o dia, senão a API) e o clique de `stg_gads_clique`. O pedido do dia usa a campanha do clique e o custo do mês até agora; quando o mês inclui custo de hoje, a linha avisa "inclui custo provisório de hoje" (o Google pode ajustar). `tb_gads_campanha_performance` (com conversão, usada em outras páginas) segue só com a transferência. Cache de 5 min na página.
 
 - Limites: a média de 30 dias é uma estimativa (cada campanha custa diferente) e o pedido sem gclid pode nem ter vindo do anúncio; o custo por campanha do mês corrente muda ao longo dos dias; o divisor da média conta todos os pedidos Google pago, não só os com clique identificável; o Instagram pago e qualquer outro canal pago futuro ficam sem custo até entrar na base.
 
