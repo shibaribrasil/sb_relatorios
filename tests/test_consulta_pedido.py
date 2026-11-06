@@ -115,3 +115,39 @@ def test_status_cashback():
     assert cp.status_cashback([], cupom, 1)[0].startswith("Cupom gerado")
     assert cp.status_cashback([], {}, 4)[0] == "Sem cashback (4º pedido)"
     assert cp.status_cashback([], {}, 1)[0] == "Não enviada"
+
+
+URL_GOOGLE = ("https://shibaribrasil.com.br/produtos/kit-shibari-iniciante/?variant=513262407&pf=mc&gad_source=1"
+              "&gad_campaignid=23130880548&gbraid=0AAAAAouNkLn3eUOVR9X3OV9kQiy-Eo40L")
+
+
+def test_url_de_entrada_google_ads():
+    u = cp.ler_url_entrada(URL_GOOGLE)
+    assert u["campanha_ads"] == "23130880548"
+    assert u["cliques"] == ["Google Ads (gbraid, gad_source)"]
+    assert u["caminho"] == "/produtos/kit-shibari-iniciante/"
+    assert u["pagina"] == "https://shibaribrasil.com.br/produtos/kit-shibari-iniciante/"   # link sem querystring (não repete o clique)
+    assert not u["truncada"]
+
+
+def test_url_de_entrada_simples_vazia_e_truncada():
+    u = cp.ler_url_entrada("https://shibaribrasil.com.br/?srsltid=AYCX9vK")
+    assert u["cliques"] == ["Google orgânico (srsltid)"] and u["campanha_ads"] is None and u["caminho"] == "/"
+    assert cp.ler_url_entrada("https://shibaribrasil.com.br/?fbclid=abc")["cliques"] == ["Meta Ads (fbclid)"]
+    assert cp.ler_url_entrada(None)["url"] == "" and cp.ler_url_entrada("  ")["cliques"] == []
+    assert cp.ler_url_entrada("https://shibaribrasil.com.br/p/?x=" + "a" * 260)["truncada"]       # 255 é o limite da Nuvemshop
+
+
+def test_url_perigosa_nao_vira_link():
+    assert cp.ler_url_entrada("javascript:alert(1)")["pagina"] == ""
+    assert cp.ler_url_entrada("//evil.example/x")["pagina"] == ""
+
+
+def test_campanha_google_ads_pela_url_ou_pelo_clique():
+    ponte = pd.DataFrame({"cd_gclid": ["g1"], "cd_campanha": ["A"], "nm_campanha": ["Camp A"]})
+    perf = pd.DataFrame({"cd_campanha": ["23130880548", "A"], "nm_campanha": ["Google Shopping", "Camp A"]})
+    assert cp.campanha_google_ads("23130880548", None, ponte, perf) == ("Google Shopping", "23130880548", "id na URL de entrada (gad_campaignid)")
+    assert cp.campanha_google_ads(None, "g1", ponte, perf) == ("Camp A", "A", "clique do anúncio (gclid)")
+    assert cp.campanha_google_ads(None, "g9", ponte, perf) is None
+    assert cp.campanha_google_ads("999", None, ponte, perf)[0] is None                          # id sem nome conhecido: devolve o id
+    assert cp.campanha_google_ads("999", None, None, None) == (None, "999", "id na URL de entrada (gad_campaignid)")
