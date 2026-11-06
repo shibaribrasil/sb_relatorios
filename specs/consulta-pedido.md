@@ -1,6 +1,6 @@
 # Spec — Consulta de Pedidos (`reports/consulta_pedido.py`, menu Diário)
 
-Status: v5 em 04/11/2026 (v1 a v4 no mesmo dia). Pedido do Hugo: página bem visual, pouco texto, "Desempenho do Produto, mas do pedido", com o seletor no pedido mais recente por padrão e um panorama o mais real possível de como a venda foi.
+Status: v6 em 06/11/2026 (v1 a v5 em 04/11/2026). Pedido do Hugo: página bem visual, pouco texto, "Desempenho do Produto, mas do pedido", com o seletor no pedido mais recente por padrão e um panorama o mais real possível de como a venda foi.
 
 ## Pergunta da página
 Como foi esta venda, do que o cliente comprou até o que sobrou depois de taxa, envio, imposto, custo do produto e custo de aquisição?
@@ -18,10 +18,11 @@ Como foi esta venda, do que o cliente comprou até o que sobrou depois de taxa, 
 | Envio (opção, transportadora, rastreio, expedição, entrega, previsão) | `tb_logistica_pedido` |
 | Cliente (nome, cidade/UF, WhatsApp, nº de pedidos, total consumido) | `tb_cliente` (por `cd_contato`) |
 | Mensagem de cashback (W0) e cupom de cashback | `raw_control.vw_contato_cliente` (`tipo_tarefa = 'jornada_w0'`, chave `<cd_contato>|<cd_codigo_interno>`) e `raw_control.cupons_gerados` (`campanha = 'cupom_cashback_posvenda'`) |
-| Origem e mídia | `tb_atribuicao_pedido` (`ds_origem_venda`, `ds_midia_venda`, `ds_gclid`, `ds_utm_campaign`) |
+| Origem e mídia (já tratadas), UTM, clique, dispositivo do checkout | `tb_atribuicao_pedido` (`ds_origem_venda`, `ds_midia_venda`, `ds_origem_venda_url`, `ds_midia_venda_url`, `fg_origem_recuperada_ga4`, `ds_utm_*`, `ds_gclid`, `ds_origem_checkout_nuvemshop`) |
+| URL de entrada inteira e origem informada no pedido | `dbt_dw_stg.stg_nuvemshop_pedido` (`ds_url_entrada` = `landing_url` da Nuvemshop, `ds_origem_pedido` = `order_origin`), casada com `tb_atribuicao_pedido` pela mesma chave do dbt (parte antes do `_` de `cd_pedido_loja` = id ou número da Nuvemshop). A querystring não está em nenhuma tabela `az`: a página lê a staging só para isto |
 | Custo de aquisição | `dbt_dw_us_az.tb_gads_clique_campanha` (gclid → campanha) e `tb_gads_campanha_performance` (custo por campanha e dia), via `origem_campanha.carregar_campanhas` |
 
-## Layout (v5)
+## Layout (v6)
 Estilo do pedido da Nuvemshop (pedido do Hugo): **extrato**, não cards por indicador. Depois da lista de itens com foto, dois blocos de quadros (rótulo e detalhe à esquerda, valor à direita; negativos em vermelho; linhas de total em destaque):
 1. **Da venda à margem:** quadros **Pagamento e margem** (um quadro só, do subtotal à margem de contribuição) e **Origem e aquisição**. Não há quadro de margem por item (saiu na v5).
 2. **Venda e cliente** (**no fim da página**, depois da margem): quadros **Informações da venda** e **Cliente** (abaixo). São consulta de apoio; o que o pedido rendeu vem primeiro.
@@ -30,17 +31,32 @@ Sem gráfico (o "Panorama da venda" saiu na v2).
 **Celular (v4):** a página não pode ter rolagem horizontal (testado a 375 e 320 px). As grades de quadros e de itens usam colunas de no mínimo 420/340 px **limitadas a 100% da largura** (`minmax(min(420px,100%),1fr)`), então no celular viram 1 coluna. Nas linhas do extrato, valores curtos (até 18 caracteres) ficam numa linha só; texto longo (meio de pagamento, origem) quebra em vez de alargar o quadro.
 
 ## Informações da venda e Cliente (v3; mostrados no fim da página desde a v4)
-**Informações da venda:** pagamento (meio e parcelas: "à vista" no cartão de 1x; bandeira e gateway no detalhe), envio (opção e transportadora), rastreio (link para o código), expedição, entrega e mensagem de cashback.
+**Informações da venda:** primeiro o bloco **Origem da venda** (abaixo), depois pagamento (meio e parcelas: "à vista" no cartão de 1x; bandeira e gateway no detalhe), envio (opção e transportadora), rastreio (link para o código), expedição, entrega e mensagem de cashback.
 - **Expedição / entrega:** "Expedido em" só com `dt_expedicao`; "Entregue em" só com `dt_entrega` (confirmada). Pedido `EM ABERTO` sem expedição = "Aguardando postagem"; sem expedição e já fora de aberto = "Sem registro de expedição" (rastreio pode não ter sido carregado). **Não** usar `ds_situacao_logistica`/`fg_entregue`: ficam verdadeiros para pedido sem rastreio carregado (achado de 13/10/2026). Sem entrega, mostra a previsão (`dt_estimada_entrega_max`).
 - **Mensagem de cashback** = a mensagem W0 da jornada de pós-venda (cashback logo após o pagamento). "Recebeu em dd/mm" quando há registro `jornada_w0` com `fg_alcancou`; "Enviada ..., sem confirmação" quando o registro existe e não alcançou o cliente (ex.: WhatsApp inválido). Sem registro: "Cupom gerado, mensagem ainda não enviada" se já existe cupom; "Sem cashback (4º pedido)" a partir do 4º pedido do cliente (**atalho:** `MAX_PEDIDO_CASHBACK = 3` espelha o parâmetro `max_pedido_cashback` do dbt); senão "Não enviada". O detalhe traz o cupom (código, valor, validade). Se o check-in W1 existir, aparece uma linha a mais. Horários em UTC são convertidos para Brasília.
 - **Cliente:** nome, cidade/UF do cadastro (`tb_cliente`; sem cadastro, a cidade da entrega), WhatsApp (link `wa.me`, sem mensagem), pedidos feitos (`qt_pedido`, com 1ª e última compra) e **total consumido** = `vl_total_pedido` (produtos líquidos + frete pago, acumulado; o detalhe mostra os produtos sem frete). Pedido sem cliente vinculado mostra "Cadastro não encontrado".
+
+## Origem da venda (v6; linhas no topo de Informações da venda)
+Mostra de onde veio a venda e onde o cliente fechou a compra, sem recalcular nada: o que o DW já tratou (`tb_atribuicao_pedido`) mais a URL de entrada crua da Nuvemshop. Linhas que não têm dado não aparecem.
+| Linha | Regra |
+|---|---|
+| **Origem da venda** | `ds_origem_venda · ds_midia_venda` (a origem **final**). O detalhe traz o significado da mídia (`cpc` = anúncio pago, `organico_srsltid` = orgânico do Google/Merchant Center, `paid_social` = social pago...) e a fonte: "lida da URL de entrada", ou "recuperada pelo GA4" quando `fg_origem_recuperada_ga4` (a URL não trazia origem e o GA4 ligou o comprador a um clique do Google Ads; a leitura só pela URL era "(sem parametro)"). Sem origem: "Direto / sem parâmetro" |
+| **Clique de anúncio** | Sinais na URL: `gclid`/`gbraid`/`wbraid`/`gad_source` = Google Ads, `fbclid` = Meta Ads, `srsltid` = Google orgânico (Merchant Center, **não** é anúncio). "Recuperado pelo GA4" quando a origem foi recuperada |
+| **Campanha do Google Ads** | 1º o `gad_campaignid` da URL de entrada (vale no mesmo dia, mesmo antes de o Ads ligar o clique); 2º o clique (`gclid` → campanha em `tb_gads_clique_campanha`, ~1 dia de atraso). O nome vem das tabelas do Ads (clique ou performance); id sem nome conhecido aparece como "campanha <id>" |
+| **Campanha (UTM)** | `utm_campaign` de `tb_atribuicao_pedido`; no detalhe os outros `utm_*` que existirem |
+| **Finalizou a compra em** | `ds_origem_checkout_nuvemshop` (`storefront` da Nuvemshop): `mobile` = Celular, `store` = Computador, `form` = Pedido manual (link / formulário). **Inferência, a confirmar com a Nuvemshop:** a doc do dbt diz "mobile (app)", mas os pedidos `mobile` (58% do total) têm URL de entrada de página da loja, o que um app não gera; os `form` (44 pedidos, nenhum com URL) são criados à mão no painel |
+| **Origem informada no pedido** | `order_origin`: texto livre preenchido na criação manual do pedido ("Whatsapp", "Instagram", "Parceria com Influencer"...). Só aparece quando preenchido (quase só em pedido `form`) |
+| **Página de entrada** | Caminho da `ds_url_entrada` ("Página inicial" quando é `/`) |
+| **URL de entrada (Nuvemshop)** | `ds_url_entrada` inteira, copiável, com o link "abrir página" apontando **para a página sem querystring** (abrir a URL com o `gclid` geraria uma visita falsa com clique de anúncio). Só vira link se for `http(s)`: a URL vem de fora. Sem URL: "não registrada" (pedido manual ou sem sessão rastreável) |
+
+**Limites:** a Nuvemshop grava no máximo **255 caracteres** da URL (máximo observado = 255): numa URL longa o `gclid` pode ter sido cortado (a página avisa). A URL não diferencia direto de orgânico quando não tem parâmetro (limitação herdada do dbt). `gad_campaignid` só existe em clique de Google Ads com auto-tagging.
 
 ## A cascata (ordem da página)
 1. **O pedido:** itens com foto, quantidade × preço cheio unitário (`vl_receita_bruta_produto ÷ qt_item`) e subtotal; "com desconto R$ X" quando a linha pagou menos. Brinde aparece por último, a R$ 0,00.
 2. **Pagamento e margem (um quadro só):** a parte de cima é o pagamento: Itens (preço cheio, sem brinde) − Descontos (= itens − receita líquida de produtos) + Frete cobrado (`vl_frete_pago_rateio`) = **Total pago pelo cliente** (receita líquida de produtos + frete pago). Os descontos aparecem como linhas recuadas, uma por origem (ver "Descontos destrinchados"). Depois, − Taxa de pagamento real (`vl_taxa_pedido_rateio`) = **Total líquido (entrou na conta)** (mesma definição de `tb_caixa_entrada_pedido.vl_recebido`, com a data de `dt_recebimento_pedido`: "cai em" se futura, "caiu em" se passada).
 3. **Do caixa à margem (continuação do mesmo quadro):** − Frete real da etiqueta (`vl_frete_real_rateio`) − Embalagem (`vl_embalagem_rateio`) − Imposto (`vl_imposto_rateio`) − Reembolso (`vl_reembolso_rateio`, só se houver) − Custo dos produtos (`vl_custo_linha`, **inclui o custo do brinde**) = **Margem de contribuição** (`vl_margem_contribuicao`, antes de mídia). O selo do quadro mostra a margem % = margem ÷ receita líquida de produtos; semáforo igual ao de Vendas & Margem (verde ≥ 50%, âmbar ≥ 40%).
    - Decisão de ordem: o "Total líquido" vem logo depois da taxa porque é isso que o gateway deposita; etiqueta, embalagem e imposto são custos do pedido que não saem desse depósito.
-4. **Origem e aquisição (quadro):** origem, mídia e campanha (UTM); custo de aquisição estimado; **margem após aquisição** = margem de contribuição − custo de aquisição (R$ e %).
+4. **Origem e aquisição (quadro):** origem e mídia (o detalhe da origem, com campanha, UTM e URL, está em Informações da venda desde a v6); custo de aquisição estimado; **margem após aquisição** = margem de contribuição − custo de aquisição (R$ e %).
 
 **Fechamento:** valor pago − taxa − etiqueta − embalagem − imposto − reembolso − custo = margem de contribuição do dbt (teste `tests/test_consulta_pedido.py`). Se a diferença passar de R$ 0,02 a página avisa. Pedido com `ds_incompletude` (sem custo, sem taxa, sem dados da Nuvemshop) leva aviso: a margem está superestimada.
 

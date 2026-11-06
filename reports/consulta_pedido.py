@@ -9,6 +9,7 @@ Aqui só se filtra, soma e apresenta; a única conta própria é o custo de aqui
 """
 import html
 import re
+from urllib.parse import parse_qs, urlsplit
 
 import pandas as pd
 import streamlit as st
@@ -27,6 +28,13 @@ INICIO_ADS = pd.Timestamp("2026-06-01")    # o histórico de custo por campanha 
 META_PAGO = ("instagram", "paid_social")   # mídia paga sem custo na base (não há dados do Meta Ads)
 JANELA_DIAS = 30                           # janela do custo médio por venda do Google Ads
 MAX_PEDIDO_CASHBACK = 3                    # espelha o parâmetro max_pedido_cashback da fila de pós-venda (dbt): cashback só até o 3º pedido
+# storefront da Nuvemshop (tb_atribuicao_pedido.ds_origem_checkout_nuvemshop): em que aparelho o cliente fechou a compra.
+# Leitura (inferência, ver spec): "mobile" = celular (tem URL de entrada de loja, não é app), "store" = computador, "form" = pedido criado à mão.
+CHECKOUT = {"store": "Computador", "mobile": "Celular", "form": "Pedido manual (link / formulário)"}
+# o que cada mídia (ds_midia_venda) quer dizer, para ler a origem sem decorar o código
+MIDIA_TXT = {"cpc": "anúncio pago", "organico_srsltid": "orgânico do Google (Merchant Center)", "paid_social": "social pago",
+             "social": "social orgânico", "organic": "orgânico", "email": "e-mail", "referral": "link de outro site"}
+URL_MAX = 255                              # a Nuvemshop grava no máximo 255 caracteres da URL de entrada
 MEIOS = {"credit_card": "Cartão de crédito", "pix": "Pix", "boleto": "Boleto", "wallet": "Carteira digital", "other": "Outro meio"}
 
 
@@ -108,10 +116,29 @@ def carregar_origem(cd_pedido: str):
     """Origem e mídia do pedido (tb_atribuicao_pedido): URL de entrada, com o clique do Google Ads recuperado pelo GA4."""
     client = bq.get_client()
     df = bq.query_df(client, f"""
-        SELECT ds_origem_venda AS origem, ds_midia_venda AS midia, ds_gclid, ds_utm_campaign
+        SELECT ds_origem_venda AS origem, ds_midia_venda AS midia, ds_gclid, ds_utm_campaign,
+               ds_origem_venda_url, ds_midia_venda_url, fg_origem_recuperada_ga4, ds_origem_checkout_nuvemshop,
+               ds_utm_source, ds_utm_medium, ds_utm_content, ds_utm_term
           FROM `{AZ}.tb_atribuicao_pedido` WHERE CAST(cd_pedido AS STRING) = '{_digitos(cd_pedido)}' LIMIT 1
     """)
     return df.iloc[0].to_dict() if not df.empty else {"origem": "(sem parametro)", "midia": "(sem parametro)", "ds_gclid": None, "ds_utm_campaign": None}
+
+
+@st.cache_data(ttl=900)
+def carregar_url_entrada(cd_pedido: str):
+    """URL de entrada inteira (com querystring) e origem informada do pedido, como vêm da Nuvemshop (stg_nuvemshop_pedido).
+
+    Mesma chave de casamento do dbt (tb_atribuicao_pedido): a parte antes do "_" de cd_pedido_loja é o id OU o número da Nuvemshop.
+    """
+    client = bq.get_client()
+    df = bq.query_df(client, f"""
+        SELECT s.ds_url_entrada AS url, s.ds_origem_pedido
+          FROM `{AZ}.tb_atribuicao_pedido` AS a
+          JOIN `{bq.PROJECT}.dbt_dw_stg.stg_nuvemshop_pedido` AS s
+            ON SPLIT(a.cd_pedido_loja, '_')[SAFE_OFFSET(0)] IN (CAST(s.cd_pedido AS STRING), CAST(s.cd_pedido_loja AS STRING))
+         WHERE CAST(a.cd_pedido AS STRING) = '{_digitos(cd_pedido)}' LIMIT 1
+    """)
+    return df.iloc[0].to_dict() if not df.empty else {}
 
 
 @st.cache_data(ttl=900)
@@ -309,6 +336,51 @@ def detalhe_descontos(r, codigo_cupom, cupom, meio_pagamento):
     return itens
 
 
+def ler_url_entrada(url):
+    """Lê a URL de entrada do pedido (landing_url da Nuvemshop): página, campanha do Google Ads e cliques de anúncio.
+
+    A Nuvemshop grava no máximo 255 caracteres: numa URL longa o fim (às vezes o gclid) é cortado, por isso `truncada`.
+    """
+    vazio = {"url": "", "pagina": "", "caminho": "", "campanha_ads": None, "cliques": [], "truncada": False}
+    url = url.strip() if isinstance(url, str) else ""
+    if not url:
+        return vazio
+    partes = urlsplit(url)
+    q = parse_qs(partes.query, keep_blank_values=True)
+    cliques = []
+    ids = [k for k in ("gclid", "gbraid", "wbraid", "gad_source") if k in q]
+    if ids:
+        cliques.append(f"Google Ads ({', '.join(ids)})")
+    if "fbclid" in q:
+        cliques.append("Meta Ads (fbclid)")
+    if "srsltid" in q:
+        cliques.append("Google orgânico (srsltid)")
+    camp = (q.get("gad_campaignid") or [""])[0]
+    # só link de http(s) vira link clicável: a URL vem de fora (cliente) e não pode virar javascript:
+    pagina = f"{partes.scheme}://{partes.netloc}{partes.path}" if partes.scheme in ("http", "https") and partes.netloc else ""
+    return {"url": url, "pagina": pagina, "caminho": partes.path or "/", "campanha_ads": camp if camp.isdigit() else None,
+            "cliques": cliques, "truncada": len(url) >= URL_MAX}
+
+
+def campanha_google_ads(cd_campanha, gclid, ponte, perf):
+    """Campanha do Google Ads do pedido: (nome | None, id, fonte) ou None se não há como saber.
+
+    1º o id que vem na URL de entrada (gad_campaignid): vale no mesmo dia. 2º o clique (gclid → campanha), que o Ads liga com ~1 dia de atraso.
+    """
+    nomes = {}
+    if ponte is not None and not ponte.empty:
+        nomes.update({str(c): n for c, n in zip(ponte["cd_campanha"], ponte["nm_campanha"])})
+    if perf is not None and not perf.empty:
+        nomes.update({str(c): n for c, n in zip(perf["cd_campanha"], perf["nm_campanha"])})
+    if cd_campanha:
+        return nomes.get(str(cd_campanha)), str(cd_campanha), "id na URL de entrada (gad_campaignid)"
+    if gclid and ponte is not None and not ponte.empty:
+        achou = ponte[ponte["cd_gclid"] == gclid]
+        if not achou.empty:
+            return achou["nm_campanha"].iloc[0], str(achou["cd_campanha"].iloc[0]), "clique do anúncio (gclid)"
+    return None
+
+
 def custo_aquisicao(origem, midia, gclid, dia, pedidos_google, ponte, perf):
     """Custo de mídia paga atribuído ao pedido: (valor | None, explicação curta). None = não dá para saber.
 
@@ -416,6 +488,19 @@ def _linha(rotulo, valor, detalhe="", tipo="", recuo=False, valor_html=None):
             f'<div style="font-size:13.5px;color:{cor};font-weight:{peso};{nowrap}text-align:right">{valor_html if valor_html is not None else html.escape(valor)}</div></div>')
 
 
+def _linha_url(rotulo, u):
+    """Linha larga para a URL de entrada: rótulo e link em cima, a URL inteira embaixo (quebra em qualquer ponto, sem alargar a tela)."""
+    link = (f'<a href="{html.escape(u["pagina"])}" target="_blank" rel="noopener" style="color:{COLORS["primary"]};font-weight:600;font-size:12.5px;white-space:nowrap">abrir página ↗</a>'
+            if u["pagina"] else "")
+    aviso = (f'<div style="font-size:11px;color:{COLORS["text_muted"]};margin-top:4px">A Nuvemshop grava só {URL_MAX} caracteres: o fim da URL (às vezes o gclid) pode ter sido cortado.</div>'
+             if u["truncada"] else "")
+    return (f'<div style="padding:10px 16px;border-top:1px solid {COLORS["border"]}">'
+            f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;font-size:13.5px;color:{COLORS["text"]}">'
+            f'<div style="min-width:0">{html.escape(rotulo)}</div>{link}</div>'
+            f'<div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;line-height:1.5;color:{COLORS["text_secondary"]};background:{COLORS["bg_secondary"]};'
+            f'border-radius:6px;padding:6px 8px;margin-top:6px;overflow-wrap:anywhere">{html.escape(u["url"])}</div>{aviso}</div>')
+
+
 def _painel(titulo, linhas, selo=None):
     """Quadro do extrato (título + selo opcional no cabeçalho + linhas), no estilo do pedido da Nuvemshop."""
     chip = (f'<span style="background:{selo[1]};color:{selo[2]};border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700;white-space:nowrap">{html.escape(selo[0])}</span>'
@@ -486,6 +571,11 @@ def render():
     _itens_html(it, fotos)
 
     # ═══ DADOS DA VENDA E DO CLIENTE (montados aqui, mostrados no fim da página) ═══
+    try:
+        camp = carregar_campanhas()   # cache: serve ao nome da campanha (origem) e ao custo de aquisição
+    except Exception:  # noqa: BLE001
+        camp = None
+    sem_origem = str(org["origem"]).startswith("(sem")
     bandeira_txt = _txt(h["ds_bandeira_cartao_nuvemshop"]).title()
     if bandeira_txt.lower() == meio.lower():  # Pix vem com "bandeira" pix
         bandeira_txt = ""
@@ -509,7 +599,42 @@ def render():
                      if rastreio and url else None)
     cb = status_cashback(contatos, cupom_cb, h["nr_pedido_cliente"]) if cb_ok else ("Indisponível", "não foi possível ler o registro de mensagens", "")
     w1 = next((c for c in contatos if c.get("tipo_tarefa") == "jornada_w1"), None)
-    LV = [_linha("Pagamento", " · ".join(x for x in [meio, parcelas] if x) or "—", " · ".join(x for x in [bandeira_txt, _txt(h["ds_gateway_nuvemshop"])] if x)),
+    # origem da venda: o que o DW tratou (tb_atribuicao_pedido) e a URL de entrada crua da Nuvemshop
+    try:
+        ent = carregar_url_entrada(it["cd_pedido"].iloc[0])
+    except Exception:  # noqa: BLE001
+        ent = {}
+    u = ler_url_entrada(ent.get("url"))
+    recuperada = pd.notna(org.get("fg_origem_recuperada_ga4")) and bool(org.get("fg_origem_recuperada_ga4"))
+    if sem_origem:
+        o_valor, o_det = "Direto / sem parâmetro", "URL de entrada sem UTM nem clique de anúncio"
+    else:
+        o_valor = f"{org['origem']} · {org['midia']}"
+        o_det = " · ".join(x for x in [MIDIA_TXT.get(str(org["midia"]), ""),
+                                       "recuperada pelo GA4: a URL de entrada não trazia origem" if recuperada else "lida da URL de entrada"] if x)
+    LO = [_linha("Origem da venda", o_valor, o_det)]
+    cliques = list(u["cliques"]) + (["Google Ads (recuperado pelo GA4)"] if recuperada else [])
+    if cliques:
+        LO.append(_linha("Clique de anúncio", " · ".join(cliques)))
+    ads = campanha_google_ads(u["campanha_ads"], _txt(org.get("ds_gclid")) or None, camp["ponte"] if camp else None, camp["perf"] if camp else None)
+    if ads:
+        LO.append(_linha("Campanha do Google Ads", ads[0] or f"campanha {ads[1]}", f"{ads[2]} · id {ads[1]}"))
+    utm = {k: _txt(org.get(f"ds_utm_{k}")) for k in ("source", "medium", "campaign", "content", "term")}
+    if any(utm.values()):
+        LO.append(_linha("Campanha (UTM)", utm["campaign"] or "sem utm_campaign",
+                         " · ".join(f"utm_{k} {v}" for k, v in utm.items() if v and k != "campaign")))
+    ck = _txt(org.get("ds_origem_checkout_nuvemshop")) or _txt(h["ds_origem_checkout_nuvemshop"])
+    if ck:
+        LO.append(_linha("Finalizou a compra em", CHECKOUT.get(ck, ck), f"storefront da Nuvemshop: {ck}"))
+    if _txt(ent.get("ds_origem_pedido")):
+        LO.append(_linha("Origem informada no pedido", _txt(ent["ds_origem_pedido"]), "campo preenchido na criação do pedido (Nuvemshop)"))
+    if u["url"]:
+        LO.append(_linha("Página de entrada", "Página inicial" if u["caminho"] == "/" else u["caminho"]))
+        LO.append(_linha_url("URL de entrada (Nuvemshop)", u))
+    else:
+        LO.append(_linha("URL de entrada (Nuvemshop)", "não registrada", "pedido criado à mão ou sem sessão rastreável"))
+
+    LV = LO + [_linha("Pagamento", " · ".join(x for x in [meio, parcelas] if x) or "—", " · ".join(x for x in [bandeira_txt, _txt(h["ds_gateway_nuvemshop"])] if x)),
           _linha("Envio", _txt(log.get("ds_opcao_frete")) or _txt(h["ds_opcao_frete_nuvemshop"]) or "—", _txt(log.get("nm_transportadora")) or _txt(h["nm_transportadora_nuvemshop"])),
           _linha("Rastreio", rastreio or "ainda sem código", valor_html=link_rastreio),
           _linha("Expedição", env["expedicao"][0], env["expedicao"][1], env["expedicao"][2]),
@@ -552,14 +677,13 @@ def render():
             google = carregar_pedidos_google(f"{ini:%Y-%m-%d}", f"{dia:%Y-%m-%d}")
         else:
             google = pd.DataFrame(columns=["cd_pedido", "ds_gclid", "dt_pedido"])
-        camp = carregar_campanhas()
+        if camp is None:
+            raise RuntimeError("campanhas não carregadas")
         aq, expl = custo_aquisicao(org["origem"], org["midia"], org["ds_gclid"], dia, google, camp["ponte"], camp["perf"])
     except Exception as e:  # noqa: BLE001
         expl = f"custo do Google Ads indisponível ({e})"
     pos = None if aq is None else r["margem"] - aq
     pos_pct = (pos / r["rec"]) if pos is not None and r["rec"] else None
-    sem_origem = str(org["origem"]).startswith("(sem")
-    campanha = _txt(org.get("ds_utm_campaign"))
 
     # 1) Pagamento: do preço dos itens ao que entrou na conta
     receb, pagto = h["dt_recebimento_pedido"], h["dt_pagamento_nuvemshop"]
@@ -600,13 +724,8 @@ def render():
     selo2 = (pct(r["margem_pct"]), *cores_m[var_m]) if var_m in cores_m else None
 
     # 3) Origem e custo de aquisição
-    checkout = {"store": "Site", "mobile": "Mobile", "form": "Link direto"}.get(_txt(h["ds_origem_checkout_nuvemshop"]), _txt(h["ds_origem_checkout_nuvemshop"]))
     L4 = [_linha("Origem", "Direto / sem parâmetro" if sem_origem else str(org["origem"]), "sem UTM nem clique de anúncio" if sem_origem else ""),
           _linha("Mídia", "—" if sem_origem else str(org["midia"]))]
-    if campanha:
-        L4.append(_linha("Campanha (UTM)", campanha))
-    if checkout:
-        L4.append(_linha("Compra feita em", checkout))
     L4.append(_linha("Margem de contribuição", brl(r["margem"]), "", "total"))
     L4.append(_linha("Custo de aquisição", f"− {brl(aq)}" if aq is not None else "—", expl, "neg" if aq else ""))
     var_p = _variant_margem(pos_pct) if pos is not None else "neutral"
