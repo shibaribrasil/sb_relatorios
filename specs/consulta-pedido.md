@@ -1,6 +1,6 @@
 # Spec — Consulta de Pedidos (`reports/consulta_pedido.py`, menu Diário)
 
-Status: v6 em 06/11/2026 (v1 a v5 em 04/11/2026). Pedido do Hugo: página bem visual, pouco texto, "Desempenho do Produto, mas do pedido", com o seletor no pedido mais recente por padrão e um panorama o mais real possível de como a venda foi.
+Status: v7 em 06/11/2026 (prévia do custo do clique; v6 no mesmo dia, v1 a v5 em 04/11/2026). Pedido do Hugo: página bem visual, pouco texto, "Desempenho do Produto, mas do pedido", com o seletor no pedido mais recente por padrão e um panorama o mais real possível de como a venda foi.
 
 ## Pergunta da página
 Como foi esta venda, do que o cliente comprou até o que sobrou depois de taxa, envio, imposto, custo do produto e custo de aquisição?
@@ -79,6 +79,13 @@ Só o Google Ads tem custo na base. Regra, por origem/mídia do pedido:
 **Defasagem dos dados (verificada em 04/11/2026):** origem e mídia do pedido (`tb_atribuicao_pedido`) existem no mesmo dia, porque vêm da URL de entrada gravada no pedido. O que atrasa é o vínculo **clique → campanha** (a base de cliques do Google Ads chegou até 03/11 e o pedido de 04/11 ainda não estava lá) e o **custo** (última linha em 03/11). Por isso o pedido do dia cai na média dos 30 dias, e passa a usar a campanha do clique quando o Ads atualiza (cache de 15 min na página).
 
 - Limites: a média de 30 dias é uma estimativa (cada campanha custa diferente) e o pedido sem gclid pode nem ter vindo do anúncio; o custo por campanha do mês corrente muda ao longo dos dias; o divisor da média conta todos os pedidos Google pago, não só os com clique identificável; o Instagram pago e qualquer outro canal pago futuro ficam sem custo até entrar na base.
+
+## Prévia do custo do clique (v7, 06/11/2026)
+Pedido do Hugo: ver o custo do pedido quase em tempo real para medir margem pedido a pedido. No quadro **Origem e aquisição**, para pedido google / cpc com `gclid`, duas linhas a mais: **Custo do clique (prévia)** e **Margem após o clique (prévia)** (= margem de contribuição − custo do clique).
+- **Fonte:** `dbt_dw_az.tb_gads_clique_custo` (publicada de US por `scripts/publicar_us_para_useast4.py`), ligada ao pedido por `tb_atribuicao_pedido.ds_gclid`. Sem conta própria: o dbt traz o valor pronto.
+- **O que é:** o Google não informa custo por clique. A prévia é o **CPC médio do dia do clique** da palavra-chave (texto + correspondência no grupo) ou, sem palavra (Shopping), do grupo de anúncios. O detalhe da linha diz qual e de que dia.
+- **Atualização:** extração de cliques e custo de hora em hora (`google-ads-cliques-hourly`, `:50`) e dbt na hora cheia; cache da página de 5 min. O pedido de hoje já tem prévia em até ~2 h.
+- **Limites:** é **piso** do custo de aquisição (só o clique que comprou, sem os que não compraram: o custo de aquisição acima, que reparte o custo da campanha pelos pedidos, é o mais próximo do CAC). É média do dia, não o custo exato do clique. O dia corrente é parcial e o Google pode ajustar o custo depois (cliques inválidos). Instagram pago e demais canais seguem sem prévia.
 
 ## Limites (resumo)
 - ~1 pedido/dia: a margem de um pedido isolado não é tendência.

@@ -160,6 +160,19 @@ def carregar_pedidos_google(ini: str, fim: str):
     return df
 
 
+@st.cache_data(ttl=300)
+def carregar_custo_clique(gclid: str):
+    """Prévia do custo do clique do pedido (tb_gads_clique_custo, az): CPC médio do dia da palavra ou do grupo. Vazio sem clique."""
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", gclid):
+        raise ValueError(f"gclid inválido: {gclid!r}")
+    client = bq.get_client()
+    df = bq.query_df(client, f"""
+        SELECT vl_custo_clique_estimado, ds_nivel_custo, ds_palavra_chave, ds_tipo_correspondencia, dt_clique, fg_dia_em_andamento
+          FROM `{AZ}.tb_gads_clique_custo` WHERE cd_gclid = '{gclid}' LIMIT 1
+    """)
+    return df.iloc[0].to_dict() if not df.empty else {}
+
+
 @st.cache_data(ttl=900)
 def carregar_cupom(codigo: str):
     """Regra do cupom usado no pedido (tb_cupom): tipo, valor, pedido mínimo. Vazio se o cupom não existir mais."""
@@ -685,6 +698,15 @@ def render():
     pos = None if aq is None else r["margem"] - aq
     pos_pct = (pos / r["rec"]) if pos is not None and r["rec"] else None
 
+    # prévia do custo do clique (piso do custo de aquisição, quase em tempo real)
+    clq = {}
+    if (org["origem"], org["midia"]) == GOOGLE_PAGO and org["ds_gclid"]:
+        try:
+            clq = carregar_custo_clique(str(org["ds_gclid"]))
+        except Exception:  # noqa: BLE001
+            clq = {}
+    custo_clq = float(clq["vl_custo_clique_estimado"]) if clq and pd.notna(clq.get("vl_custo_clique_estimado")) else None
+
     # 1) Pagamento: do preço dos itens ao que entrou na conta
     receb, pagto = h["dt_recebimento_pedido"], h["dt_pagamento_nuvemshop"]
     quando = "" if pd.isna(receb) else (f"cai em {receb:%d/%m}" if receb > hoje else f"caiu em {receb:%d/%m}")
@@ -732,6 +754,15 @@ def render():
     L4.append(_linha("Margem após aquisição", brl(pos) if pos is not None else "—",
                      f"{pct(pos_pct)} da receita líquida" if pos is not None else "sem custo de aquisição estimado", "total" if var_p == "neutral" else var_p))
     selo4 = (pct(pos_pct), *cores_m[var_p]) if var_p in cores_m else None
+    if custo_clq is not None:
+        onde = (f"palavra “{clq['ds_palavra_chave']}” ({str(clq['ds_tipo_correspondencia']).lower()})"
+                if clq["ds_nivel_custo"] == "palavra" else "grupo de anúncios")
+        parcial = " · dia em andamento, pode mudar" if bool(clq["fg_dia_em_andamento"]) else ""
+        L4.append(_linha("Custo do clique (prévia)", f"− {brl(custo_clq)}",
+                         f"CPC médio do dia {pd.Timestamp(clq['dt_clique']):%d/%m} da {onde}{parcial} · piso: não inclui os cliques que não compraram", "neg"))
+        pos_clq = r["margem"] - custo_clq
+        L4.append(_linha("Margem após o clique (prévia)", brl(pos_clq),
+                         f"{pct(pos_clq / r['rec'])} da receita líquida" if r["rec"] else "", "total"))
 
     st.html(f'<div style="{GRADE}">' + _painel("Pagamento e margem", L1 + L2, selo2) + _painel("Origem e aquisição", L4, selo4) + "</div>")
 
