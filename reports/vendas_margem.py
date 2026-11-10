@@ -67,6 +67,16 @@ TIPO_CANCELAMENTO = {
 }
 
 
+CANAL_WHATSAPP = "WhatsApp"  # canal emulado: pedido da Nuvemshop que usou cupom/ação do pós-venda (ver specs/pulso-dia.md, v8)
+
+
+def canal_venda(ds_tipo_loja, fg_posvenda):
+    """Canal de venda para a leitura gerencial: o pedido da Nuvemshop que veio do pós-venda (`fg_posvenda`, = `tb_pedido_acao.fg_sac_marketing`)
+    vira "WhatsApp" e sai do total da Nuvemshop; os demais seguem no tipo da loja do Bling. Só a Nuvemshop gera cupom do pós-venda, então
+    pedido de outro canal nunca é reclassificado."""
+    return ds_tipo_loja.where(~(fg_posvenda & (ds_tipo_loja == "Nuvemshop")), CANAL_WHATSAPP)
+
+
 @st.cache_data(ttl=900)
 def carregar_dados():
     client = bq.get_client()
@@ -91,6 +101,12 @@ def carregar_dados():
      LEFT JOIN (SELECT cd_pedido, ANY_VALUE(ds_origem_venda) AS ds_origem_venda, ANY_VALUE(ds_midia_venda) AS ds_midia_venda,
                        ANY_VALUE(ds_gclid) AS ds_gclid, ANY_VALUE(ds_utm_campaign) AS ds_utm_campaign
                   FROM `{bq.PROJECT}.dbt_dw_az.tb_atribuicao_pedido` GROUP BY cd_pedido) AS a USING (cd_pedido)
+    """)
+    # pós-venda = ação mapeada do SAC/pós-venda (cupom de cashback, recontato, crédito de retorno, cartão VIP) ou carrinho/pedido recuperado
+    # depois de contato do SAC; a regra mora no dbt (tb_pedido_acao.fg_sac_marketing) e aqui só se lê a flag
+    acao = bq.query_df(client, f"""
+        SELECT cd_codigo_interno, fg_sac_marketing AS fg_posvenda
+          FROM `{bq.PROJECT}.dbt_dw_az.tb_pedido_acao` WHERE dt_pedido >= DATE '{INICIO_HISTORICO}'
     """)
     metas = bq.query_df(client, f"""
         SELECT dt_prim_dia_mes, dt_data, vl_meta_dia_acumulado, vl_objetivo_total
@@ -119,6 +135,9 @@ def carregar_dados():
     vendas["mes"] = vendas["dt_pedido"].dt.to_period("M").dt.to_timestamp()
     vendas["ds_categoria"] = vendas["ds_categoria"].fillna("Sem categoria")
     vendas["ds_tipo_loja"] = vendas["ds_tipo_loja"].fillna("(sem canal)")
+    vendas = vendas.merge(acao, on="cd_codigo_interno", how="left")
+    vendas["fg_posvenda"] = vendas["fg_posvenda"].fillna(False).astype(bool)
+    vendas["ds_canal"] = canal_venda(vendas["ds_tipo_loja"], vendas["fg_posvenda"])
     for c in SOMAVEIS:
         vendas[c] = pd.to_numeric(vendas[c]).fillna(0.0)
     # reembolso no mês em que aconteceu (data aproximada: última atualização do pedido na Nuvemshop).
