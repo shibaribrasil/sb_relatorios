@@ -107,33 +107,70 @@ def _grafico_semana(ped, hoje):
     return fig
 
 
-def _secao_canal(sel):
-    """Canal de venda (loja do Bling: Nuvemshop, Mercado Livre...) no mês: pedidos, faturamento e margem de contribuição."""
-    section_title("Canal de venda")
-    g = sel.groupby("ds_tipo_loja", as_index=False).agg(
+def _tabela_canal(sel, ant=None):
+    """Uma linha por canal no período `sel`: pedidos, faturamento, margem de contribuição (R$ e %), participação do canal na margem total e
+    crescimento do faturamento contra `ant` (mesmo trecho do mês anterior; None = sem comparação). Crescimento NaN quando o canal não vendeu
+    no período anterior (não existe base para comparar)."""
+    g = sel.groupby("ds_canal", as_index=False).agg(
         pedidos=("cd_codigo_interno", "nunique"), fat=("vl_liquido_item", "sum"),
         rec=("vl_receita_liquida_produto", "sum"), marg=("vl_margem_contribuicao", "sum"),
-    ).sort_values("fat", ascending=False)
+    ).sort_values("fat", ascending=False).reset_index(drop=True)
     g["pct"] = g["marg"] / g["rec"].where(g["rec"] != 0)
-    col1, col2 = st.columns([2, 3])
+    g["part"] = g["marg"] / (g["marg"].sum() if g["marg"].sum() != 0 else float("nan"))
+    if ant is not None:
+        fat_ant = ant.groupby("ds_canal")["vl_liquido_item"].sum()
+        base = g["ds_canal"].map(fat_ant)
+        g["cresc"] = (g["fat"] - base) / base.where(base > 0)
+    return g
+
+
+def _fmt_cresc(v):
+    return "—" if pd.isna(v) else f"{'+' if v >= 0 else '−'}{abs(v) * 100:.1f}%".replace(".", ",")
+
+
+def _cor_cresc(v):
+    """Formatação condicional do crescimento: verde quando cresce, vermelho quando cai (cores só do tema)."""
+    if pd.isna(v) or v == 0:
+        return ""
+    ok = v > 0
+    return f"color: {COLORS['success'] if ok else COLORS['danger']}; background-color: {COLORS['success_bg'] if ok else COLORS['danger_bg']}; font-weight: 600"
+
+
+def _secao_canal(sel, ant=None, rot=None):
+    """Canal de venda no mês: pedidos, faturamento, margem de contribuição, participação na margem e crescimento do faturamento contra o mesmo
+    trecho do mês anterior (`rot`). Canal = loja do Bling (Nuvemshop, Mercado Livre) com o pós-venda separado como "WhatsApp"
+    (`vendas_margem.canal_venda`): esses pedidos saem do total da Nuvemshop."""
+    section_title("Canal de venda")
+    g = _tabela_canal(sel, ant)
+    col1, col2 = st.columns([2, 7])
     with col1:
         fig = go.Figure(go.Bar(
-            y=g["ds_tipo_loja"], x=g["fat"], orientation="h", marker_color=METRIC_COLORS["receita"],
+            y=g["ds_canal"], x=g["fat"], orientation="h", marker_color=METRIC_COLORS["receita"],
             text=[brl(v, 0) for v in g["fat"]], textposition="outside", cliponaxis=False,
             hovertemplate="%{y}<br>Faturamento R$ %{x:,.0f}<extra></extra>"))
         plotly_layout(fig, height=max(140, 56 * len(g) + 50), showlegend=False,
-                      xaxis=dict(showticklabels=False, showgrid=False, range=[0, max(float(g["fat"].max()), 1.0) * 1.35]),
+                      xaxis=dict(showticklabels=False, showgrid=False, range=[0, max(float(g["fat"].max()), 1.0) * 1.6]),
                       yaxis=dict(autorange="reversed", automargin=True))
         with st.container(border=True):
             st.plotly_chart(fig, use_container_width=True)
     with col2:
-        st.dataframe(pd.DataFrame({"Canal": g["ds_tipo_loja"], "Pedidos": g["pedidos"], "Faturamento": g["fat"],
-                                   "Margem de contrib. (R$)": g["marg"], "Margem de contrib. (%)": g["pct"]}),
-                     hide_index=True, use_container_width=True,
-                     column_config={"Pedidos": st.column_config.NumberColumn(width=80),
-                                    "Faturamento": st.column_config.NumberColumn(format="R$ %.2f", width=120),
-                                    "Margem de contrib. (R$)": st.column_config.NumberColumn(format="R$ %.2f", width=150),
-                                    "Margem de contrib. (%)": st.column_config.NumberColumn(format="percent", width=150)})
+        tab = pd.DataFrame({"Canal": g["ds_canal"], "Pedidos": g["pedidos"], "Faturamento": g["fat"]})
+        cfg = {"Pedidos": st.column_config.NumberColumn(width=70),
+               "Faturamento": st.column_config.NumberColumn(format="R$ %.2f"),
+               "Margem de contrib. (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+               "Margem de contrib. (%)": st.column_config.NumberColumn(format="percent"),
+               "Part. na margem total": st.column_config.NumberColumn(format="percent")}
+        col_cresc = f"Cresc. vs. {rot}" if rot and "cresc" in g else None
+        if col_cresc:
+            tab[col_cresc] = g["cresc"].map(_fmt_cresc)  # texto: sinal explícito e "—" para o canal sem base de comparação
+            cfg[col_cresc] = st.column_config.Column()
+        tab["Margem de contrib. (R$)"] = g["marg"]
+        tab["Margem de contrib. (%)"] = g["pct"]
+        tab["Part. na margem total"] = g["part"]
+        estilo = tab.style
+        if col_cresc:
+            estilo = estilo.apply(lambda _: [_cor_cresc(v) for v in g["cresc"]], subset=[col_cresc])
+        st.dataframe(estilo, hide_index=True, use_container_width=True, column_config=cfg)
 
 
 def render():
@@ -244,5 +281,5 @@ def render():
     secao_vendas_meta(per, meses_sel, hoje)
     secao_perfil(pedidos_de_linhas(per["sel"]), pedidos_de_linhas(per["ant"]) if per["ant"] is not None else None, per["rot"] or "",
                  contexto="Mês corrente (hoje incluído), comparado com o mesmo trecho do mês anterior." if per["rot"] else "")
-    _secao_canal(per["sel"])
+    _secao_canal(per["sel"], per["ant"], per["rot"])
     secao_origem(per["sel"], meses_sel, com_nota=False)

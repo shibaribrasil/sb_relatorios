@@ -153,3 +153,6 @@ Jan–Abr/26 ficam entre 57,9% e 62,6% (frete subsidiado em pedidos ≥ R$ 400 e
 ## v7 — 22/set/2026: ajustes de leitura
 - **Meta do mês** (gráfico "Faturamento × meta por mês"): trocado de marcador losango solto para linha tracejada com pontos, no mesmo padrão visual da meta acumulada.
 - **Gráficos de clientes simplificados**: "Pedidos de novos × recorrentes" perdeu as duas linhas de % (eixo duplo) — vira só as barras empilhadas, sem eixo secundário (o % já está nos cards). "Recompra em 90 dias" perdeu os pontos mensais ruidosos — mostra só a média móvel de 6 coortes, uma linha.
+
+## v8 — 10/nov/2026: canal emulado `ds_canal`
+- `carregar_dados` lê `tb_pedido_acao.fg_sac_marketing` como `fg_posvenda` e cria `ds_canal` (`canal_venda`): pedido da Nuvemshop do pós-venda vira "WhatsApp"; os demais seguem em `ds_tipo_loja`. Usado só pela seção Canal de venda do Pulso do Dia; regra e limites em `specs/pulso-dia.md` (v8). `ds_tipo_loja` não muda.
