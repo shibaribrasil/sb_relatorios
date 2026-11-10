@@ -142,35 +142,22 @@ def _secao_canal(sel, ant=None, rot=None):
     (`vendas_margem.canal_venda`): esses pedidos saem do total da Nuvemshop."""
     section_title("Canal de venda")
     g = _tabela_canal(sel, ant)
-    col1, col2 = st.columns([2, 7])
-    with col1:
-        fig = go.Figure(go.Bar(
-            y=g["ds_canal"], x=g["fat"], orientation="h", marker_color=METRIC_COLORS["receita"],
-            text=[brl(v, 0) for v in g["fat"]], textposition="outside", cliponaxis=False,
-            hovertemplate="%{y}<br>Faturamento R$ %{x:,.0f}<extra></extra>"))
-        plotly_layout(fig, height=max(140, 56 * len(g) + 50), showlegend=False,
-                      xaxis=dict(showticklabels=False, showgrid=False, range=[0, max(float(g["fat"].max()), 1.0) * 1.6]),
-                      yaxis=dict(autorange="reversed", automargin=True))
-        with st.container(border=True):
-            st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        tab = pd.DataFrame({"Canal": g["ds_canal"], "Pedidos": g["pedidos"], "Faturamento": g["fat"]})
-        cfg = {"Pedidos": st.column_config.NumberColumn(width=70),
-               "Faturamento": st.column_config.NumberColumn(format="R$ %.2f"),
-               "Margem de contrib. (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
-               "Margem de contrib. (%)": st.column_config.NumberColumn(format="percent"),
-               "Part. na margem total": st.column_config.NumberColumn(format="percent")}
-        col_cresc = f"Cresc. vs. {rot}" if rot and "cresc" in g else None
-        if col_cresc:
-            tab[col_cresc] = g["cresc"].map(_fmt_cresc)  # texto: sinal explícito e "—" para o canal sem base de comparação
-            cfg[col_cresc] = st.column_config.Column()
-        tab["Margem de contrib. (R$)"] = g["marg"]
-        tab["Margem de contrib. (%)"] = g["pct"]
-        tab["Part. na margem total"] = g["part"]
-        estilo = tab.style
-        if col_cresc:
-            estilo = estilo.apply(lambda _: [_cor_cresc(v) for v in g["cresc"]], subset=[col_cresc])
-        st.dataframe(estilo, hide_index=True, use_container_width=True, column_config=cfg)
+    tab = pd.DataFrame({"Canal": g["ds_canal"], "Pedidos": g["pedidos"], "Faturamento": g["fat"],
+                        "Margem de contrib. (R$)": g["marg"], "Margem de contrib. (%)": g["pct"],
+                        "Participação na margem total": g["part"]})
+    cfg = {"Pedidos": st.column_config.NumberColumn(width=80),
+           "Faturamento": st.column_config.NumberColumn(format="R$ %.2f"),
+           "Margem de contrib. (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+           "Margem de contrib. (%)": st.column_config.NumberColumn(format="percent"),
+           "Participação na margem total": st.column_config.NumberColumn(format="percent")}
+    col_cresc = f"Crescimento vs. {rot}" if rot and "cresc" in g else None
+    if col_cresc:  # última coluna; texto: sinal explícito e "—" para o canal sem base de comparação
+        tab[col_cresc] = g["cresc"].map(_fmt_cresc)
+        cfg[col_cresc] = st.column_config.Column()
+    estilo = tab.style
+    if col_cresc:
+        estilo = estilo.apply(lambda _: [_cor_cresc(v) for v in g["cresc"]], subset=[col_cresc])
+    st.dataframe(estilo, hide_index=True, use_container_width=True, column_config=cfg)
 
 
 def render():
