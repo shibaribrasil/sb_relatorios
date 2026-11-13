@@ -67,14 +67,15 @@ TIPO_CANCELAMENTO = {
 }
 
 
-CANAL_WHATSAPP = "WhatsApp"  # canal emulado: pedido da Nuvemshop que usou cupom/ação do pós-venda (ver specs/pulso-dia.md, v8)
+CANAL_WHATSAPP = "WhatsApp"  # canal emulado: pedido da Nuvemshop do pós-venda ou com "whatsapp" na anotação da loja (ver specs/pulso-dia.md, v8 e v10)
 
 
-def canal_venda(ds_tipo_loja, fg_posvenda):
+def canal_venda(ds_tipo_loja, fg_posvenda, fg_anotacao_whatsapp=None):
     """Canal de venda para a leitura gerencial: o pedido da Nuvemshop que veio do pós-venda (`fg_posvenda`, = `tb_pedido_acao.fg_sac_marketing`)
-    vira "WhatsApp" e sai do total da Nuvemshop; os demais seguem no tipo da loja do Bling. Só a Nuvemshop gera cupom do pós-venda, então
-    pedido de outro canal nunca é reclassificado."""
-    return ds_tipo_loja.where(~(fg_posvenda & (ds_tipo_loja == "Nuvemshop")), CANAL_WHATSAPP)
+    ou que traz "whatsapp" na anotação da loja (`fg_anotacao_whatsapp`, = `owner_note` da Nuvemshop) vira "WhatsApp" e sai do total da
+    Nuvemshop; os demais seguem no tipo da loja do Bling. Só pedido da Nuvemshop é reclassificado: pedido de outro canal nunca é."""
+    whats = fg_posvenda if fg_anotacao_whatsapp is None else (fg_posvenda | fg_anotacao_whatsapp)
+    return ds_tipo_loja.where(~(whats & (ds_tipo_loja == "Nuvemshop")), CANAL_WHATSAPP)
 
 
 @st.cache_data(ttl=900)
@@ -108,6 +109,15 @@ def carregar_dados():
         SELECT cd_codigo_interno, fg_sac_marketing AS fg_posvenda
           FROM `{bq.PROJECT}.dbt_dw_az.tb_pedido_acao` WHERE dt_pedido >= DATE '{INICIO_HISTORICO}'
     """)
+    # anotação da loja (owner_note, escrita à mão no admin da Nuvemshop) com "whatsapp": o time marca assim a venda fechada pelo WhatsApp.
+    # Liga pelo número do pedido na loja; só pedido da Nuvemshop (o número do Mercado Livre é outro e poderia colidir).
+    anot = bq.query_df(client, f"""
+        SELECT DISTINCT p.cd_codigo_interno, TRUE AS fg_anotacao_whatsapp
+          FROM (SELECT DISTINCT cd_codigo_interno, cd_pedido_loja FROM {base}
+                 WHERE fg_pedido_valido AND ds_tipo_loja = 'Nuvemshop' AND dt_pedido >= DATE '{INICIO_HISTORICO}') AS p
+          JOIN `{bq.PROJECT}.dbt_dw_stg.stg_nuvemshop_pedido` AS s ON CAST(s.cd_pedido_loja AS STRING) = CAST(p.cd_pedido_loja AS STRING)
+         WHERE REGEXP_CONTAINS(LOWER(IFNULL(s.ds_obs_loja, '')), r'whats')
+    """)
     metas = bq.query_df(client, f"""
         SELECT dt_prim_dia_mes, dt_data, vl_meta_dia_acumulado, vl_objetivo_total
           FROM `{bq.PROJECT}.dbt_dw_az.tb_objetivo_faturamento`
@@ -137,7 +147,9 @@ def carregar_dados():
     vendas["ds_tipo_loja"] = vendas["ds_tipo_loja"].fillna("(sem canal)")
     vendas = vendas.merge(acao, on="cd_codigo_interno", how="left")
     vendas["fg_posvenda"] = vendas["fg_posvenda"].fillna(False).astype(bool)
-    vendas["ds_canal"] = canal_venda(vendas["ds_tipo_loja"], vendas["fg_posvenda"])
+    vendas = vendas.merge(anot, on="cd_codigo_interno", how="left")
+    vendas["fg_anotacao_whatsapp"] = vendas["fg_anotacao_whatsapp"].fillna(False).astype(bool)
+    vendas["ds_canal"] = canal_venda(vendas["ds_tipo_loja"], vendas["fg_posvenda"], vendas["fg_anotacao_whatsapp"])
     for c in SOMAVEIS:
         vendas[c] = pd.to_numeric(vendas[c]).fillna(0.0)
     # reembolso no mês em que aconteceu (data aproximada: última atualização do pedido na Nuvemshop).
