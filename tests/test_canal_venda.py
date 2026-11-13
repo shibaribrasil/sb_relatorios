@@ -59,3 +59,16 @@ def test_cor_do_crescimento_so_com_cores_do_tema():
     from common.design import COLORS
     assert COLORS["success"] in pd_._cor_cresc(0.1) and COLORS["danger"] in pd_._cor_cresc(-0.1)
     assert pd_._cor_cresc(0.0) == "" and pd_._cor_cresc(float("nan")) == ""
+
+
+def test_anotacao_whatsapp_da_nuvemshop_vira_whatsapp():
+    lojas = pd.Series(["Nuvemshop", "Nuvemshop", "Nuvemshop", "MercadoLivre"])
+    posvenda = pd.Series([False, False, True, False])
+    anot = pd.Series([True, False, False, True])
+    assert vm.canal_venda(lojas, posvenda, anot).tolist() == ["WhatsApp", "Nuvemshop", "WhatsApp", "MercadoLivre"]
+
+
+def test_pedido_com_posvenda_e_anotacao_conta_uma_vez():
+    df = pd.DataFrame({"ds_tipo_loja": ["Nuvemshop", "Nuvemshop"], "fg_posvenda": [True, False], "fat": [100.0, 50.0]})
+    df["ds_canal"] = vm.canal_venda(df["ds_tipo_loja"], df["fg_posvenda"], pd.Series([True, False]))
+    assert df.groupby("ds_canal")["fat"].sum().to_dict() == {"Nuvemshop": 50.0, "WhatsApp": 100.0}

@@ -156,3 +156,4 @@ Jan–Abr/26 ficam entre 57,9% e 62,6% (frete subsidiado em pedidos ≥ R$ 400 e
 
 ## v8 — 10/nov/2026: canal emulado `ds_canal`
 - `carregar_dados` lê `tb_pedido_acao.fg_sac_marketing` como `fg_posvenda` e cria `ds_canal` (`canal_venda`): pedido da Nuvemshop do pós-venda vira "WhatsApp"; os demais seguem em `ds_tipo_loja`. Usado só pela seção Canal de venda do Pulso do Dia; regra e limites em `specs/pulso-dia.md` (v8). `ds_tipo_loja` não muda.
+- v8 (12/nov/2026): `ds_canal` também considera `fg_anotacao_whatsapp` (anotação da loja na Nuvemshop com "whatsapp"); regra em `specs/pulso-dia.md` (v10).

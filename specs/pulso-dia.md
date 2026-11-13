@@ -55,3 +55,9 @@ Relatório de tela, para acompanhar o dia: responde "como está hoje, o que est�
 ## v9 — 10/nov/2026: Canal de venda sem gráfico
 - O gráfico de barras do faturamento por canal saiu (ficava espremido ao lado da tabela, pedido do Hugo); o bloco é só a tabela, na largura da página. **Crescimento vs. <período>** passou a ser a **última coluna**, depois de *Participação na margem total*. Regras de v7 e v8 não mudam.
 
+## v10 — 12/nov/2026: anotação "whatsapp" também entra no canal WhatsApp
+- Pedido do Hugo: pedido da Nuvemshop que vier com **anotação de WhatsApp** entra no canal WhatsApp e é debitado da Nuvemshop, além do pós-venda de v8.
+- **Regra:** `ds_tipo_loja = 'Nuvemshop'` e a **anotação da loja** (`owner_note` da Nuvemshop, `stg_nuvemshop_pedido.ds_obs_loja`) contém "whatsapp" (qualquer caixa). Canal = WhatsApp quando **pós-venda (v8) OU anotação**; um pedido nos dois critérios conta uma vez. O pedido liga à Nuvemshop pelo número do pedido na loja (`cd_pedido_loja`).
+- **Não entram:** a observação do cliente (`note`: o cliente escreve o próprio número de WhatsApp para a entrega, não é canal) e o campo "origem do pedido" (`order_origin`, `ds_origem_pedido`), mesmo escrito "Whatsapp" (ver abaixo). Variantes como "zap" e "wpp" também não entram (nenhuma ocorrência desde ago/2025).
+- **Limite conhecido:** a anotação é texto livre e "whatsapp" também aparece em notas de suporte (ex.: "Cliente solicitou o ajuste do endereço. Feito! - Whatsapp"), que não são necessariamente venda fechada pelo WhatsApp; a regra segue o que o Hugo pediu (a palavra na anotação). Desde ago/2025 são 5 pedidos com a palavra na anotação (de 926). Mover a regra para o dbt (coluna em `tb_pedido`) é o caminho se ela crescer.
+- Implementação: `vendas_margem.carregar_dados` lê `fg_anotacao_whatsapp` e passa a `canal_venda(ds_tipo_loja, fg_posvenda, fg_anotacao_whatsapp)`; `ds_tipo_loja` não muda.
